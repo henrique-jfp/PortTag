@@ -21,6 +21,9 @@
    porteiro na retirada também no banco. Por último, execute
    `20261117090000_revoke_anon_function_execute.sql` para tirar do papel `anon`
    a execução das funções do schema `public` (as RPCs são todas autenticadas).
+   Depois execute
+   `20261117190000_allow_webp_collection_signature.sql` para aceitar assinaturas
+   WebP além de PNG na confirmação da retirada.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

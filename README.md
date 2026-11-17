@@ -80,6 +80,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 12. `supabase/migrations/20261117070000_package_duplicate_tracking.sql`
 13. `supabase/migrations/20261117080000_collection_porter_confirmation.sql`
 14. `supabase/migrations/20261117090000_revoke_anon_function_execute.sql`
+15. `supabase/migrations/20261117190000_allow_webp_collection_signature.sql`
 
 Crie e confirme a conta responsável pela plataforma em Supabase
 Authentication > Users. Promova somente essa conta no SQL Editor, substituindo
