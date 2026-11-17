@@ -28,6 +28,9 @@
    lote: a RPC `confirm_package_collection_batch(uuid[], text, text, boolean)`
    valida todas as encomendas no banco antes de atualizar qualquer uma e grava a
    mesma assinatura, nome, horário e porteiro confirmante em todos os selecionados.
+   Execute por último `20261117210000_optional_sender.sql`: ela redefine
+   `create_package` para aceitar empresa em branco, mantendo unidade e nome do
+   entregador obrigatórios no banco.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -81,8 +84,8 @@ recebimento é liberado quando o endereço do destinatário confere com
 CEP, logradouro e número cadastrados, ou quando a leitura é inconclusiva
 (`unknown`) e o porteiro faz a conferência humana. Endereço divergente
 (`mismatch`) exige aceite explícito antes de salvar. O porteiro confere o
-destinatário, marca se confirmou que é morador, informa o entregador e revisa a
-empresa. Se o rastreio confiável não for identificado, pode ser informado
+destinatário, marca se confirmou que é morador e informa o entregador. A
+empresa é opcional. Se o rastreio confiável não for identificado, pode ser informado
 manualmente ou deixado em branco.
 
 O caderno em `manager.html` mostra o calendário do ano vigente e permite
@@ -98,13 +101,15 @@ condomínio.
 ### Importação em massa e retirada em lote
 
 Na tela inicial do porteiro, **Importar várias fotos** aceita várias etiquetas
-da galeria de uma vez. Empresa e entregador padrão podem ser preenchidos antes
-de começar. A fila processa **uma foto por vez**: cada imagem é comprimida uma
+da galeria de uma vez. O entregador padrão pode ser preenchido antes de
+começar; a empresa é opcional. A fila processa **uma foto por vez**: cada imagem é comprimida uma
 única vez no aparelho, lida pela nuvem com fallback local e salva separadamente
 com sua própria foto no Storage. O progresso mostra quantas foram registradas,
 quantas estão na fila, quantas precisam de revisão e quantas falharam. É
 possível cancelar a fila, tentar novamente um item com erro e revisar os itens
-que ficaram sem unidade, empresa, entregador ou com endereço divergente.
+que ficaram sem unidade, entregador ou com endereço divergente; a empresa pode
+ficar em branco. No painel de revisão é possível corrigir apartamento e
+entregador antes de salvar.
 Rastreio repetido tem confirmação própria: só é registrado depois que o
 porteiro confirma que se trata de outro volume. Cada item salvo tem seu próprio
 link `wa.me` para avisar o morador.

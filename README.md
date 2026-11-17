@@ -82,6 +82,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 14. `supabase/migrations/20261117090000_revoke_anon_function_execute.sql`
 15. `supabase/migrations/20261117190000_allow_webp_collection_signature.sql`
 16. `supabase/migrations/20261117200000_confirm_collection_batch.sql`
+17. `supabase/migrations/20261117210000_optional_sender.sql`
 
 Crie e confirme a conta responsável pela plataforma em Supabase
 Authentication > Users. Promova somente essa conta no SQL Editor, substituindo
@@ -114,8 +115,8 @@ O app do Porteiro é mobile-first: tira a foto com a câmera do celular e compri
 a imagem antes do processamento. A leitura da etiqueta é tentada primeiro na
 nuvem, com Gemini Vision, e sugere destinatário, unidade, empresa e rastreio;
 se a nuvem falhar ou não estiver configurada, o app usa OCR local como fallback.
-Confirme o apartamento e informe o nome do entregador; o código de rastreio é
-opcional se não for detectado. O caderno anual do Síndico permite filtrar
+Confirme o apartamento e informe o nome do entregador; empresa e código de
+rastreio são opcionais se não forem detectados. O caderno anual do Síndico permite filtrar
 recebimentos por data, apartamento, empresa, porteiro, rastreio e situação.
 A retirada é registrada pelo porteiro após confirmação presencial do morador.
 Para confirmar a retirada, o morador assina na tela do celular e o porteiro

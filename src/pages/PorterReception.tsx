@@ -13,6 +13,10 @@ import {
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import {
+  bulkReviewReasons,
+  isDuplicateBulkMessage,
+} from "../lib/bulkImportReview";
+import {
   buildLabelDiagnostics,
   compressPackagePhoto,
   detectDeliveryCompany,
@@ -1275,6 +1279,18 @@ export function PorterReception() {
     );
   }
 
+  function reviewReasonsFor(item: BulkItem, draft: PackageDraft) {
+    return bulkReviewReasons({
+      unitId: draft.unitId,
+      unitExists: units.some((unit) => unit.id === draft.unitId),
+      deliveryPerson: draft.deliveryPerson,
+      addressStatus: draft.addressVerification.status,
+      acknowledged: item.acknowledged,
+      duplicateMessage: isDuplicateBulkMessage(item.message),
+      allowDuplicate: item.allowDuplicate,
+    });
+  }
+
   function handleBulkFilesChange(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
@@ -1332,15 +1348,31 @@ export function PorterReception() {
 
   async function saveBulkItem(item: BulkItem, draft: PackageDraft) {
     if (!user || !account || !condominium) return;
-    const unit = units.find((candidate) => candidate.id === draft.unitId);
-    if (!unit) {
+
+    const reasons = reviewReasonsFor(item, draft);
+    if (reasons.length) {
+      // Rastreio repetido mostra os dados do volume anterior; não perdemos essa
+      // mensagem ao devolver o item para revisão.
+      const duplicatePending =
+        isDuplicateBulkMessage(item.message) && !item.allowDuplicate;
+      const otherReasons = reasons.filter(
+        (reason) => reason !== "rastreio repetido",
+      );
+      const message = duplicatePending
+        ? otherReasons.length
+          ? `${item.message} Falta também: ${otherReasons.join(", ")}.`
+          : item.message
+        : `Confira antes de salvar: ${reasons.join(", ")}.`;
       updateBulkItem(item.id, {
         status: "review",
         draft,
-        message: "Selecione o apartamento antes de salvar.",
+        message,
       });
       return;
     }
+
+    const unit = units.find((candidate) => candidate.id === draft.unitId);
+    if (!unit) return; // reviewReasonsFor já exige uma unidade válida.
 
     updateBulkItem(item.id, {
       status: "processing",
@@ -1428,19 +1460,14 @@ export function PorterReception() {
     }
 
     // Empresa e entregador podem ser definidos uma vez para a fila inteira.
-    // A leitura preenche o que faltar; o que ainda faltar vai para revisão.
+    // A leitura preenche o que faltar. Empresa não é obrigatória: a etiqueta
+    // nem sempre traz a transportadora e isso não pode travar a fila.
     const effective: PackageDraft = {
       ...draft,
       company: bulkCompany.trim() || draft.company.trim(),
       deliveryPerson: bulkDeliveryPerson.trim() || lastDeliveryPerson.trim(),
     };
-    const reasons: string[] = [];
-    if (!effective.unitId) reasons.push("apartamento");
-    if (!effective.company) reasons.push("empresa");
-    if (!effective.deliveryPerson) reasons.push("entregador");
-    if (effective.addressVerification.status === "mismatch") {
-      reasons.push("endereço divergente");
-    }
+    const reasons = reviewReasonsFor(item, effective);
     if (reasons.length) {
       updateBulkItem(item.id, {
         status: "review",
@@ -2024,9 +2051,8 @@ export function PorterReception() {
                       </label>
 
                       <label>
-                        Empresa
+                        Empresa (opcional)
                         <input
-                          required
                           autoComplete="organization"
                           maxLength={120}
                           value={company}
@@ -2202,7 +2228,7 @@ export function PorterReception() {
                                   </select>
                                 </label>
                                 <label>
-                                  Empresa
+                                  Empresa (opcional)
                                   <input
                                     autoComplete="off"
                                     maxLength={120}
@@ -2214,6 +2240,37 @@ export function PorterReception() {
                                       })
                                     }
                                   />
+                                </label>
+                                <label>
+                                  Entregador
+                                  <input
+                                    autoComplete="off"
+                                    maxLength={120}
+                                    placeholder="Nome de quem entregou"
+                                    value={item.draft.deliveryPerson}
+                                    disabled={bulkRunning}
+                                    onChange={(event) =>
+                                      updateBulkDraft(item.id, {
+                                        deliveryPerson: event.target.value,
+                                      })
+                                    }
+                                  />
+                                  {lastDeliveryPerson &&
+                                    item.draft.deliveryPerson !==
+                                      lastDeliveryPerson && (
+                                      <button
+                                        className="text-button"
+                                        type="button"
+                                        disabled={bulkRunning}
+                                        onClick={() =>
+                                          updateBulkDraft(item.id, {
+                                            deliveryPerson: lastDeliveryPerson,
+                                          })
+                                        }
+                                      >
+                                        Usar último entregador ({lastDeliveryPerson})
+                                      </button>
+                                    )}
                                 </label>
                                 {item.draft.addressVerification.status ===
                                   "mismatch" && (
@@ -2231,9 +2288,7 @@ export function PorterReception() {
                                     a entrega pertence a este condomínio.
                                   </label>
                                 )}
-                                {item.message.startsWith(
-                                  "Já existe uma encomenda",
-                                ) && (
+                                {isDuplicateBulkMessage(item.message) && (
                                   <label className="porter-mismatch-check">
                                     <input
                                       type="checkbox"
@@ -2252,15 +2307,8 @@ export function PorterReception() {
                                   className="porter-primary-button"
                                   type="button"
                                   disabled={
-                                    !item.draft.unitId ||
-                                    !item.draft.company.trim() ||
-                                    (item.draft.addressVerification.status ===
-                                      "mismatch" &&
-                                      !item.acknowledged) ||
-                                    (item.message.startsWith(
-                                      "Já existe uma encomenda",
-                                    ) &&
-                                      !item.allowDuplicate)
+                                    bulkRunning ||
+                                    reviewReasonsFor(item, item.draft).length > 0
                                   }
                                   onClick={() => {
                                     if (item.draft) void saveBulkItem(item, item.draft);
