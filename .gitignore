@@ -1,0 +1,9 @@
+﻿node_modules
+dist
+public/ocr
+/por.traineddata
+.env
+.env.local
+.env.*.local
+supabase/functions/.env
+supabase/.temp/

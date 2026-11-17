@@ -1,0 +1,100 @@
+# Controle de Encomendas
+
+Aplicação web para gestão de encomendas em condomínios, com áreas
+independentes para Super Admin, Síndico e Porteiro, conectadas ao mesmo
+projeto Supabase.
+
+## Requisitos e instalação
+
+- Node.js e npm
+- Projeto Supabase
+
+1. Execute `npm install`.
+2. Copie `.env.example` para `.env.local` e configure a URL do Supabase e a
+   chave pública (publishable ou anon).
+3. Execute `npm run dev`.
+
+No desenvolvimento, as entradas são:
+
+- Super Admin: `http://localhost:5173/`
+- Síndico: `http://localhost:5173/manager.html`
+- Porteiro: `http://localhost:5173/porter.html`
+
+O build de produção gera as três páginas no diretório `dist`. Publique-as no
+mesmo domínio para manter os três apps independentes e conectados ao mesmo
+banco. Cada app mantém sua sessão separada.
+
+Endereços publicados para teste:
+
+- Super Admin: `https://porteiro.henriquedejesus.dev/`
+- Síndico: `https://porteiro.henriquedejesus.dev/manager.html`
+- Porteiro: `https://porteiro.henriquedejesus.dev/porter.html`
+
+O build está hospedado no `pvserver` como serviço systemd
+`encomenda-web.service`, com inicialização automática e acesso HTTPS pelo
+Cloudflare Tunnel. O site principal do domínio não foi alterado.
+
+## Primeiro acesso e configuração
+
+No SQL Editor do Supabase, execute as migrações nesta ordem:
+
+1. `supabase/migrations/20261116000000_condominiums_foundation.sql`
+2. `supabase/migrations/20261116221500_condominium_blocks.sql`
+3. `supabase/migrations/20261116223000_condominium_units_management.sql`
+4. `supabase/migrations/20261116225500_unit_residents_and_bulk_units.sql`
+5. `supabase/migrations/20261117000000_package_reception.sql`
+6. `supabase/migrations/20261117010000_porter_accounts_and_ledger.sql`
+7. `supabase/migrations/20261117020000_package_collection_signatures.sql`
+8. `supabase/migrations/20261117030000_porter_access_expiration.sql`
+9. `supabase/migrations/20261117040000_condominium_user_created_by.sql`
+10. `supabase/migrations/20261117050000_package_recipient_verification.sql`
+
+Crie e confirme a conta responsável pela plataforma em Supabase
+Authentication > Users. Promova somente essa conta no SQL Editor, substituindo
+o e-mail:
+
+```sql
+update public.profiles p
+set is_super_admin = true
+from auth.users u
+where u.id = p.id
+  and lower(u.email) = lower('SEU_EMAIL');
+```
+
+O Super Admin pode cadastrar porteiros na área **Porteiros**, escolhendo o
+condomínio e os blocos de trabalho. No campo **Prazo de acesso**, escolha sem
+expiração, teste por 7 dias ou uma data e hora personalizadas. Ao vencer o
+prazo, o banco bloqueia o acesso do porteiro aos dados e o app informa que o
+acesso expirou; contas sem prazo continuam ativas até serem revogadas pelo
+Super Admin. O sistema gera usuário e senha temporária; anote e entregue a
+senha ao porteiro, pois ela é exibida somente na criação ou redefinição. Para
+detalhes de publicação da função e do caderno, consulte
+[o guia de recebimento e acessos](./supabase/RECEBIMENTO.md).
+
+O Síndico precisa ter uma conta de e-mail no Supabase Authentication antes de
+ser vinculado pelo Super Admin. Ele entra em `manager.html` com esse e-mail e
+senha. O Porteiro entra em `porter.html` com o usuário e a senha temporária.
+
+O app do Porteiro é mobile-first: tira a foto com a câmera do celular, tenta
+ler localmente o QR Code e o texto da etiqueta e sugere unidade e empresa.
+Confirme o apartamento e informe o nome do entregador; o código de rastreio é
+opcional se não for detectado. O caderno anual do Síndico permite filtrar
+recebimentos por data, apartamento, empresa, porteiro, rastreio e situação.
+A retirada é registrada pelo porteiro após confirmação presencial do morador.
+Para confirmar a retirada, o morador assina na tela do celular e o porteiro
+confirma que presenciou o ato. Nome, assinatura e confirmação ficam guardados
+permanentemente no registro do caderno. A assinatura deve ser coletada com
+conhecimento do morador e só é visível às contas autorizadas do condomínio.
+
+O CEP consulta o ViaCEP para preencher o endereço; os campos continuam
+editáveis. Na gestão de unidades, selecione o bloco atual para ver seus
+apartamentos. Para gerar vários de uma vez, informe a faixa do primeiro andar
+e o último andar; por exemplo, `101-107` até o andar `9` gera as faixas de
+`101-107` até `901-907`.
+
+Nome e WhatsApp dos moradores são opcionais. Abreviações como `ap`, `apto`,
+`apartament` e `apart` são normalizadas para apartamento, e `cob`, `cobe` e
+`cobert` para cobertura.
+
+Nunca coloque a chave `service_role` ou uma chave `secret` no frontend ou no
+repositório. As permissões dos dados devem ser protegidas pelo RLS do Supabase.

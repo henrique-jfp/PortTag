@@ -1,0 +1,5 @@
+[functions.cleanup-package-receipts]
+verify_jwt = false
+
+[functions.manage-porter]
+verify_jwt = true
