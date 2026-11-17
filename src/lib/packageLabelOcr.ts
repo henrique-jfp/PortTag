@@ -1,7 +1,9 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   findResidentUnitCandidates,
   findUnitCandidates,
 } from "./packageOcr";
+import { normalizeApartmentReference } from "./unitFloors";
 
 type NativeBarcode = {
   rawValue: string;
@@ -532,6 +534,347 @@ export async function preparePackageImage(
   };
 }
 
+export type CompressedPackagePhoto = {
+  file: File;
+  base64: string;
+  mimeType: "image/jpeg";
+  width: number;
+  height: number;
+};
+
+/** Lado maior da foto enviada à Vision API e ao Storage. */
+const aiImageLongEdge = 1280;
+const aiImageQuality = 0.8;
+
+function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality: number,
+) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Não foi possível converter a foto para JPEG."));
+      },
+      type,
+      quality,
+    );
+  });
+}
+
+async function blobToBase64(blob: Blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function jpegFileName(name: string) {
+  const base = name.replace(/\.[^.]+$/, "").trim() || "etiqueta";
+  return `${base}.jpg`;
+}
+
+/**
+ * Normaliza a foto em JPEG de até 1280 px no maior lado.
+ *
+ * A imagem original do celular tem 3–8 MB e não serve nem para a Vision API
+ * (limite de payload) nem para o Storage (cota). A compressão é feita uma vez
+ * e o MESMO arquivo vai para as duas pontas. Nada de grayscale ou filtro
+ * destrutivo: a IA lê a etiqueta colorida, inclusive logos de transportadora.
+ */
+export async function compressPackagePhoto(
+  file: File,
+): Promise<CompressedPackagePhoto> {
+  const source = await loadImageSource(file);
+  try {
+    const scale = Math.min(
+      1,
+      aiImageLongEdge / Math.max(source.width, source.height, 1),
+    );
+    const canvas = createCanvas(
+      Math.max(1, Math.round(source.width * scale)),
+      Math.max(1, Math.round(source.height * scale)),
+    );
+    const context = canvasContext(canvas);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    // JPEG não guarda transparência. Sem o fundo branco, PNG com alfa vira
+    // preto e a etiqueta some.
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(source.element, 0, 0, canvas.width, canvas.height);
+
+    const blob = await canvasToBlob(canvas, "image/jpeg", aiImageQuality);
+    const base64 = await blobToBase64(blob);
+
+    return {
+      file: new File([blob], jpegFileName(file.name), {
+        type: "image/jpeg",
+        lastModified: Date.now(),
+      }),
+      base64,
+      mimeType: "image/jpeg",
+      width: canvas.width,
+      height: canvas.height,
+    };
+  } finally {
+    source.dispose();
+  }
+}
+
+export type AiLabelAddressStatus = "verified" | "mismatch" | "unknown";
+
+export type AiPackageLabel = {
+  recipientName: string;
+  unitNumber: string;
+  blockName: string;
+  carrier: string;
+  trackingCode: string;
+  destinationCep: string;
+  destinationStreet: string;
+  destinationNumber: string;
+  addressStatus: AiLabelAddressStatus;
+  addressReason: string;
+};
+
+export type AiLabelUnit = {
+  id: string;
+  unit_number: string;
+  block_id: string | null;
+};
+
+export type AiLabelBlock = { id: string; name: string };
+
+export type AiLabelResident = { unit_id: string; name: string | null };
+
+export type AiLabelExtraction<T extends AiLabelUnit> = AiPackageLabel & {
+  durationMs: number;
+  postalCodes: string[];
+  unitCandidates: T[];
+  unitId: string;
+};
+
+export type AiLabelExtractionInput<
+  T extends AiLabelUnit,
+  B extends AiLabelBlock,
+  R extends AiLabelResident,
+> = {
+  /** Cliente Supabase já autenticado do app (nunca service role). */
+  client: SupabaseClient;
+  condominiumId: string;
+  imageBase64: string;
+  mimeType: string;
+  expectedAddress: { cep: string; street: string; address_number: string };
+  units: T[];
+  blocks: B[];
+  residents: R[];
+  /** Limite curto: o porteiro está com o pacote na mão. */
+  timeoutMs?: number;
+};
+
+export class AiLabelExtractionError extends Error {
+  readonly reason: "timeout" | "unavailable" | "invalid";
+
+  constructor(message: string, reason: "timeout" | "unavailable" | "invalid") {
+    super(message);
+    this.name = "AiLabelExtractionError";
+    this.reason = reason;
+  }
+}
+
+type EdgeExtractResponse = {
+  label?: Record<string, unknown>;
+  error?: string;
+  fallback?: boolean;
+};
+
+function textField(value: unknown, maxLength = 200) {
+  return typeof value === "string"
+    ? value.replace(/\s+/g, " ").trim().slice(0, maxLength)
+    : "";
+}
+
+function parseAiLabel(raw: Record<string, unknown>): AiPackageLabel {
+  const status = raw.address_status;
+  return {
+    recipientName: textField(raw.recipient_name, 120),
+    unitNumber: textField(raw.unit_number, 30),
+    blockName: textField(raw.block_name, 40),
+    carrier: textField(raw.carrier, 60),
+    trackingCode: textField(raw.tracking_code, 80).replace(/\s+/g, ""),
+    destinationCep: textField(raw.destination_cep, 20)
+      .replace(/\D/g, "")
+      .slice(0, 8),
+    destinationStreet: textField(raw.destination_street, 160),
+    destinationNumber: textField(raw.destination_number, 20),
+    addressStatus:
+      status === "verified" || status === "mismatch" ? status : "unknown",
+    addressReason: textField(raw.address_reason, 240),
+  };
+}
+
+function unitKeys(value: string) {
+  const normalized = normalizeApartmentReference(value)
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const keys = new Set<string>();
+  if (!normalized) return keys;
+
+  const compact = normalized.replace(/\s+/g, "");
+  keys.add(compact);
+  const stripped = compact.replace(
+    /^(?:apartamento|apto|ap|unidade|un|cobertura|casa)/,
+    "",
+  );
+  if (stripped) keys.add(stripped);
+  for (const digits of normalized.match(/\d+[a-z]?/g) ?? []) keys.add(digits);
+  return keys;
+}
+
+/** Compara "AP901", "Apto 901" e "901" sem depender do formato da etiqueta. */
+function sharesUnitKey(left: string, right: string) {
+  const leftKeys = unitKeys(left);
+  if (!leftKeys.size) return false;
+  const rightKeys = unitKeys(right);
+  for (const key of leftKeys) {
+    if (rightKeys.has(key)) return true;
+  }
+  return false;
+}
+
+function blockKey(value: string) {
+  return normalizeApartmentReference(value)
+    .replace(/\b(?:bloco|bl|torre|edificio|edif|td)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+/**
+ * Casa a unidade devolvida pela IA com o cadastro local. A IA lê "APTO 901" ou
+ * "Bloco B, 102"; o banco guarda "901" e "Bloco B". A comparação é por chaves
+ * normalizadas, e o bloco restringe a busca para não pegar a unidade 901 de
+ * outra torre.
+ */
+function matchAiUnits<T extends AiLabelUnit>(
+  label: AiPackageLabel,
+  units: T[],
+  blocks: AiLabelBlock[],
+  residents: AiLabelResident[],
+) {
+  const block = label.blockName ? blockKey(label.blockName) : "";
+  const blockId = block
+    ? blocks.find((candidate) => {
+        const key = blockKey(candidate.name);
+        return (
+          Boolean(key) && (key === block || key.includes(block) || block.includes(key))
+        );
+      })?.id
+    : "";
+
+  const scoped = blockId
+    ? units.filter((unit) => unit.block_id === blockId)
+    : units;
+  const pool = scoped.length ? scoped : units;
+
+  if (label.unitNumber) {
+    const matches = pool.filter((unit) =>
+      sharesUnitKey(label.unitNumber, unit.unit_number),
+    );
+    if (matches.length) return matches;
+  }
+
+  if (label.recipientName) {
+    return findResidentUnitCandidates(label.recipientName, units, residents);
+  }
+
+  return [];
+}
+
+/**
+ * Extrai a etiqueta na nuvem (Gemini) com prazo curto. Em qualquer falha,
+ * timeout ou ausência de configuração a função lança: o chamador cai para o
+ * leitor local. Nada aqui bloqueia o recebimento.
+ */
+export async function extractPackageLabelWithAi<
+  T extends AiLabelUnit,
+  B extends AiLabelBlock,
+  R extends AiLabelResident,
+>(
+  input: AiLabelExtractionInput<T, B, R>,
+): Promise<AiLabelExtraction<T>> {
+  const startedAt = performance.now();
+  const timeoutMs = input.timeoutMs ?? 9000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const invocation = input.client.functions.invoke("extract-package-label", {
+    body: {
+      condominiumId: input.condominiumId,
+      imageBase64: input.imageBase64,
+      mimeType: input.mimeType,
+      expectedAddress: input.expectedAddress,
+    },
+  });
+
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new AiLabelExtractionError(
+            "A leitura na nuvem excedeu o tempo limite.",
+            "timeout",
+          ),
+        ),
+      timeoutMs,
+    );
+  });
+
+  try {
+    const { data, error } = await Promise.race([invocation, timeout]);
+    if (error) {
+      throw new AiLabelExtractionError(
+        "A leitura na nuvem não respondeu.",
+        "unavailable",
+      );
+    }
+
+    const payload = data as EdgeExtractResponse | null;
+    if (!payload?.label) {
+      throw new AiLabelExtractionError(
+        payload?.error ?? "A leitura na nuvem não devolveu a etiqueta.",
+        "invalid",
+      );
+    }
+
+    const label = parseAiLabel(payload.label);
+    const unitCandidates = matchAiUnits(
+      label,
+      input.units,
+      input.blocks,
+      input.residents,
+    );
+
+    return {
+      ...label,
+      durationMs: Math.round(performance.now() - startedAt),
+      postalCodes: label.destinationCep ? [label.destinationCep] : [],
+      unitCandidates,
+      unitId: unitCandidates.length === 1 ? unitCandidates[0].id : "",
+    };
+  } catch (error) {
+    if (error instanceof AiLabelExtractionError) throw error;
+    throw new AiLabelExtractionError(
+      error instanceof Error ? error.message : "A leitura na nuvem falhou.",
+      "unavailable",
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function decodeBarcodes(canvas: HTMLCanvasElement) {
   const nativeFormats = [
     "qr_code",
@@ -1018,9 +1361,13 @@ export async function readPackageLabel(
         ],
       };
     } catch (ocrError) {
-      // O worker pode ter ficado em estado ruim: a próxima foto começa limpa.
       error = ocrError;
-      void releasePackageOcr().catch(() => {});
+      // Terminar o worker obriga a recarregar o WASM na próxima foto. Só vale
+      // a pena quando o erro é de memória; erro de leitura comum não deixa o
+      // worker inutilizável.
+      if (isOcrWorkerMemoryError(ocrError)) {
+        void releasePackageOcr().catch(() => {});
+      }
 
       const partialText = mergeTextVariants(variants);
       return {
@@ -1074,6 +1421,16 @@ export function releasePackageOcr() {
   ocrWorker = null;
   workerPromise = null;
   return worker?.terminate() ?? Promise.resolve();
+}
+
+function isOcrWorkerMemoryError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? `${error.name} ${error.message}`
+      : String(error ?? "");
+  return /quota|memory|mem[oó]ria|alloc|insufficient space|no space|out of space/i.test(
+    message,
+  );
 }
 
 export { findResidentUnitCandidates, findUnitCandidates };

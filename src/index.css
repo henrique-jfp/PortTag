@@ -1269,15 +1269,62 @@ input {
   overflow-wrap: anywhere;
 }
 
+.porter-address-check p {
+  margin: 0;
+}
+
 .porter-address-check-verified {
   background: #eaf8ef;
   color: #176b36;
 }
 
-.porter-address-check-mismatch,
 .porter-address-check-unknown {
-  background: #fff0f0;
+  background: #fff8e1;
+  color: #7a5200;
+  border-left: 4px solid #e0a800;
+}
+
+.porter-address-check-mismatch {
+  background: #ffe8e8;
   color: #a32121;
+  border-left: 4px solid #d01f1f;
+  font-weight: 650;
+}
+
+.porter-address-check-detail {
+  margin-top: 6px !important;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.porter-mismatch-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 10px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.porter-mismatch-check input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.porter-whatsapp-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.porter-whatsapp-link {
+  justify-self: start;
+  color: #0b7a44;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .porter-home-hero-heading > strong {
@@ -1733,7 +1780,7 @@ input {
   display: block;
   width: 100%;
   height: auto;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 500 / 260;
   touch-action: none;
 }
 

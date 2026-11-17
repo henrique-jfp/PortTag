@@ -13,11 +13,16 @@ type RecognizableResident = {
 const unitTypeTokens = new Set(["apartamento", "casa", "cobertura"]);
 const unitLabelTokens = new Set([
   "apartamento",
+  "apto",
+  "apt",
+  "ap",
   "casa",
   "cobertura",
+  "cob",
   "complemento",
   "compl",
   "unidade",
+  "un",
 ]);
 const unitLabelNoise = new Set(["n", "no", "numero"]);
 const ignoredNameTokens = new Set(["da", "das", "de", "do", "dos", "e"]);
@@ -307,6 +312,20 @@ function rangeUntilSender(lines: string[], start: number): DestinationRange {
 }
 
 /**
+ * Texto antes do primeiro marcador de remetente. Serve de rede de segurança
+ * quando a etiqueta não imprime "DESTINATÁRIO" e o bloco não é localizado: o
+ * endereço do condomínio pode estar em qualquer linha antes do remetente, mas
+ * nunca depois dele. Confirmar por esse trecho evita falso negativo; bloquear
+ * continua exigindo o bloco do destinatário, para não condenar o porteiro pelo
+ * CEP do remetente.
+ */
+function textBeforeFirstSender(value: string) {
+  const lines = splitLines(value);
+  const senderLine = lines.findIndex(isSenderLine);
+  return (senderLine < 0 ? lines : lines.slice(0, senderLine)).join("\n");
+}
+
+/**
  * Localiza o bloco do destinatário sem exigir um cabeçalho fixo. Etiquetas da
  * Amazon, por exemplo, não imprimem "DESTINATÁRIO": nelas o bloco é achado
  * pelo CEP do condomínio. Sem isso, o texto inteiro era descartado.
@@ -468,6 +487,10 @@ export function verifyPackageDestinationAddress(
   const destinationText = range
     ? lines.slice(range.start, range.end).join("\n")
     : "";
+  // Sem bloco de destinatário localizado, o texto antes do remetente ainda
+  // pode provar o endereço. O trecho depois de "remetente"/"sender" nunca
+  // entra: é o endereço de quem enviou.
+  const looseText = range ? "" : textBeforeFirstSender(recognizedText);
 
   const destinationCodes = extractPostalCodes(destinationText);
   const allCodes = new Set(
@@ -489,15 +512,16 @@ export function verifyPackageDestinationAddress(
 
   const streetMatchSection = streetMatchRatio(destinationText, address.street);
   const streetMatchAnywhere = streetMatchRatio(
-    recognizedText,
+    range ? recognizedText : looseText,
     address.street,
   );
   // Para confirmar, qualquer lugar da etiqueta serve (o endereço pode ter sido
-  // lido numa passada que não delimitou o bloco). Para bloquear, só o bloco.
+  // lido numa passada que não delimitou o bloco). Sem bloco, só o texto antes
+  // do remetente; para bloquear, só o bloco.
   const streetMatch = Math.max(streetMatchSection, streetMatchAnywhere);
   const numberMatched =
     numberMatches(destinationText, address.address_number) ||
-    numberMatches(recognizedText, address.address_number);
+    numberMatches(range ? recognizedText : looseText, address.address_number);
   const residentMatched = findRecipientLine(lines, residentNames) >= 0;
 
   const signals: PackageAddressSignals = {
@@ -596,11 +620,20 @@ function unknownWithoutBlockMessage(
 }
 
 function findExplicitUnitTokens(text: string) {
-  const tokens = normalizeApartmentReference(text).match(/[a-z0-9]+/g) ?? [];
+  const normalizedText = normalizeApartmentReference(text);
+  const tokens = normalizedText.match(/[a-z0-9]+/g) ?? [];
   const explicitTokens = new Set<string>();
 
   for (let index = 0; index < tokens.length; index += 1) {
-    if (!unitLabelTokens.has(tokens[index])) continue;
+    const token = tokens[index];
+
+    // Etiquetas colam o rótulo no número: AP901, APTO901, UN102, COB1.
+    const glued = token.match(
+      /^(?:apartamento|apto|apt|ap|unidade|un|cobertura|cob|casa)([a-z]?\d+[a-z]?)$/,
+    );
+    if (glued) explicitTokens.add(glued[1]);
+
+    if (!unitLabelTokens.has(token)) continue;
     let valueIndex = index + 1;
     while (unitLabelNoise.has(tokens[valueIndex] ?? "")) valueIndex += 1;
     const value = tokens[valueIndex];
@@ -610,6 +643,13 @@ function findExplicitUnitTokens(text: string) {
     if (/^[a-z]$/.test(value) || /^[a-z]$/.test(tokens[valueIndex + 1] ?? "")) {
       if (tokens[valueIndex + 1]) explicitTokens.add(tokens[valueIndex + 1]);
     }
+  }
+
+  // BL1-901, BLOCO 2 - AP 102: o número da unidade vem depois do bloco.
+  for (const match of normalizedText.matchAll(
+    /\b(?:bl|bloco|torre|td)[- ]?\d+[- ]?(?:ap|apto|apt|apartamento|un)?[- ]?([a-z]?\d{2,4}[a-z]?)\b/g,
+  )) {
+    if (match[1]) explicitTokens.add(match[1]);
   }
 
   return explicitTokens;

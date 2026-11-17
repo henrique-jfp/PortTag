@@ -29,15 +29,23 @@
    `https://porteiro.henriquedejesus.dev/porter.html`. No `pvserver`, ele roda
    como serviço systemd `encomenda-web.service`; o site principal do domínio
    não é substituído.
-3. Associe o projeto ao Supabase CLI e publique a função de gestão de porteiros:
+3. Associe o projeto ao Supabase CLI e publique as funções de gestão de
+   porteiros e de leitura de etiqueta:
 
    ```powershell
    supabase link --project-ref SEU_PROJECT_REF
    supabase functions deploy manage-porter
+   supabase secrets set GEMINI_API_KEY=SUA_CHAVE_AQUI
+   supabase functions deploy extract-package-label
    ```
 
-   A função verifica a sessão e o perfil Super Admin no servidor. A chave
-   `service_role` não deve ser adicionada ao frontend.
+   A função `manage-porter` verifica a sessão e o perfil Super Admin no
+   servidor. A função `extract-package-label` também exige JWT válido e confirma
+   no banco se a conta ativa pertence ao condomínio informado. Ela usa a chave
+   do Gemini somente no ambiente da Edge Function. Se a chave não estiver
+   configurada, a função responde `503` com `fallback: true` e o app do porteiro
+   continua com o OCR local. A chave `service_role` não deve ser adicionada ao
+   frontend.
 
 ## Criar os acessos
 
@@ -55,14 +63,17 @@
   porteiro; se for perdida, redefina-a no painel e compartilhe a nova senha.
 
 O Porteiro entra em `porter.html` com usuário e senha. A tela é mobile-first e
-usa o botão **Tirar foto** para abrir a câmera traseira do celular. O QR Code e
-o texto da etiqueta são processados localmente para sugerir destinatário,
-rastreio, empresa e unidade. O recebimento só é liberado quando o endereço do
-destinatário pode ser confirmado contra CEP, logradouro e número cadastrados
-para o condomínio; endereço divergente ou leitura inconclusiva é bloqueado. O
-porteiro confere o destinatário, marca se confirmou que é morador, informa o
-entregador e revisa a empresa. Se o rastreio confiável não for identificado,
-pode ser informado manualmente ou deixado em branco.
+usa o botão **Tirar foto** para abrir a câmera traseira do celular. A foto é
+comprimida no aparelho e a etiqueta é lida primeiro pelo Gemini Vision; se a
+nuvem falhar ou não estiver configurada, o QR Code e o texto são processados
+localmente como fallback para sugerir destinatário, rastreio, empresa e
+unidade. O recebimento é liberado quando o endereço do destinatário confere com
+CEP, logradouro e número cadastrados, ou quando a leitura é inconclusiva
+(`unknown`) e o porteiro faz a conferência humana. Endereço divergente
+(`mismatch`) exige aceite explícito antes de salvar. O porteiro confere o
+destinatário, marca se confirmou que é morador, informa o entregador e revisa a
+empresa. Se o rastreio confiável não for identificado, pode ser informado
+manualmente ou deixado em branco.
 
 O caderno em `manager.html` mostra o calendário do ano vigente e permite
 pesquisar por período, dia, apartamento, empresa, porteiro, código de rastreio

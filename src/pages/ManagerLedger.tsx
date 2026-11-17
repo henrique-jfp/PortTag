@@ -24,7 +24,6 @@ type PackageRecord = {
   status: "received" | "collected";
   collected_at: string | null;
   collected_by_name: string | null;
-  collected_signature: string | null;
   collected_confirmed_by: string | null;
   receipt_path: string | null;
   photo_expires_at: string;
@@ -133,6 +132,13 @@ export function ManagerLedger() {
   const [porterFilter, setPorterFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [pageError, setPageError] = useState("");
+  // A assinatura é base64 de imagem: baixar a do ano inteiro travava o
+  // caderno. Cada id é buscado uma vez, só quando o síndico pede.
+  const [signatureCache, setSignatureCache] = useState<
+    Record<string, string | null>
+  >({});
+  const [signatureLoadingId, setSignatureLoadingId] = useState("");
+  const [signatureError, setSignatureError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -264,7 +270,7 @@ export function ManagerLedger() {
         const { data, error } = await supabase
           .from("packages")
           .select(
-            "id, condominium_id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_by, received_at, status, collected_at, collected_by_name, collected_signature, collected_confirmed_by, receipt_path, photo_expires_at, photo_deleted_at, last_notified_at",
+            "id, condominium_id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_by, received_at, status, collected_at, collected_by_name, collected_confirmed_by, receipt_path, photo_expires_at, photo_deleted_at, last_notified_at",
           )
           .eq("condominium_id", condominiumId)
           .gte("received_at", yearStart)
@@ -387,6 +393,36 @@ export function ManagerLedger() {
     }
   }
 
+  async function loadSignature(packageId: string) {
+    if (Object.prototype.hasOwnProperty.call(signatureCache, packageId)) return;
+
+    setSignatureLoadingId(packageId);
+    setSignatureError("");
+    try {
+      const { data, error } = await supabase
+        .from("packages")
+        .select("collected_signature")
+        .eq("id", packageId)
+        .maybeSingle();
+      if (error) {
+        setSignatureError(`Não foi possível carregar a assinatura. ${error.message}`);
+        return;
+      }
+      setSignatureCache((current) => ({
+        ...current,
+        [packageId]: data?.collected_signature ?? null,
+      }));
+    } catch (error) {
+      setSignatureError(
+        error instanceof Error
+          ? `Não foi possível carregar a assinatura. ${error.message}`
+          : "Não foi possível carregar a assinatura.",
+      );
+    } finally {
+      setSignatureLoadingId("");
+    }
+  }
+
   const blockNameForUnit = (blockId: string | null) =>
     blocks.find((block) => block.id === blockId)?.name ?? "";
 
@@ -418,6 +454,11 @@ export function ManagerLedger() {
       </header>
 
       {pageError && <p className="feedback-message feedback-error" role="alert">{pageError}</p>}
+      {signatureError && (
+        <p className="feedback-message feedback-error" role="alert">
+          {signatureError}
+        </p>
+      )}
       {!condominiums.length ? (
         <section className="welcome-card">
           <h2>Sem acesso a um condomínio</h2>
@@ -594,13 +635,35 @@ export function ManagerLedger() {
                       path={item.receipt_path}
                       deletedAt={item.photo_deleted_at}
                     />
-                    {item.collected_signature && (
+                    {item.status === "collected" && (
                       <div className="ledger-signature">
-                        <span>Assinatura do morador</span>
-                        <img
-                          src={item.collected_signature}
-                          alt={`Assinatura de ${item.collected_by_name || "quem retirou a encomenda"}`}
-                        />
+                        {Object.prototype.hasOwnProperty.call(
+                          signatureCache,
+                          item.id,
+                        ) ? (
+                          signatureCache[item.id] ? (
+                            <>
+                              <span>Assinatura do morador</span>
+                              <img
+                                src={signatureCache[item.id] as string}
+                                alt={`Assinatura de ${item.collected_by_name || "quem retirou a encomenda"}`}
+                              />
+                            </>
+                          ) : (
+                            <span>Assinatura não disponível.</span>
+                          )
+                        ) : (
+                          <button
+                            className="text-button"
+                            type="button"
+                            disabled={signatureLoadingId === item.id}
+                            onClick={() => void loadSignature(item.id)}
+                          >
+                            {signatureLoadingId === item.id
+                              ? "Carregando assinatura..."
+                              : "Ver assinatura"}
+                          </button>
+                        )}
                       </div>
                     )}
                   </article>

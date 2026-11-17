@@ -14,13 +14,17 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import {
   buildLabelDiagnostics,
+  compressPackagePhoto,
   detectDeliveryCompany,
+  extractPackageLabelWithAi,
   extractTrackingCode,
   findResidentUnitCandidates,
   findUnitCandidates,
   preparePackageImage,
+  readPackageCodes,
   readPackageLabel,
   releasePackageOcr,
+  type AiLabelExtraction,
   type LabelReadResult,
   type PreparedPackageImage,
 } from "../lib/packageLabelOcr";
@@ -125,6 +129,37 @@ function isStorageCapacityError(error: unknown) {
   );
 }
 
+function deliveryPersonStorageKey(condominiumId: string) {
+  return `encomenda-last-delivery-person:${condominiumId}`;
+}
+
+function readSavedDeliveryPerson(condominiumId: string) {
+  try {
+    return window.sessionStorage.getItem(deliveryPersonStorageKey(condominiumId)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function defaultAddressMessage(status: "verified" | "mismatch" | "unknown") {
+  if (status === "verified") return "Endereço de destino confirmado na etiqueta.";
+  if (status === "mismatch") {
+    return "A etiqueta indica um endereço diferente deste condomínio. Confira fisicamente antes de registrar.";
+  }
+  return "Não foi possível confirmar o endereço automaticamente; confira na etiqueta antes de salvar.";
+}
+
+/**
+ * WebP é ~4x menor que PNG para traço de caneta. Navegador antigo devolve o
+ * PNG silenciosamente, então conferimos o prefixo antes de confiar.
+ */
+function signatureDataUrl(canvas: HTMLCanvasElement) {
+  const webp = canvas.toDataURL("image/webp", 0.82);
+  return webp.startsWith("data:image/webp")
+    ? webp
+    : canvas.toDataURL("image/png");
+}
+
 export function PorterReception() {
   const { user, signOut } = useAuth();
   const imageInput = useRef<HTMLInputElement>(null);
@@ -182,11 +217,30 @@ export function PorterReception() {
   const [porterConfirmed, setPorterConfirmed] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
   const [savingCollection, setSavingCollection] = useState(false);
+  const [mismatchAcknowledged, setMismatchAcknowledged] = useState(false);
+  const [savedDeliveryPersonRevision, setSavedDeliveryPersonRevision] =
+    useState(0);
+  const [contactsByUnit, setContactsByUnit] = useState<{
+    unitId: string;
+    contacts: UnitResident[];
+  } | null>(null);
+  const [lastPackageWhatsapp, setLastPackageWhatsapp] = useState("");
   const unitDetailsRequest = useRef(0);
 
   const selectedUnit = useMemo(
     () => units.find((unit) => unit.id === unitId) ?? null,
     [unitId, units],
+  );
+  const selectedUnitId = selectedUnit?.id ?? "";
+  const lastDeliveryPerson = useMemo(() => {
+    // A revisão força uma nova leitura do sessionStorage após salvar.
+    void savedDeliveryPersonRevision;
+    return account ? readSavedDeliveryPerson(account.condominium_id) : "";
+  }, [account, savedDeliveryPersonRevision]);
+  const selectedUnitContacts = useMemo(
+    () =>
+      contactsByUnit?.unitId === selectedUnitId ? contactsByUnit.contacts : [],
+    [contactsByUnit, selectedUnitId],
   );
   const selectedUnitResidentNames = selectedUnit
     ? authorizedResidents
@@ -217,6 +271,37 @@ export function PorterReception() {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  // O worker do Tesseract custa segundos para carregar o WASM. Ele só morre
+  // quando o app fecha ou quando dá erro de memória; cada foto reutiliza o
+  // mesmo worker.
+  useEffect(() => {
+    return () => {
+      void releasePackageOcr().catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedUnitId) return;
+
+    let active = true;
+    supabase
+      .from("unit_residents")
+      .select("id, name, whatsapp")
+      .eq("unit_id", selectedUnitId)
+      .order("created_at")
+      .then(({ data, error }) => {
+        if (!active || error) return;
+        setContactsByUnit({
+          unitId: selectedUnitId,
+          contacts: (data ?? []) as UnitResident[],
+        });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedUnitId]);
 
   useEffect(() => {
     function handlePopState() {
@@ -548,6 +633,88 @@ export function PorterReception() {
     }
   }
 
+  function packageWhatsappLink(
+    whatsapp: string,
+    unitLabel: string,
+    recipient: string,
+  ) {
+    const message = `Olá! Chegou uma encomenda para ${unitLabel}${
+      recipient ? ` (${recipient})` : ""
+    } no ${condominium?.name ?? "condomínio"}. Por favor, retire na portaria.`;
+    return whatsappLink(whatsapp, message);
+  }
+
+  function applyAiResult(ai: AiLabelExtraction<Unit>, barcodeValues: string[]) {
+    const detectedRecipient = ai.recipientName.trim();
+    setRecipientName(detectedRecipient);
+    setRecipientNameDetected(Boolean(detectedRecipient));
+    setRecipientIsResident(false);
+
+    const localCode = barcodeValues.map(extractTrackingCode).find(Boolean) ?? "";
+    const code = ai.trackingCode || localCode;
+    const carrier =
+      ai.carrier ||
+      detectDeliveryCompany(`${barcodeValues.join("\n")}\n${code}`);
+
+    setCompany(carrier);
+    setTrackingCode(code);
+    setTrackingCodeDetected(Boolean(code));
+    setUnitCandidates(ai.unitCandidates);
+    if (ai.unitId) setUnitId(ai.unitId);
+
+    setAddressVerification({
+      status: ai.addressStatus,
+      message: ai.addressReason || defaultAddressMessage(ai.addressStatus),
+    });
+
+    const transcript = [
+      `origem: nuvem (${ai.durationMs} ms)`,
+      `destinatario: ${ai.recipientName || "-"}`,
+      `unidade: ${ai.unitNumber || "-"}${
+        ai.blockName ? ` / ${ai.blockName}` : ""
+      }`,
+      `transportadora: ${ai.carrier || "-"}`,
+      `rastreio: ${ai.trackingCode || "-"}`,
+      `cep destino: ${ai.destinationCep || "-"}`,
+      `endereco destino: ${
+        [ai.destinationStreet, ai.destinationNumber].filter(Boolean).join(", ") ||
+        "-"
+      }`,
+      `status: ${ai.addressStatus}`,
+      `motivo: ${ai.addressReason || "-"}`,
+    ].join("\n");
+
+    setLastLabelRead({
+      text: transcript,
+      numericText: ai.destinationCep,
+      barcodeValues,
+      attempts: [
+        {
+          pass: "nuvem",
+          durationMs: ai.durationMs,
+          characters: transcript.replace(/\s/g, "").length,
+        },
+      ],
+      durationMs: ai.durationMs,
+      cropped: false,
+      postalCodes: ai.postalCodes,
+    });
+
+    const detectedFields = [
+      detectedRecipient ? "destinatário" : "",
+      ai.unitCandidates.length === 1 ? "apartamento" : "",
+      carrier ? "empresa" : "",
+      code ? "rastreio" : "",
+      ai.addressStatus === "verified" ? "endereço" : "",
+    ].filter(Boolean);
+
+    setOcrMessage(
+      detectedFields.length
+        ? `Leitura na nuvem concluída: ${detectedFields.join(", ")}. Confira os dados.`
+        : "Leitura na nuvem concluída, mas o endereço não foi confirmado automaticamente. Confira a etiqueta antes de salvar.",
+    );
+  }
+
   async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
     const image = event.target.files?.[0] ?? null;
     event.target.value = "";
@@ -556,7 +723,7 @@ export function PorterReception() {
     setOcrMessage("");
     setUnitCandidates([]);
     setUnitId("");
-    setDeliveryPerson("");
+    setDeliveryPerson(lastDeliveryPerson);
     setCompany("");
     setTrackingCode("");
     setTrackingCodeDetected(false);
@@ -564,9 +731,11 @@ export function PorterReception() {
     setRecipientNameDetected(false);
     setRecipientIsResident(false);
     setAddressVerification(null);
+    setMismatchAcknowledged(false);
     setDuplicateWarning("");
     setNotificationMessage("");
     setLastPackageId("");
+    setLastPackageWhatsapp("");
     allowDuplicate.current = false;
 
     if (!image) return;
@@ -578,24 +747,60 @@ export function PorterReception() {
       setPageError("A foto precisa ter no máximo 10 MB.");
       return;
     }
+    if (!account || !condominium) return;
 
-    setFile(image);
-    setPreviewUrl(URL.createObjectURL(image));
     setIsReading(true);
     setOcrMessage("Preparando a foto para leitura...");
     setLastLabelRead(null);
 
     let preparedImage: PreparedPackageImage | null = null;
     try {
-      preparedImage = await preparePackageImage(image);
-      const prepared = preparedImage;
+      // A mesma foto comprimida vai para a nuvem e para o Storage: uma
+      // compressão, ~150–250 KB, em vez de 3–8 MB no bucket.
+      const compressed = await compressPackagePhoto(image);
+      setFile(compressed.file);
+      setPreviewUrl(URL.createObjectURL(compressed.file));
+
+      preparedImage = await preparePackageImage(compressed.file);
+
+      let barcodeValues: string[] = [];
+      try {
+        barcodeValues = await readPackageCodes(preparedImage.preview);
+      } catch {
+        // Código ilegível não impede a leitura do texto.
+      }
+
+      const expectedCep = condominium.cep ?? "";
       const residentNames = authorizedResidents
         .map((resident) => resident.name?.trim() ?? "")
         .filter(Boolean);
-      const expectedCep = condominium?.cep ?? "";
+
+      // Caminho principal: Vision LLM. Qualquer falha cai no leitor local.
+      try {
+        const ai = await extractPackageLabelWithAi({
+          client: supabase,
+          condominiumId: condominium.id,
+          imageBase64: compressed.base64,
+          mimeType: compressed.mimeType,
+          expectedAddress: {
+            cep: condominium.cep,
+            street: condominium.street,
+            address_number: condominium.address_number,
+          },
+          units,
+          blocks,
+          residents: authorizedResidents,
+        });
+        applyAiResult(ai, barcodeValues);
+        return;
+      } catch {
+        setOcrMessage(
+          "Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)...",
+        );
+      }
 
       const label = await readPackageLabel(
-        prepared,
+        preparedImage,
         { expectedCep },
         (status) => setOcrMessage(status),
       );
@@ -618,19 +823,13 @@ export function PorterReception() {
       setRecipientNameDetected(Boolean(detectedRecipientName));
       setRecipientIsResident(false);
 
-      const verification = condominium
-        ? verifyPackageDestinationAddress({
-            recognizedText,
-            numericText: label.numericText,
-            barcodeText,
-            address: condominium,
-            residentNames,
-          })
-        : {
-            status: "unknown" as const,
-            message:
-              "Não foi possível carregar o endereço do condomínio para validar a etiqueta.",
-          };
+      const verification = verifyPackageDestinationAddress({
+        recognizedText,
+        numericText: label.numericText,
+        barcodeText,
+        address: condominium,
+        residentNames,
+      });
       setAddressVerification(verification);
 
       const residentCandidates = findResidentUnitCandidates(
@@ -672,8 +871,8 @@ export function PorterReception() {
           label.error instanceof Error ? ` ${label.error.message}` : "";
         setOcrMessage(
           code || detectedCompany || candidates.length
-            ? "Código da etiqueta lido, mas o texto não foi reconhecido; confira os dados."
-            : `Não foi possível ler o texto da etiqueta.${details}`,
+            ? "Leitura no aparelho (modo offline): código da etiqueta lido, mas o texto não foi reconhecido; confira os dados."
+            : `Leitura no aparelho (modo offline): não foi possível ler o texto da etiqueta.${details}`,
         );
         return;
       }
@@ -689,8 +888,8 @@ export function PorterReception() {
 
       setOcrMessage(
         detectedFields.length
-          ? `Leitura concluída: ${detectedFields.join(", ")}. Confira os dados.`
-          : `A etiqueta foi lida (${characters} caracteres), mas o endereço não foi confirmado. Enquadre a etiqueta inteira, com boa luz, e tire outra foto.`,
+          ? `Leitura no aparelho (modo offline): ${detectedFields.join(", ")}. Confira os dados.`
+          : `Leitura no aparelho (modo offline): a etiqueta foi lida (${characters} caracteres), mas o endereço não foi confirmado. Enquadre a etiqueta inteira, com boa luz, e tire outra foto.`,
       );
     } catch (error) {
       if (isStorageCapacityError(error)) {
@@ -700,8 +899,7 @@ export function PorterReception() {
       }
       setAddressVerification({
         status: "unknown",
-        message:
-          "Não foi possível confirmar o endereço de destino. Tire outra foto mostrando o logradouro, o número e o CEP.",
+        message: defaultAddressMessage("unknown"),
       });
       setOcrMessage(
         error instanceof Error
@@ -721,10 +919,9 @@ export function PorterReception() {
       setPageError("Confira ou informe o nome do destinatário da etiqueta.");
       return;
     }
-    if (addressVerification?.status !== "verified") {
+    if (addressVerification?.status === "mismatch" && !mismatchAcknowledged) {
       setPageError(
-        addressVerification?.message ??
-          "O endereço de destino precisa ser confirmado antes do recebimento.",
+        "A etiqueta indica outro endereço. Confira fisicamente a etiqueta e marque a confirmação antes de registrar.",
       );
       return;
     }
@@ -766,7 +963,6 @@ export function PorterReception() {
     const path = `${account.condominium_id}/${selectedUnit.block_id ?? "no-block"}/${user.id}/${crypto.randomUUID()}.${imageExtension(file)}`;
 
     try {
-      await releasePackageOcr();
       const { error: uploadError } = await supabase.storage
         .from(receiptBucket)
         .upload(path, file, {
@@ -805,8 +1001,35 @@ export function PorterReception() {
         return;
       }
 
+      const savedWhatsapp =
+        selectedUnitContacts.find((resident) => resident.whatsapp)?.whatsapp ??
+        "";
+      setLastPackageWhatsapp(
+        savedWhatsapp
+          ? packageWhatsappLink(
+              savedWhatsapp,
+              `o apartamento ${selectedUnit.unit_number}`,
+              recipientName.trim(),
+            )
+          : "",
+      );
+
+      const trimmedDeliveryPerson = deliveryPerson.trim();
+      if (trimmedDeliveryPerson) {
+        setSavedDeliveryPersonRevision((current) => current + 1);
+        try {
+          window.sessionStorage.setItem(
+            deliveryPersonStorageKey(account.condominium_id),
+            trimmedDeliveryPerson,
+          );
+        } catch {
+          // Sessão sem storage: só não memoriza o entregador.
+        }
+      }
+
       setSuccessMessage(`Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`);
       allowDuplicate.current = false;
+      setMismatchAcknowledged(false);
       setDuplicateWarning("");
       setLastPackageId(
         typeof createdPackageId === "string" ? createdPackageId : "",
@@ -816,7 +1039,7 @@ export function PorterReception() {
       setUnitId("");
       setUnitCandidates([]);
       setCompany("");
-      setDeliveryPerson("");
+      setDeliveryPerson(trimmedDeliveryPerson || lastDeliveryPerson);
       setTrackingCode("");
       setTrackingCodeDetected(false);
       setRecipientName("");
@@ -888,7 +1111,7 @@ export function PorterReception() {
       const { error } = await supabase.rpc("confirm_package_collection", {
         p_package_id: collectionPackageId,
         p_collected_by_name: collectionName.trim(),
-        p_resident_signature: canvas.toDataURL("image/png"),
+        p_resident_signature: signatureDataUrl(canvas),
         p_porter_confirmed: porterConfirmed,
       });
       if (error) {
@@ -919,7 +1142,7 @@ export function PorterReception() {
       return;
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.lineWidth = 6;
+    context.lineWidth = 3;
     context.lineCap = "round";
     context.lineJoin = "round";
     context.strokeStyle = "#172033";
@@ -1012,10 +1235,12 @@ export function PorterReception() {
     setRecipientNameDetected(false);
     setRecipientIsResident(false);
     setAddressVerification(null);
+    setMismatchAcknowledged(false);
     setOcrMessage("");
     setDuplicateWarning("");
     setNotificationMessage("");
     setLastPackageId("");
+    setLastPackageWhatsapp("");
     setLastLabelRead(null);
     allowDuplicate.current = false;
   }
@@ -1083,10 +1308,23 @@ export function PorterReception() {
                 ? "Abrindo o WhatsApp..."
                 : "Avisar morador no WhatsApp"}
             </button>
+            {lastPackageWhatsapp && (
+              <a
+                className="porter-whatsapp-link"
+                href={lastPackageWhatsapp}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Abrir conversa direta no WhatsApp (sem custo)
+              </a>
+            )}
             <button
               className="porter-secondary-button"
               type="button"
-              onClick={() => setLastPackageId("")}
+              onClick={() => {
+                setLastPackageId("");
+                setLastPackageWhatsapp("");
+              }}
             >
               Agora não
             </button>
@@ -1143,7 +1381,7 @@ export function PorterReception() {
                     </button>
                   </div>
                   <p className="porter-ocr-status" role="status">
-                    {isReading ? "Analisando no celular..." : ocrMessage}
+                    {isReading ? "Analisando a foto..." : ocrMessage}
                   </p>
                   {lastLabelRead && !isReading && (
                     <details className="porter-diagnostics">
@@ -1166,7 +1404,7 @@ export function PorterReception() {
                     </details>
                   )}
                   {addressVerification && !isReading && (
-                    <p
+                    <div
                       className={`porter-address-check porter-address-check-${addressVerification.status}`}
                       role={
                         addressVerification.status === "verified"
@@ -1174,8 +1412,27 @@ export function PorterReception() {
                           : "alert"
                       }
                     >
-                      {addressVerification.message}
-                    </p>
+                      <p>{addressVerification.message}</p>
+                      {addressVerification.status === "unknown" && (
+                        <p className="porter-address-check-detail">
+                          Não foi possível confirmar o endereço automaticamente;
+                          confira na etiqueta antes de salvar.
+                        </p>
+                      )}
+                      {addressVerification.status === "mismatch" && (
+                        <label className="porter-mismatch-check">
+                          <input
+                            type="checkbox"
+                            checked={mismatchAcknowledged}
+                            onChange={(event) =>
+                              setMismatchAcknowledged(event.target.checked)
+                            }
+                          />
+                          Confirmo que conferi a etiqueta fisicamente e a entrega
+                          pertence a este condomínio.
+                        </label>
+                      )}
+                    </div>
                   )}
 
                   {!isReading && (
@@ -1226,6 +1483,30 @@ export function PorterReception() {
                           </small>
                         )}
                       </label>
+                      {selectedUnit &&
+                        selectedUnitContacts.some(
+                          (resident) => resident.whatsapp,
+                        ) && (
+                          <div className="porter-whatsapp-actions">
+                            {selectedUnitContacts
+                              .filter((resident) => resident.whatsapp)
+                              .map((resident) => (
+                                <a
+                                  key={resident.id}
+                                  className="porter-whatsapp-link"
+                                  href={packageWhatsappLink(
+                                    resident.whatsapp as string,
+                                    `o apartamento ${selectedUnit.unit_number}`,
+                                    resident.name ?? "",
+                                  )}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Avisar {resident.name || "morador"} no WhatsApp
+                                </a>
+                              ))}
+                          </div>
+                        )}
 
                       <label>
                         Nome do destinatário
@@ -1269,6 +1550,16 @@ export function PorterReception() {
                           value={deliveryPerson}
                           onChange={(event) => setDeliveryPerson(event.target.value)}
                         />
+                        {lastDeliveryPerson &&
+                          deliveryPerson !== lastDeliveryPerson && (
+                            <button
+                              className="text-button"
+                              type="button"
+                              onClick={() => setDeliveryPerson(lastDeliveryPerson)}
+                            >
+                              Usar último entregador ({lastDeliveryPerson})
+                            </button>
+                          )}
                       </label>
 
                       <label>
@@ -1316,7 +1607,8 @@ export function PorterReception() {
                         disabled={
                           isSaving ||
                           !unitId ||
-                          addressVerification?.status !== "verified"
+                          (addressVerification?.status === "mismatch" &&
+                            !mismatchAcknowledged)
                         }
                       >
                         {isSaving ? "Salvando..." : "Confirmar recebimento"}
@@ -1441,6 +1733,20 @@ export function PorterReception() {
                                     <strong>{resident.name || "Nome não informado"}</strong>
                                     {resident.whatsapp && (
                                       <span>WhatsApp: {resident.whatsapp}</span>
+                                    )}
+                                    {resident.whatsapp && selectedSearchUnit && (
+                                      <a
+                                        className="porter-whatsapp-link"
+                                        href={packageWhatsappLink(
+                                          resident.whatsapp,
+                                          `o apartamento ${selectedSearchUnit.unit_number}`,
+                                          resident.name ?? "",
+                                        )}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        Avisar no WhatsApp
+                                      </a>
                                     )}
                                   </li>
                                 ))}
@@ -1652,8 +1958,8 @@ export function PorterReception() {
                           <div className="porter-signature-pad">
                             <canvas
                               ref={signatureCanvas}
-                              width={720}
-                              height={720}
+                              width={500}
+                              height={260}
                               aria-label="Espaço para o morador assinar"
                               onPointerDown={drawSignature}
                               onPointerMove={drawSignature}

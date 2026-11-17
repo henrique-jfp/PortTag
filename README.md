@@ -108,8 +108,10 @@ O Síndico precisa ter uma conta de e-mail no Supabase Authentication antes de
 ser vinculado pelo Super Admin. Ele entra em `manager.html` com esse e-mail e
 senha. O Porteiro entra em `porter.html` com o usuário e a senha temporária.
 
-O app do Porteiro é mobile-first: tira a foto com a câmera do celular, tenta
-ler localmente o QR Code e o texto da etiqueta e sugere unidade e empresa.
+O app do Porteiro é mobile-first: tira a foto com a câmera do celular e comprime
+a imagem antes do processamento. A leitura da etiqueta é tentada primeiro na
+nuvem, com Gemini Vision, e sugere destinatário, unidade, empresa e rastreio;
+se a nuvem falhar ou não estiver configurada, o app usa OCR local como fallback.
 Confirme o apartamento e informe o nome do entregador; o código de rastreio é
 opcional se não for detectado. O caderno anual do Síndico permite filtrar
 recebimentos por data, apartamento, empresa, porteiro, rastreio e situação.
@@ -129,5 +131,31 @@ Nome e WhatsApp dos moradores são opcionais. Abreviações como `ap`, `apto`,
 `apartament` e `apart` são normalizadas para apartamento, e `cob`, `cobe` e
 `cobert` para cobertura.
 
-Nunca coloque a chave `service_role` ou uma chave `secret` no frontend ou no
-repositório. As permissões dos dados devem ser protegidas pelo RLS do Supabase.
+### Leitura de etiqueta com Gemini Vision
+
+A extração na nuvem exige uma chave de API do Google AI Studio. Crie a chave e
+configure o segredo e a função no projeto do Supabase (o `project-ref` deste
+projeto é `ygtmyjrivavasjfwvioz`):
+
+```powershell
+supabase link --project-ref ygtmyjrivavasjfwvioz
+supabase secrets set GEMINI_API_KEY=SUA_CHAVE_AQUI
+supabase functions deploy extract-package-label
+```
+
+A função usa `verify_jwt = true`, valida o vínculo do porteiro com o condomínio
+e chama o Gemini com a foto comprimida. Sem a chave, ela responde `503` com
+`fallback: true` e o app continua no OCR local. O modelo é
+`gemini-3.5-flash-lite`, com resposta JSON estruturada e no máximo 350 tokens;
+a chave fica somente no ambiente da Edge Function.
+
+Para reduzir o consumo no piloto, a foto é redimensionada no celular para no
+máximo 1280 px no maior lado, JPEG em qualidade 0.80, e a mesma imagem é usada
+na IA e no Storage `package-receipts`. Nome/WhatsApp do morador, rastreio e
+telefone do entregador continuam opcionais: o porteiro pode registrar com o
+endereço em branco (`unknown`), mas divergência confirmada (`mismatch`) exige
+checkbox explícito antes de salvar.
+
+Nunca coloque a chave `service_role`, a chave do Gemini ou qualquer segredo no
+frontend ou no repositório. As permissões dos dados devem ser protegidas pelo
+RLS do Supabase.
