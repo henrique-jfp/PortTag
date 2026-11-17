@@ -66,6 +66,8 @@ export type LabelReadResult = {
   attempts: LabelReadAttempt[];
   durationMs: number;
   cropped: boolean;
+  /** CEPs que apareceram no texto, na passada numérica ou nos códigos. */
+  postalCodes: string[];
   /** Falha do OCR. O código de barras e o texto parcial continuam válidos. */
   error?: unknown;
 };
@@ -105,10 +107,19 @@ const courierNames = [
 
 /** Cópia usada para localizar a etiqueta. Pequena de propósito: é rápida. */
 const previewDimension = 1600;
-/** Resolução final do recorte entregue ao Tesseract. */
-const cropLongEdge = 2000;
+/**
+ * Resolução final do recorte entregue ao Tesseract. 2000 px custava 7 s por
+ * passada em celular e não lia melhor: etiqueta térmica tem traço grosso e o
+ * que atrapalha é ruído, não falta de pixel.
+ */
+const cropLongEdge = 1600;
 /** Ampliar demais só engrossa o serrilhado da impressão térmica. */
-const maximumUpscale = 2.2;
+const maximumUpscale = 1.8;
+/**
+ * Orçamento de tempo para as passadas extras. O porteiro está com o pacote na
+ * mão: melhor devolver o que já foi lido do que segurar a fila.
+ */
+const optionalPassBudgetMs = 12000;
 const minimumWordConfidence = 30;
 const minimumWordsForCrop = 6;
 const minimumTextLength = 40;
@@ -656,6 +667,61 @@ function recordAttempt(pass: string, result: PassResult): LabelReadAttempt {
 }
 
 /**
+ * Palavras que formam a etiqueta.
+ *
+ * O fundo da foto (parede, piso, plástico do pacote) só aparece com confiança
+ * baixa. Incluí-lo na caixa fazia o recorte engolir o quadro inteiro: o
+ * Tesseract gastava segundos com ruído e o texto saía repetido e sujo.
+ *
+ * O miolo legível define a etiqueta; dentro dele entra tudo, inclusive as
+ * palavras de baixa confiança, que costumam ser o endereço em letra pequena.
+ * Se o miolo não representar a maior parte do texto lido, ele não é a etiqueta
+ * e vale a união de tudo — melhor recortar errado do que perder o texto.
+ */
+function confidentWords(words: WordBox[]) {
+  const readable = words.filter(
+    (word) => word.text.replace(/[^\p{L}\p{N}]/gu, "").length >= 2,
+  );
+
+  let core = readable.filter((word) => word.confidence >= 60);
+  if (core.length < minimumWordsForCrop) {
+    core = readable.filter((word) => word.confidence >= 45);
+  }
+  if (core.length < minimumWordsForCrop) {
+    core = readable.filter(
+      (word) => word.confidence >= minimumWordConfidence,
+    );
+  }
+  if (core.length < minimumWordsForCrop) return core;
+
+  let x0 = Number.POSITIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let x1 = Number.NEGATIVE_INFINITY;
+  let y1 = Number.NEGATIVE_INFINITY;
+  for (const word of core) {
+    x0 = Math.min(x0, word.bbox.x0);
+    y0 = Math.min(y0, word.bbox.y0);
+    x1 = Math.max(x1, word.bbox.x1);
+    y1 = Math.max(y1, word.bbox.y1);
+  }
+
+  const padX = Math.max(8, (x1 - x0) * 0.06);
+  const padY = Math.max(8, (y1 - y0) * 0.06);
+  const inside = readable.filter((word) => {
+    const centerX = (word.bbox.x0 + word.bbox.x1) / 2;
+    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+    return (
+      centerX >= x0 - padX &&
+      centerX <= x1 + padX &&
+      centerY >= y0 - padY &&
+      centerY <= y1 + padY
+    );
+  });
+
+  return inside.length >= readable.length * 0.5 ? inside : readable;
+}
+
+/**
  * Região da etiqueta a partir das caixas de palavra do Tesseract. É o que
  * permite recortar da foto original em vez de ler o quadro inteiro reduzido.
  */
@@ -665,11 +731,7 @@ function labelRegion(
   sourceWidth: number,
   sourceHeight: number,
 ): ImageRect | null {
-  const useful = words.filter(
-    (word) =>
-      word.confidence >= minimumWordConfidence &&
-      word.text.replace(/[^\p{L}\p{N}]/gu, "").length >= 2,
-  );
+  const useful = confidentWords(words);
   if (useful.length < minimumWordsForCrop) return null;
 
   let x0 = Number.POSITIVE_INFINITY;
@@ -734,20 +796,63 @@ function foundExpectedCep(
   ]).has(expectedCep);
 }
 
+/**
+ * Escolhe a melhor leitura e só completa o que faltar nela.
+ *
+ * Antes as passadas eram concatenadas: a mesma etiqueta aparecia três vezes no
+ * texto final, cada vez com erros diferentes, e a âncora do destinatário podia
+ * cair na cópia errada. Agora a passada mais informativa é a base e as outras
+ * só acrescentam linha que a base não tem.
+ */
 function mergeTextVariants(variants: string[]) {
-  const seen = new Set<string>();
+  const unique = variants.filter((variant) => variant.trim().length > 0);
+  if (!unique.length) return "";
+
+  const score = (text: string) => {
+    const tokens = normalizeLine(text).match(/[a-z0-9]{3,}/g) ?? [];
+    // CEP vale muito mais que uma palavra: é ele que confirma o endereço.
+    return tokens.length + collectPostalCodes([text]).size * 25;
+  };
+  const ordered = [...unique].sort((left, right) => score(right) - score(left));
+
   const lines: string[] = [];
+  const seen = new Set<string>();
+  const knownTokens = new Set<string>();
 
-  for (const variant of variants) {
-    for (const rawLine of variant.split(/\r?\n/)) {
-      const line = rawLine.replace(/\s+/g, " ").trim();
-      if (line.replace(/[^\p{L}\p{N}]/gu, "").length < 2) continue;
+  const push = (rawLine: string) => {
+    const line = rawLine.replace(/\s+/g, " ").trim();
+    if (line.replace(/[^\p{L}\p{N}]/gu, "").length < 2) return false;
 
-      const key = normalizeLine(line);
+    const key = normalizeLine(line);
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    lines.push(line);
+    for (const token of key.match(/[a-z0-9]{3,}/g) ?? []) knownTokens.add(token);
+    return true;
+  };
+
+  const [base, ...rest] = ordered;
+  for (const line of base.split(/\r?\n/)) push(line);
+
+  for (const variant of rest) {
+    for (const line of variant.split(/\r?\n/)) {
+      const key = normalizeLine(line.replace(/\s+/g, " ").trim());
       if (seen.has(key)) continue;
 
-      seen.add(key);
-      lines.push(line);
+      const tokens = key.match(/[a-z0-9]{3,}/g) ?? [];
+      if (tokens.length) {
+        const contained =
+          tokens.filter((token) => knownTokens.has(token)).length /
+          tokens.length;
+        // Linha que já está representada na base, só com outro erro de OCR.
+        if (contained >= 0.6) {
+          seen.add(key);
+          continue;
+        }
+      }
+
+      push(line);
     }
   }
 
@@ -804,42 +909,68 @@ export async function readPackageLabel(
         prepared.height,
       );
 
+      const elapsedMs = () => performance.now() - startedAt;
+      const confirmed = () =>
+        foundExpectedCep(variants, numericText, barcodeValues, expectedCep);
+
       if (region) {
         cropped = true;
         const crop = prepared.drawRegion(region, cropLongEdge);
-        const adaptive = binarizeCanvas(crop, "adaptive");
 
-        onProgress("Recortando e reforçando a leitura...", 0.4);
-        const enhanced = await runOcrPass(worker, adaptive, {
-          pass: "recorte",
-          psm: PSM.SPARSE_TEXT,
-        });
-        attempts.push(recordAttempt("recorte", enhanced));
-        variants.unshift(enhanced.text);
-
-        if (!foundExpectedCep(variants, numericText, barcodeValues, expectedCep)) {
-          onProgress("Tentando outro modo de leitura...", 0.62);
+        if (!confirmed()) {
+          // Otsu primeiro: a binarização global é limpa e o Tesseract voa
+          // nela. A adaptativa recupera reflexo, mas enche a imagem de ruído
+          // (era ela que levava 7 s por passada e devolvia lixo).
+          onProgress("Recortando e reforçando a leitura...", 0.4);
           const otsu = binarizeCanvas(crop, "otsu");
-          const blockPass = await runOcrPass(worker, otsu, {
-            pass: "contraste",
-            psm: PSM.SINGLE_BLOCK,
-          });
-          attempts.push(recordAttempt("contraste", blockPass));
-          variants.unshift(blockPass.text);
-        }
-
-        if (!foundExpectedCep(variants, numericText, barcodeValues, expectedCep)) {
-          onProgress("Lendo os números da etiqueta...", 0.8);
-          const digits = await runOcrPass(worker, adaptive, {
-            pass: "numeros",
+          const enhanced = await runOcrPass(worker, otsu, {
+            pass: "recorte",
             psm: PSM.SPARSE_TEXT,
-            whitelist: "0123456789",
           });
-          attempts.push(recordAttempt("numeros", digits));
-          numericText = digits.text;
+          attempts.push(recordAttempt("recorte", enhanced));
+          variants.unshift(enhanced.text);
+
+          // Recorte já lendo bem: a passada adaptativa custa segundos e
+          // devolve quase o mesmo texto. Ela fica reservada para quando a
+          // binarização global não deu conta (reflexo, sombra).
+          const enhancedCharacters = enhanced.text.replace(/\s/g, "").length;
+
+          if (
+            !confirmed() &&
+            enhancedCharacters < 200 &&
+            elapsedMs() < optionalPassBudgetMs
+          ) {
+            onProgress("Tentando com contraste adaptativo...", 0.62);
+            const adaptive = binarizeCanvas(crop, "adaptive");
+            const adaptivePass = await runOcrPass(worker, adaptive, {
+              pass: "contraste",
+              psm: PSM.SPARSE_TEXT,
+            });
+            attempts.push(recordAttempt("contraste", adaptivePass));
+            variants.unshift(adaptivePass.text);
+          }
+
+          // A passada só de dígitos existe para salvar um CEP quando o texto
+          // saiu fraco. Com texto bom e sem CEP lido, o CEP provavelmente não
+          // está na etiqueta — e a passada custa segundos.
+          if (
+            !confirmed() &&
+            enhancedCharacters < 200 &&
+            elapsedMs() < optionalPassBudgetMs &&
+            collectPostalCodes(variants).size === 0
+          ) {
+            onProgress("Lendo os números da etiqueta...", 0.8);
+            const digits = await runOcrPass(worker, otsu, {
+              pass: "numeros",
+              psm: PSM.SPARSE_TEXT,
+              whitelist: "0123456789",
+            });
+            attempts.push(recordAttempt("numeros", digits));
+            numericText = digits.text;
+          }
         }
 
-        if (!barcodeValues.length) {
+        if (!barcodeValues.length && elapsedMs() < optionalPassBudgetMs * 2) {
           try {
             barcodeValues = await readPackageCodes(crop);
           } catch {
@@ -882,19 +1013,26 @@ export async function readPackageLabel(
         attempts,
         durationMs: Math.round(performance.now() - startedAt),
         cropped,
+        postalCodes: [
+          ...collectPostalCodes([merged, numericText, ...barcodeValues]),
+        ],
       };
     } catch (ocrError) {
       // O worker pode ter ficado em estado ruim: a próxima foto começa limpa.
       error = ocrError;
       void releasePackageOcr().catch(() => {});
 
+      const partialText = mergeTextVariants(variants);
       return {
-        text: mergeTextVariants(variants),
+        text: partialText,
         numericText,
         barcodeValues,
         attempts,
         durationMs: Math.round(performance.now() - startedAt),
         cropped,
+        postalCodes: [
+          ...collectPostalCodes([partialText, numericText, ...barcodeValues]),
+        ],
         error,
       };
     }
@@ -916,6 +1054,7 @@ export function buildLabelDiagnostics(
     `recorte: ${result.cropped ? "sim" : "nao"}`,
     `passadas: ${passes}`,
     `cep_esperado: ${extra.cep || "-"}`,
+    `ceps_lidos: ${result.postalCodes.join(", ") || "-"}`,
     `verificacao: ${extra.status}`,
     `codigos: ${result.barcodeValues.join(" | ") || "-"}`,
     "",

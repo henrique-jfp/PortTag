@@ -473,6 +473,11 @@ export function verifyPackageDestinationAddress(
   const allCodes = new Set(
     extractPostalCodes(`${recognizedText}\n${numericText}\n${barcodeText}`),
   );
+  // CEPs impressos que não são do condomínio. Servem de aviso, nunca de prova:
+  // o CEP do remetente está sempre na etiqueta.
+  const otherPostalCodes = [...allCodes].filter(
+    (code) => code !== expectedCep,
+  );
 
   const postalCodeMatched = hasExpectedCep && allCodes.has(expectedCep);
   // Divergência só é conclusiva dentro do bloco do destinatário. Fora dele
@@ -559,9 +564,35 @@ export function verifyPackageDestinationAddress(
     status: "unknown",
     message: signals.destinationFound
       ? "Não foi possível confirmar o endereço de destino. Tire outra foto mostrando o logradouro, o número e o CEP."
-      : "Não foi possível identificar o endereço do destinatário. Tire outra foto mostrando o bloco do destinatário, o logradouro, o número e o CEP.",
+      : unknownWithoutBlockMessage(hasExpectedCep, expectedCep, otherPostalCodes),
     signals,
   };
+}
+
+function formatPostalCode(code: string) {
+  return code.length === 8 ? `${code.slice(0, 5)}-${code.slice(5)}` : code;
+}
+
+/**
+ * Sem bloco de destinatário não há como provar que o CEP impresso é o do
+ * destino. Mas dizer só "tire outra foto" faz o porteiro fotografar cinco vezes
+ * uma encomenda que provavelmente não é do prédio; citar o CEP que está na
+ * etiqueta resolve a dúvida em uma linha.
+ */
+function unknownWithoutBlockMessage(
+  hasExpectedCep: boolean,
+  expectedCep: string,
+  otherPostalCodes: string[],
+) {
+  if (hasExpectedCep && otherPostalCodes.length) {
+    const printed = otherPostalCodes
+      .slice(0, 3)
+      .map(formatPostalCode)
+      .join(", ");
+    return `A etiqueta mostra o CEP ${printed}, diferente do condomínio (${formatPostalCode(expectedCep)}). Não foi possível confirmar o destino; confira antes de registrar.`;
+  }
+
+  return "Não foi possível identificar o endereço do destinatário. Tire outra foto mostrando o bloco do destinatário, o logradouro, o número e o CEP.";
 }
 
 function findExplicitUnitTokens(text: string) {

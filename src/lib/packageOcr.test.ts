@@ -60,8 +60,10 @@ describe("etiqueta da Amazon", () => {
 
   it("não inventa bloco de destino quando o CEP é de outro endereço", () => {
     const label = amazonLabel("22041050");
+    const result = verify(label);
 
-    expect(verify(label).status).toBe("unknown");
+    expect(result.status).toBe("unknown");
+    expect(result.message).toContain("22041-050");
     expect(findDestinationSection(label, [], "22031040")).toBe("");
   });
 });
