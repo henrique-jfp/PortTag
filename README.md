@@ -9,7 +9,7 @@ projeto Supabase.
 - Node.js e npm
 - Projeto Supabase
 
-1. Execute `npm install`.
+1. Execute `npm ci`.
 2. Copie `.env.example` para `.env.local` e configure a URL do Supabase e a
    chave pública (publishable ou anon).
 3. Execute `npm run dev`.
@@ -33,6 +33,28 @@ Endereços publicados para teste:
 O build está hospedado no `pvserver` como serviço systemd
 `encomenda-web.service`, com inicialização automática e acesso HTTPS pelo
 Cloudflare Tunnel. O site principal do domínio não foi alterado.
+
+### Publicar atualizações no pvserver
+
+O código-fonte fica em `/home/pvserver/encomenda-app/source`; a pasta `current`
+continua apontando para uma release pronta em `releases`. Depois de fazer
+`git commit` e `git push` para `main`, publique a nova versão com:
+
+```powershell
+ssh pvserver "cd /home/pvserver/encomenda-app/source && bash scripts/deploy-pvserver.sh"
+```
+
+O script faz `git pull --ff-only`, instala as dependências pelo lockfile, gera
+o build, valida as páginas e os arquivos do OCR, cria uma release separada e
+troca `current` atomicamente. Se a verificação HTTP falhar, ele restaura a
+release anterior. Releases antigas são mantidas para rollback. O serviço web
+não precisa ser reiniciado.
+
+Na primeira configuração, clone este repositório em
+`/home/pvserver/encomenda-app/source` e configure ali um `.env.local` com
+`VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. O arquivo `.env.example` contém
+somente nomes e placeholders; não coloque chaves reais no GitHub. Migrações e
+Edge Functions do Supabase continuam sendo publicadas separadamente.
 
 ## Primeiro acesso e configuração
 

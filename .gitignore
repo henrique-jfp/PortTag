@@ -5,5 +5,6 @@ public/ocr
 .env
 .env.local
 .env.*.local
+.env.example.local
 supabase/functions/.env
 supabase/.temp/
