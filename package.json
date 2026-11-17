@@ -9,6 +9,8 @@
     "prebuild": "node scripts/prepare-ocr-assets.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -31,6 +33,7 @@
     "oxlint": "^1.90.0",
     "supabase": "^3.2.0",
     "typescript": "~7.0.2",
-    "vite": "^8.3.6"
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
   }
 }

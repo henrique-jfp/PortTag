@@ -14,6 +14,12 @@ projeto Supabase.
    chave pública (publishable ou anon).
 3. Execute `npm run dev`.
 
+Antes de publicar, rode `npm test` (asserções sobre a leitura de etiqueta),
+`npm run lint` e `npm run build`. O teste usa as quatro etiquetas reais
+(Amazon, Shopee, Correios e Mercado Livre) como fixtures: ele mede a decisão de
+endereço — o que confirma e o que bloqueia — e não a qualidade do OCR, que
+depende da foto.
+
 No desenvolvimento, as entradas são:
 
 - Super Admin: `http://localhost:5173/`
