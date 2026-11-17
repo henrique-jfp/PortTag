@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { LogOut, Search, X } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { PackageReceipt } from "../components/PackageReceipt";
 import { supabase } from "../lib/supabase";
 
 type Condominium = {
@@ -25,6 +26,10 @@ type PackageRecord = {
   collected_by_name: string | null;
   collected_signature: string | null;
   collected_confirmed_by: string | null;
+  receipt_path: string | null;
+  photo_expires_at: string;
+  photo_deleted_at: string | null;
+  last_notified_at: string | null;
 };
 
 type Unit = {
@@ -259,7 +264,7 @@ export function ManagerLedger() {
         const { data, error } = await supabase
           .from("packages")
           .select(
-            "id, condominium_id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_by, received_at, status, collected_at, collected_by_name, collected_signature, collected_confirmed_by",
+            "id, condominium_id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_by, received_at, status, collected_at, collected_by_name, collected_signature, collected_confirmed_by, receipt_path, photo_expires_at, photo_deleted_at, last_notified_at",
           )
           .eq("condominium_id", condominiumId)
           .gte("received_at", yearStart)
@@ -583,7 +588,12 @@ export function ManagerLedger() {
                       <div><dt>Retirada</dt><dd>{formatDate(item.collected_at)}</dd></div>
                       <div><dt>Retirado por</dt><dd>{item.collected_by_name || "—"}</dd></div>
                       <div><dt>Confirmado pelo porteiro</dt><dd>{item.collected_confirmed_by ? porterNames.get(item.collected_confirmed_by) || "Porteiro" : "—"}</dd></div>
+                      <div><dt>Aviso ao morador</dt><dd>{item.last_notified_at ? formatDate(item.last_notified_at) : "Não avisado"}</dd></div>
                     </dl>
+                    <PackageReceipt
+                      path={item.receipt_path}
+                      deletedAt={item.photo_deleted_at}
+                    />
                     {item.collected_signature && (
                       <div className="ledger-signature">
                         <span>Assinatura do morador</span>

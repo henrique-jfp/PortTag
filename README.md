@@ -70,6 +70,9 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 8. `supabase/migrations/20261117030000_porter_access_expiration.sql`
 9. `supabase/migrations/20261117040000_condominium_user_created_by.sql`
 10. `supabase/migrations/20261117050000_package_recipient_verification.sql`
+11. `supabase/migrations/20261117060000_package_notifications.sql`
+12. `supabase/migrations/20261117070000_package_duplicate_tracking.sql`
+13. `supabase/migrations/20261117080000_collection_porter_confirmation.sql`
 
 Crie e confirme a conta responsável pela plataforma em Supabase
 Authentication > Users. Promova somente essa conta no SQL Editor, substituindo
@@ -88,7 +91,8 @@ condomínio e os blocos de trabalho. No campo **Prazo de acesso**, escolha sem
 expiração, teste por 7 dias ou uma data e hora personalizadas. Ao vencer o
 prazo, o banco bloqueia o acesso do porteiro aos dados e o app informa que o
 acesso expirou; contas sem prazo continuam ativas até serem revogadas pelo
-Super Admin. O sistema gera usuário e senha temporária; anote e entregue a
+Super Admin. Ao vencer o prazo, o botão **Renovar prazo** permite definir uma
+nova data sem trocar a senha. O sistema gera usuário e senha temporária; anote e entregue a
 senha ao porteiro, pois ela é exibida somente na criação ou redefinição. Para
 detalhes de publicação da função e do caderno, consulte
 [o guia de recebimento e acessos](./supabase/RECEBIMENTO.md).

@@ -15,29 +15,107 @@ const unitLabelTokens = new Set([
   "apartamento",
   "casa",
   "cobertura",
+  "complemento",
+  "compl",
   "unidade",
 ]);
 const unitLabelNoise = new Set(["n", "no", "numero"]);
 const ignoredNameTokens = new Set(["da", "das", "de", "do", "dos", "e"]);
-const ignoredAddressTokens = new Set([
-  "a",
-  "avenida",
+
+/**
+ * Tipo do logradouro. O cadastro e a etiqueta discordam com frequência
+ * ("Rua" x "R", "Avenida" x "Av"), então essas palavras nunca entram na
+ * comparação do nome da rua.
+ */
+const addressTypeTokens = new Set([
+  "al",
+  "alameda",
   "av",
+  "avenida",
+  "beco",
+  "caminho",
+  "campo",
+  "conjunto",
+  "estr",
+  "estrada",
+  "jardim",
+  "jd",
+  "largo",
+  "lgo",
+  "passagem",
+  "pc",
+  "pca",
+  "praca",
+  "praia",
+  "quadra",
+  "r",
+  "rod",
+  "rodovia",
+  "rua",
+  "trav",
+  "travessa",
+  "tv",
+  "via",
+  "viela",
+  "vila",
+  "vl",
+]);
+
+/**
+ * Palavras que aparecem no bloco de endereço sem identificar o imóvel.
+ */
+const addressNoiseTokens = new Set([
+  "a",
   "bairro",
+  "bloco",
+  "br",
+  "brasil",
+  "brazil",
+  "caixa",
+  "cep",
+  "cidade",
+  "complemento",
+  "condominio",
   "de",
   "do",
   "da",
   "das",
   "dos",
-  "estrada",
+  "edificio",
+  "lote",
   "n",
   "no",
   "numero",
-  "praca",
-  "r",
-  "rua",
-  "travessa",
+  "o",
+  "os",
+  "torre",
+  "unidade",
 ]);
+
+const ignoredAddressTokens = new Set([
+  ...addressTypeTokens,
+  ...addressNoiseTokens,
+]);
+
+/**
+ * Abreviações comuns em etiquetas. O cadastro quase sempre traz a palavra
+ * inteira, então expandimos antes de comparar.
+ */
+const addressAbbreviations: Record<string, string> = {
+  alm: "almirante",
+  cel: "coronel",
+  dr: "doutor",
+  eng: "engenheiro",
+  gen: "general",
+  mal: "marechal",
+  min: "ministro",
+  pe: "padre",
+  pres: "presidente",
+  prof: "professor",
+  sta: "santa",
+  sto: "santo",
+};
+
 const ocrDigitConfusions: Record<string, string> = {
   b: "8",
   i: "1",
@@ -60,10 +138,115 @@ function normalizeAddressText(value: string) {
     .trim();
 }
 
-function isSenderLine(line: string) {
-  return /\b(remetente|origem|devolucao|retorno|sender|shipper|ship from|return address)\b/.test(
-    normalizeAddressText(line),
+function addressTokens(value: string) {
+  return normalizeAddressText(value)
+    .split(" ")
+    .filter(Boolean)
+    .map((token) => addressAbbreviations[token] ?? token)
+    .filter((token) => token.length > 1 && !ignoredAddressTokens.has(token));
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Distância de edição limitada a 1. Existe para absorver o ruído típico do
+ * OCR ("VIANA" x "VTANA") sem aproximar palavras realmente diferentes.
+ */
+function withinOneEdit(left: string, right: string) {
+  if (left === right) return true;
+  if (Math.abs(left.length - right.length) > 1) return false;
+
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let edits = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (left.length > right.length) {
+      leftIndex += 1;
+    } else if (right.length > left.length) {
+      rightIndex += 1;
+    } else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+
+  return edits + (left.length - leftIndex) + (right.length - rightIndex) <= 1;
+}
+
+function tokensLooselyEqual(left: string, right: string) {
+  if (left === right) return true;
+
+  // O mesmo mapa usado na unidade: o OCR troca letra por dígito parecido.
+  const foldedLeft = normalizeOcrToken(left);
+  const foldedRight = normalizeOcrToken(right);
+  if (foldedLeft === foldedRight) return true;
+
+  // Palavras curtas são curtas demais para tolerar erro.
+  if (Math.min(foldedLeft.length, foldedRight.length) < 5) return false;
+  return withinOneEdit(foldedLeft, foldedRight);
+}
+
+function streetMatchRatio(scope: string, street: string) {
+  const streetTokens = addressTokens(street);
+  if (!streetTokens.length) return 0;
+
+  const scopeTokens = addressTokens(scope);
+  if (!scopeTokens.length) return 0;
+
+  const matched = streetTokens.filter((streetToken) =>
+    scopeTokens.some((scopeToken) => tokensLooselyEqual(streetToken, scopeToken)),
+  ).length;
+  return matched / streetTokens.length;
+}
+
+function numberTokens(value: string) {
+  return (value.match(/\d+/g) ?? []).map((number) => String(Number(number)));
+}
+
+function numberMatches(scope: string, addressNumber: string) {
+  const expected = numberTokens(addressNumber);
+  if (!expected.length) return false;
+  const found = new Set(numberTokens(scope));
+  return expected.every((number) => found.has(number));
+}
+
+const postalCodePattern = /(?:^|[^\d])\d{5}[\s.-]?\d{3}(?=$|[^\d])/g;
+
+function extractPostalCodes(value: string) {
+  return (value.match(postalCodePattern) ?? []).map((code) =>
+    code.replace(/\D/g, ""),
   );
+}
+
+function hasAddressTypeToken(value: string) {
+  return normalizeAddressText(value)
+    .split(" ")
+    .some((token) => addressTypeTokens.has(token));
+}
+
+const destinationAnchorPattern =
+  /\b(?:destinatari[oa]s?|ship to|deliver to|delivery address|entregar (?:a|para)|consignatari[oa])\b/;
+
+const structuredDestinationPattern =
+  /\b(?:cidade de destino|endereco de destino|cep de destino)\b/;
+
+const senderPattern =
+  /\b(?:remetente|origem|devolucao|retorno|sender|shipper|ship from|return address)\b/;
+
+function isSenderLine(line: string) {
+  return senderPattern.test(normalizeAddressText(line));
 }
 
 function findRecipientLine(lines: string[], residents: string[]) {
@@ -94,11 +277,9 @@ function findRecipientLine(lines: string[], residents: string[]) {
   return -1;
 }
 
-function findStructuredDestinationLine(lines: string[]) {
+function structuredDestinationStart(lines: string[]) {
   const destinationCityLine = lines.findIndex((line) =>
-    /\b(?:cidade de destino|endereco de destino|cep de destino)\b/.test(
-      normalizeAddressText(line),
-    ),
+    structuredDestinationPattern.test(normalizeAddressText(line)),
   );
   if (destinationCityLine < 0) return -1;
 
@@ -116,160 +297,115 @@ function findStructuredDestinationLine(lines: string[]) {
   return Math.max(0, destinationCityLine - 3);
 }
 
-function extractDestinationSection(text: string, residentNames: string[]) {
-  const lines = text.split(/\r?\n/).map((line) => line.trim());
-  const destinationLine = lines.findIndex((line) =>
-    /\b(?:destinatario|ship to|deliver to|delivery address)\b/.test(
-      normalizeAddressText(line),
-    ),
-  );
-  const structuredDestinationLine =
-    destinationLine < 0 ? findStructuredDestinationLine(lines) : -1;
-  const recipientLine =
-    destinationLine >= 0
-      ? destinationLine
-      : structuredDestinationLine >= 0
-        ? structuredDestinationLine
-        : findRecipientLine(lines, residentNames);
-  if (recipientLine < 0) return "";
+type DestinationRange = { start: number; end: number };
 
+function rangeUntilSender(lines: string[], start: number): DestinationRange {
   const senderLine = lines.findIndex(
-    (line, index) => index > recipientLine && isSenderLine(line),
+    (line, index) => index > start && isSenderLine(line),
   );
-  return lines
-    .slice(recipientLine, senderLine < 0 ? undefined : senderLine)
-    .join("\n");
+  return { start, end: senderLine < 0 ? lines.length : senderLine };
 }
 
-function findMatchingResidentName(
+/**
+ * Localiza o bloco do destinatário sem exigir um cabeçalho fixo. Etiquetas da
+ * Amazon, por exemplo, não imprimem "DESTINATÁRIO": nelas o bloco é achado
+ * pelo CEP do condomínio. Sem isso, o texto inteiro era descartado.
+ */
+function destinationRange(
   lines: string[],
-  startLine: number,
   residentNames: string[],
-) {
-  const nearbyTokens = new Set(
-    normalizeAddressText(lines.slice(startLine, startLine + 3).join(" "))
-      .split(" ")
-      .filter(Boolean)
-      .map(normalizeOcrToken),
+  expectedCep: string,
+): DestinationRange | null {
+  const anchorLine = lines.findIndex((line) =>
+    destinationAnchorPattern.test(normalizeAddressText(line)),
   );
+  if (anchorLine >= 0) return rangeUntilSender(lines, anchorLine);
 
-  return residentNames.find((residentName) => {
-    const nameTokens = normalizeAddressText(residentName)
-      .split(" ")
-      .filter((token) => token.length >= 3 && !ignoredNameTokens.has(token))
-      .map(normalizeOcrToken);
-    if (nameTokens.length < 2) return false;
-    const matchedTokens = nameTokens.filter((token) =>
-      nearbyTokens.has(token),
-    ).length;
-    return matchedTokens >= Math.max(2, Math.ceil(nameTokens.length * 0.6));
-  });
+  const structuredStart = structuredDestinationStart(lines);
+  if (structuredStart >= 0) return rangeUntilSender(lines, structuredStart);
+
+  const recipientLine = findRecipientLine(lines, residentNames);
+  if (recipientLine >= 0) return rangeUntilSender(lines, recipientLine);
+
+  // O CEP chega do cadastro com hífen; na etiqueta ele vem só com dígitos.
+  const cep = expectedCep.replace(/\D/g, "");
+  if (cep.length !== 8) return null;
+  const cepLine = lines.findIndex((line) =>
+    extractPostalCodes(line).includes(cep),
+  );
+  if (cepLine < 0) return null;
+
+  // Ancorado no CEP: a janela fica curta de propósito para não engolir o
+  // bloco do remetente, que costuma ficar logo abaixo.
+  const start = Math.max(0, cepLine - 3);
+  const senderLine = lines.findIndex(
+    (line, index) => index > cepLine && isSenderLine(line),
+  );
+  const end = Math.min(
+    senderLine < 0 ? lines.length : senderLine,
+    cepLine + 3,
+  );
+  return { start, end };
+}
+
+export function findDestinationSection(
+  recognizedText: string,
+  residentNames: string[] = [],
+  expectedCep = "",
+) {
+  const lines = splitLines(recognizedText);
+  const range = destinationRange(lines, residentNames, expectedCep);
+  if (!range) return "";
+  return lines.slice(range.start, range.end).join("\n");
+}
+
+const recipientNamePrefixPattern =
+  /^.*(?:destinat[aá]ri[oa]s?|ship\s*to|deliver\s*to|delivery\s*address|consignat[aá]ri[oa])\s*:?\s*/i;
+
+function cleanRecipientCandidate(candidate: string) {
+  const name = candidate
+    .replace(recipientNamePrefixPattern, "")
+    .replace(/^\s*(?:nome|cliente)\s*[:-]\s*/i, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(
+      /\s+(?:rua|r\.|avenida|av\.|travessa|estrada|logradouro|bairro|cep|apto|apartamento|bloco|complemento|endereco)\b.*$/i,
+      "",
+    )
+    .replace(/\s+\d.*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const normalizedName = normalizeAddressText(name);
+  const tokens = normalizedName.split(" ").filter(Boolean);
+  if (
+    tokens.length < 2 ||
+    tokens.length > 8 ||
+    /\d/.test(name) ||
+    /\b(?:rua|avenida|travessa|estrada|logradouro|bairro|cep|apto|apartamento|bloco|telefone|celular|remetente|origem|sender|shipper|ship|from|endereco|destinatario|complemento)\b/.test(
+      normalizedName,
+    )
+  ) {
+    return "";
+  }
+  return name;
 }
 
 export function extractRecipientName(
   recognizedText: string,
   residentNames: string[] = [],
+  expectedCep = "",
 ) {
-  const lines = recognizedText.split(/\r?\n/).map((line) => line.trim());
-  const destinationLine = lines.findIndex((line) =>
-    /\b(?:destinatario|ship to|deliver to|delivery address)\b/.test(
-      normalizeAddressText(line),
-    ),
-  );
-  const structuredDestinationLine =
-    destinationLine < 0 ? findStructuredDestinationLine(lines) : -1;
-  if (destinationLine < 0 && structuredDestinationLine < 0) {
-    const residentLine = findRecipientLine(lines, residentNames);
-    return residentLine < 0
-      ? ""
-      : findMatchingResidentName(lines, residentLine, residentNames) ?? "";
-  }
+  const lines = splitLines(recognizedText);
+  const range = destinationRange(lines, residentNames, expectedCep);
+  if (!range) return "";
 
-  const recipientStartLine =
-    destinationLine >= 0 ? destinationLine : structuredDestinationLine;
-  const senderLine = lines.findIndex(
-    (line, index) => index > recipientStartLine && isSenderLine(line),
-  );
-  const recipientLines = lines.slice(
-    recipientStartLine,
-    senderLine < 0 ? undefined : senderLine,
-  );
-  const inlineName = recipientLines[0].replace(
-    /^.*(?:destinat[aá]rio|ship\s*to|deliver\s*to|delivery\s*address)\s*:?\s*/i,
-    "",
-  );
-  const candidates = [inlineName, ...recipientLines.slice(1)];
-  for (const candidate of candidates) {
-    const name = candidate
-      .replace(
-        /^.*(?:destinat[aá]rio|ship\s*to|deliver\s*to|delivery\s*address)\s*:?\s*/i,
-        "",
-      )
-      .replace(/^\s*(?:nome|cliente)\s*[:-]\s*/i, "")
-      .replace(/\([^)]*\)/g, "")
-      .replace(
-        /\s+(?:rua|r\.|avenida|av\.|travessa|estrada|logradouro|bairro|cep|apto|apartamento|bloco)\b.*$/i,
-        "",
-      )
-      .replace(/\s+\d.*$/, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    const normalizedName = normalizeAddressText(name);
-    const tokens = normalizedName.split(" ").filter(Boolean);
-    if (
-      tokens.length < 2 ||
-      tokens.length > 8 ||
-      /\d/.test(name) ||
-      /\b(?:rua|avenida|travessa|estrada|logradouro|bairro|cep|apto|apartamento|bloco|telefone|celular|remetente|origem|sender|shipper|ship|from)\b/.test(
-        normalizedName,
-      )
-    ) {
-      continue;
-    }
-    return name;
+  const block = lines.slice(range.start, range.end);
+  for (const candidate of block) {
+    const name = cleanRecipientCandidate(candidate);
+    if (name) return name;
   }
 
   return "";
-}
-
-function extractPostalCodes(value: string) {
-  return (value.match(/(?:^|[^\d])\d{5}[\s.-]?\d{3}(?=$|[^\d])/g) ?? []).map(
-    (code) => code.replace(/\D/g, ""),
-  );
-}
-
-function matchesDestinationStreetAndNumber(
-  destinationText: string,
-  street: string,
-  addressNumber: string,
-) {
-  const destinationTokens = new Set(normalizeAddressText(destinationText).split(" "));
-  const streetTokens = normalizeAddressText(street)
-    .split(" ")
-    .filter((token) => token.length > 1 && !ignoredAddressTokens.has(token));
-  if (!streetTokens.length) return false;
-
-  const matchedStreetTokens = streetTokens.filter((token) =>
-    destinationTokens.has(token),
-  ).length;
-  const requiredStreetMatches = Math.max(
-    1,
-    Math.ceil(streetTokens.length * 0.75),
-  );
-  if (matchedStreetTokens < requiredStreetMatches) return false;
-
-  const expectedNumbers: string[] = addressNumber.match(/\d+/g) ?? [];
-  if (expectedNumbers.length) {
-    const destinationNumbers: string[] =
-      normalizeAddressText(destinationText).match(/\d+/g) ?? [];
-    return expectedNumbers.every((number) =>
-      destinationNumbers.includes(number),
-    );
-  }
-
-  return /\b(?:s\s*n|sem numero)\b/.test(
-    normalizeAddressText(destinationText),
-  );
 }
 
 export type PackageDestinationAddress = {
@@ -278,67 +414,153 @@ export type PackageDestinationAddress = {
   address_number: string;
 };
 
+export type PackageAddressSignals = {
+  destinationFound: boolean;
+  postalCodes: string[];
+  postalCodeMatched: boolean;
+  postalCodeConflict: boolean;
+  streetMatchSection: number;
+  streetMatchAnywhere: number;
+  numberMatched: boolean;
+  residentMatched: boolean;
+};
+
 export type PackageAddressVerification = {
   status: "verified" | "mismatch" | "unknown";
   message: string;
+  signals?: PackageAddressSignals;
 };
 
+export type DestinationVerificationInput = {
+  recognizedText: string;
+  /** Saída da passada só de dígitos. É a fonte mais confiável de CEP. */
+  numericText?: string;
+  /** Conteúdo lido dos códigos de barras/QR da etiqueta. */
+  barcodeText?: string;
+  address: PackageDestinationAddress;
+  residentNames?: string[];
+};
+
+const verifiedStreetThreshold = 0.75;
+const conflictingStreetThreshold = 0.34;
+
+/**
+ * Confere se a etiqueta é deste condomínio.
+ *
+ * A decisão continua determinística: nada de IA nem comparação frouxa. O que
+ * mudou é a ordem das evidências. O CEP é a chave primária porque é o único
+ * campo da etiqueta que não depende de o OCR acertar palavras longas. Quando
+ * ele não aparece, caem as regras de logradouro + número e de morador.
+ */
 export function verifyPackageDestinationAddress(
-  recognizedText: string,
-  address: PackageDestinationAddress,
-  residentNames: string[],
+  input: DestinationVerificationInput,
 ): PackageAddressVerification {
-  const destinationText = extractDestinationSection(
-    recognizedText,
-    residentNames,
+  const { recognizedText, address } = input;
+  const numericText = input.numericText ?? "";
+  const barcodeText = input.barcodeText ?? "";
+  const residentNames = input.residentNames ?? [];
+
+  const expectedCep = address.cep.replace(/\D/g, "");
+  const hasExpectedCep = expectedCep.length === 8;
+
+  const lines = splitLines(recognizedText);
+  const range = destinationRange(lines, residentNames, expectedCep);
+  const destinationText = range
+    ? lines.slice(range.start, range.end).join("\n")
+    : "";
+
+  const destinationCodes = extractPostalCodes(destinationText);
+  const allCodes = new Set(
+    extractPostalCodes(`${recognizedText}\n${numericText}\n${barcodeText}`),
   );
-  if (!destinationText) {
+
+  const postalCodeMatched = hasExpectedCep && allCodes.has(expectedCep);
+  // Divergência só é conclusiva dentro do bloco do destinatário. Fora dele
+  // estão os CEPs do remetente, que nunca conferem por definição.
+  const postalCodeConflict =
+    hasExpectedCep &&
+    destinationCodes.length > 0 &&
+    !destinationCodes.includes(expectedCep);
+
+  const streetMatchSection = streetMatchRatio(destinationText, address.street);
+  const streetMatchAnywhere = streetMatchRatio(
+    recognizedText,
+    address.street,
+  );
+  // Para confirmar, qualquer lugar da etiqueta serve (o endereço pode ter sido
+  // lido numa passada que não delimitou o bloco). Para bloquear, só o bloco.
+  const streetMatch = Math.max(streetMatchSection, streetMatchAnywhere);
+  const numberMatched =
+    numberMatches(destinationText, address.address_number) ||
+    numberMatches(recognizedText, address.address_number);
+  const residentMatched = findRecipientLine(lines, residentNames) >= 0;
+
+  const signals: PackageAddressSignals = {
+    destinationFound: destinationText.length > 0,
+    postalCodes: destinationCodes,
+    postalCodeMatched,
+    postalCodeConflict,
+    streetMatchSection,
+    streetMatchAnywhere,
+    numberMatched,
+    residentMatched,
+  };
+
+  if (hasExpectedCep && postalCodeMatched) {
     return {
-      status: "unknown",
-      message:
-        "Não foi possível identificar o endereço do destinatário. Tire outra foto mostrando o bloco do destinatário, o logradouro, o número e o CEP.",
+      status: "verified",
+      message: "CEP do condomínio lido na etiqueta. Endereço de destino confirmado.",
+      signals,
     };
   }
 
-  const expectedCep = address.cep.replace(/\D/g, "");
-  const postalCodes = extractPostalCodes(destinationText);
-  if (postalCodes.length && !postalCodes.includes(expectedCep)) {
+  if (streetMatch >= verifiedStreetThreshold && numberMatched) {
+    return {
+      status: "verified",
+      message: "Logradouro e número da etiqueta conferem com o condomínio.",
+      signals,
+    };
+  }
+
+  if (residentMatched && streetMatch >= verifiedStreetThreshold) {
+    return {
+      status: "verified",
+      message: "Nome do morador e endereço da etiqueta conferem com o condomínio.",
+      signals,
+    };
+  }
+
+  if (signals.destinationFound && postalCodeConflict) {
     return {
       status: "mismatch",
       message:
         "O CEP de destino da etiqueta não corresponde ao condomínio. O recebimento foi bloqueado.",
+      signals,
     };
   }
 
   if (
-    matchesDestinationStreetAndNumber(
-      destinationText,
-      address.street,
-      address.address_number,
-    )
+    signals.destinationFound &&
+    hasAddressTypeToken(destinationText) &&
+    addressTokens(address.street).length >= 2 &&
+    streetMatchSection <= conflictingStreetThreshold &&
+    numberMatches(destinationText, address.address_number) &&
+    destinationText.length >= 30
   ) {
-    return {
-      status: "verified",
-      message: "Endereço de destino confirmado para este condomínio.",
-    };
-  }
-
-  const destinationTokens = normalizeAddressText(destinationText)
-    .split(" ")
-    .filter(Boolean);
-  const destinationNumbers = destinationText.match(/\d+/g) ?? [];
-  if (destinationTokens.length >= 6 && destinationNumbers.length > 0) {
     return {
       status: "mismatch",
       message:
         "O endereço de destino da etiqueta não corresponde ao condomínio. O recebimento foi bloqueado.",
+      signals,
     };
   }
 
   return {
     status: "unknown",
-    message:
-      "Não foi possível confirmar o endereço de destino. Tire outra foto mostrando o logradouro, o número e o CEP.",
+    message: signals.destinationFound
+      ? "Não foi possível confirmar o endereço de destino. Tire outra foto mostrando o logradouro, o número e o CEP."
+      : "Não foi possível identificar o endereço do destinatário. Tire outra foto mostrando o bloco do destinatário, o logradouro, o número e o CEP.",
+    signals,
   };
 }
 

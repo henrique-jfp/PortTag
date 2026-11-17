@@ -109,6 +109,13 @@ export function CondominiumOperators({
   const [successMessage, setSuccessMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [workingId, setWorkingId] = useState("");
+  const [reactivatingId, setReactivatingId] = useState("");
+  const [reactivateAction, setReactivateAction] = useState<
+    "activate" | "renew-access"
+  >("activate");
+  const [reactivateDuration, setReactivateDuration] =
+    useState<AccessDuration>("never");
+  const [reactivateCustomExpiry, setReactivateCustomExpiry] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
 
   useEffect(() => {
@@ -384,7 +391,8 @@ export function CondominiumOperators({
 
   async function handlePorterAction(
     porter: Porter,
-    action: "reset-password" | "deactivate" | "activate",
+    action: "reset-password" | "deactivate" | "activate" | "renew-access",
+    accessExpiresAt?: string | null,
   ) {
     if (
       action === "deactivate" &&
@@ -398,19 +406,17 @@ export function CondominiumOperators({
     ) {
       return;
     }
-    if (
-      action === "activate" &&
-      !window.confirm(`Reativar ${porter.name} e gerar uma nova senha?`)
-    ) {
-      return;
-    }
 
     setPageError("");
     setSuccessMessage("");
     setWorkingId(porter.id);
     try {
       const { data, error } = await supabase.functions.invoke("manage-porter", {
-        body: { action, porterAccountId: porter.id },
+        body: {
+          action,
+          porterAccountId: porter.id,
+          ...(accessExpiresAt !== undefined ? { accessExpiresAt } : {}),
+        },
       });
       if (error) {
         setPageError(await getFunctionErrorMessage(error));
@@ -432,7 +438,13 @@ export function CondominiumOperators({
             : "Senha redefinida. Guarde a nova senha agora.",
         );
       } else {
-        setSuccessMessage(`Acesso de ${porter.name} removido.`);
+        setSuccessMessage(
+          action === "deactivate"
+            ? `Acesso de ${porter.name} removido.`
+            : typeof data?.message === "string"
+              ? data.message
+              : "Prazo de acesso atualizado.",
+        );
       }
       setListVersion((version) => version + 1);
     } catch (error) {
@@ -444,6 +456,32 @@ export function CondominiumOperators({
     } finally {
       setWorkingId("");
     }
+  }
+
+  async function confirmPorterReactivation(porter: Porter) {
+    let accessExpiresAt: string | null = null;
+    if (reactivateDuration === "seven-days") {
+      accessExpiresAt = new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+    } else if (reactivateDuration === "custom") {
+      const expiryTimestamp = new Date(reactivateCustomExpiry).getTime();
+      if (
+        !reactivateCustomExpiry ||
+        !Number.isFinite(expiryTimestamp) ||
+        expiryTimestamp <= Date.now()
+      ) {
+        setPageError("Escolha uma data e hora futuras para o fim do acesso.");
+        return;
+      }
+      accessExpiresAt = new Date(expiryTimestamp).toISOString();
+    }
+
+    await handlePorterAction(porter, reactivateAction, accessExpiresAt);
+    setReactivatingId("");
+    setReactivateAction("activate");
+    setReactivateDuration("never");
+    setReactivateCustomExpiry("");
   }
 
   async function handleAssignManager(event: FormEvent<HTMLFormElement>) {
@@ -696,7 +734,14 @@ export function CondominiumOperators({
             ) : (
               <ul className="operator-list">
                 {porters.map((porter) => (
-                  <li key={porter.id}>
+                  <li
+                    key={porter.id}
+                    className={
+                      reactivatingId === porter.id
+                        ? "reactivate-item"
+                        : undefined
+                    }
+                  >
                     <div>
                       <strong>{porter.name} (@{porter.username})</strong>
                       <span>
@@ -717,6 +762,23 @@ export function CondominiumOperators({
                     <div className="table-actions">
                       {porter.active && (
                         <>
+                          {porter.access_expires_at &&
+                            new Date(porter.access_expires_at).getTime() <=
+                              currentTime && (
+                              <button
+                                className="text-button"
+                                disabled={workingId === porter.id}
+                                onClick={() => {
+                                  setReactivatingId(porter.id);
+                                  setReactivateAction("renew-access");
+                                  setReactivateDuration("never");
+                                  setReactivateCustomExpiry("");
+                                  setPageError("");
+                                }}
+                              >
+                                Renovar prazo
+                              </button>
+                            )}
                           <button
                             className="text-button"
                             disabled={workingId === porter.id}
@@ -741,14 +803,92 @@ export function CondominiumOperators({
                         <button
                           className="text-button"
                           disabled={workingId === porter.id}
-                          onClick={() =>
-                            void handlePorterAction(porter, "activate")
-                          }
+                          onClick={() => {
+                            setReactivatingId(porter.id);
+                            setReactivateAction("activate");
+                            setReactivateDuration("never");
+                            setReactivateCustomExpiry("");
+                            setPageError("");
+                          }}
                         >
                           Reativar e gerar senha
                         </button>
                       )}
                     </div>
+                    {reactivatingId === porter.id && (
+                      <div className="reactivate-panel">
+                        <p>
+                          {reactivateAction === "activate" ? (
+                            <>
+                              Reativar <strong>{porter.name}</strong> e gerar
+                              uma nova senha. Escolha o novo prazo de acesso:
+                            </>
+                          ) : (
+                            <>
+                              Renovar o prazo de acesso de{" "}
+                              <strong>{porter.name}</strong>. Enquanto o prazo
+                              estiver vencido, o banco bloqueia o acesso dele:
+                            </>
+                          )}
+                        </p>
+                        <label className="form-field">
+                          Prazo de acesso
+                          <select
+                            value={reactivateDuration}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              if (
+                                value === "never" ||
+                                value === "seven-days" ||
+                                value === "custom"
+                              ) {
+                                setReactivateDuration(value);
+                              }
+                            }}
+                          >
+                            <option value="never">Sem expiração</option>
+                            <option value="seven-days">Teste por 7 dias</option>
+                            <option value="custom">Escolher data e hora</option>
+                          </select>
+                        </label>
+                        {reactivateDuration === "custom" && (
+                          <label className="form-field">
+                            Acesso até
+                            <input
+                              required
+                              type="datetime-local"
+                              min={localDateTimeValue()}
+                              value={reactivateCustomExpiry}
+                              onChange={(event) =>
+                                setReactivateCustomExpiry(event.target.value)
+                              }
+                            />
+                          </label>
+                        )}
+                        <div className="table-actions">
+                          <button
+                            className="primary-button"
+                            disabled={workingId === porter.id}
+                            onClick={() =>
+                              void confirmPorterReactivation(porter)
+                            }
+                          >
+                            {workingId === porter.id
+                              ? "Salvando..."
+                              : reactivateAction === "activate"
+                                ? "Reativar e gerar senha"
+                                : "Salvar novo prazo"}
+                          </button>
+                          <button
+                            className="text-button"
+                            disabled={workingId === porter.id}
+                            onClick={() => setReactivatingId("")}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

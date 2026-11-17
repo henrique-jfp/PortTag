@@ -1553,6 +1553,25 @@ input {
   font-size: 14px;
 }
 
+.porter-diagnostics {
+  padding: 10px 12px;
+  border: 1px dashed #d5dce7;
+  border-radius: 10px;
+  color: #697386;
+  font-size: 13px;
+}
+
+.porter-diagnostics summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.porter-diagnostics p {
+  margin: 8px 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .porter-form input:not([type="checkbox"]),
 .porter-form select,
 .porter-collection-form input {
@@ -2100,4 +2119,90 @@ input {
   .year-calendar {
     grid-template-columns: 1fr;
   }
+}
+
+.porter-notify-prompt {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #cfe3d7;
+  border-radius: 12px;
+  background: #f4fbf6;
+}
+
+.porter-notify-prompt p {
+  margin: 0;
+  color: #176b36;
+  font-weight: 600;
+}
+
+.porter-notify-block {
+  display: grid;
+  gap: 8px;
+}
+
+.porter-notify-status {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.porter-notify-status-sent {
+  color: #176b36;
+}
+
+.porter-notify-status-pending {
+  color: #a06412;
+}
+
+.porter-duplicate-warning {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #f0d9a8;
+  border-radius: 10px;
+  background: #fff9ec;
+}
+
+.porter-duplicate-warning p {
+  margin: 0;
+  color: #8a5a0b;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ledger-receipt {
+  display: grid;
+  width: min(100%, 360px);
+  gap: 6px;
+  margin-top: 16px;
+  color: #697386;
+  font-size: 12px;
+}
+
+.ledger-receipt img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  border: 1px solid #dce3ef;
+  border-radius: 8px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.operator-list li.reactivate-item {
+  flex-wrap: wrap;
+}
+
+.reactivate-panel {
+  display: grid;
+  flex-basis: 100%;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e3e8f1;
+}
+
+.reactivate-panel p {
+  margin: 0;
+  color: #344054;
+  font-size: 14px;
 }

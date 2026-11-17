@@ -1,7 +1,12 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 type ManagePorterRequest = {
-  action: "create" | "reset-password" | "deactivate" | "activate";
+  action:
+    | "create"
+    | "reset-password"
+    | "deactivate"
+    | "activate"
+    | "renew-access";
   condominiumId?: string;
   name?: string;
   username?: string;
@@ -302,7 +307,8 @@ Deno.serve(async (request: Request) => {
   if (
     input.action === "reset-password" ||
     input.action === "deactivate" ||
-    input.action === "activate"
+    input.action === "activate" ||
+    input.action === "renew-access"
   ) {
     if (
       typeof input.porterAccountId !== "string" ||
@@ -313,11 +319,55 @@ Deno.serve(async (request: Request) => {
 
     const { data: account, error: accountError } = await serviceClient
       .from("porter_accounts")
-      .select("id, auth_user_id, condominium_id, active")
+      .select("id, auth_user_id, condominium_id, active, access_expires_at")
       .eq("id", input.porterAccountId)
       .maybeSingle();
     if (accountError) return respond({ error: accountError.message }, 500);
     if (!account) return respond({ error: "Porteiro não encontrado." }, 404);
+
+    // undefined = manter o prazo atual; null = sem expiração.
+    let nextExpiry: string | null | undefined;
+    if (input.action === "activate" || input.action === "renew-access") {
+      const rawExpiry = input.accessExpiresAt;
+      if (rawExpiry === null) {
+        nextExpiry = null;
+      } else if (rawExpiry !== undefined) {
+        if (typeof rawExpiry !== "string") {
+          return respond({ error: "A data de expiração é inválida." }, 400);
+        }
+        const parsedExpiry = Date.parse(rawExpiry);
+        if (!Number.isFinite(parsedExpiry) || parsedExpiry <= Date.now()) {
+          return respond(
+            { error: "A data de expiração precisa estar no futuro." },
+            400,
+          );
+        }
+        nextExpiry = new Date(parsedExpiry).toISOString();
+      }
+    }
+
+    if (input.action === "renew-access") {
+      if (!account.active) {
+        return respond(
+          { error: "Reative o acesso antes de renovar o prazo." },
+          409,
+        );
+      }
+      if (nextExpiry === undefined) {
+        return respond({ error: "Informe o novo prazo de acesso." }, 400);
+      }
+      const { error: renewError } = await serviceClient
+        .from("porter_accounts")
+        .update({ access_expires_at: nextExpiry })
+        .eq("id", account.id);
+      if (renewError) return respond({ error: renewError.message }, 500);
+      return respond({
+        message:
+          nextExpiry === null
+            ? "Prazo removido: o acesso ficou sem expiração."
+            : "Prazo de acesso atualizado.",
+      });
+    }
 
     if (input.action === "reset-password" || input.action === "activate") {
       if (!account.active) {
@@ -334,9 +384,20 @@ Deno.serve(async (request: Request) => {
       );
       if (error) return respond({ error: error.message }, 500);
       if (input.action === "activate") {
+        const accountUpdate: Record<string, unknown> = { active: true };
+        if (nextExpiry !== undefined) {
+          accountUpdate.access_expires_at = nextExpiry;
+        } else if (
+          account.access_expires_at &&
+          Date.parse(account.access_expires_at) <= Date.now()
+        ) {
+          // Manter um prazo já vencido deixaria o porteiro bloqueado depois de
+          // "Reativar". Sem uma nova data, o acesso volta sem expiração.
+          accountUpdate.access_expires_at = null;
+        }
         const { error: accountUpdateError } = await serviceClient
           .from("porter_accounts")
-          .update({ active: true })
+          .update(accountUpdate)
           .eq("id", account.id);
         if (accountUpdateError) {
           return respond({ error: accountUpdateError.message }, 500);
@@ -350,9 +411,13 @@ Deno.serve(async (request: Request) => {
         if (membershipUpdateError) {
           return respond({ error: membershipUpdateError.message }, 500);
         }
+        const expiryNote =
+          accountUpdate.access_expires_at === null
+            ? " O prazo anterior venceu e foi removido: o acesso ficou sem expiração."
+            : "";
         return respond({
           credentials: { password },
-          message: "Acesso reativado com nova senha temporária.",
+          message: `Acesso reativado com nova senha temporária.${expiryNote}`,
         });
       }
       return respond({ credentials: { password } });

@@ -13,20 +13,27 @@ import {
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import {
+  buildLabelDiagnostics,
   detectDeliveryCompany,
   extractTrackingCode,
   findResidentUnitCandidates,
   findUnitCandidates,
   preparePackageImage,
-  readPackageCodes,
+  readPackageLabel,
   releasePackageOcr,
-  recognizePackageImage,
+  type LabelReadResult,
+  type PreparedPackageImage,
 } from "../lib/packageLabelOcr";
 import {
   extractRecipientName,
+  findDestinationSection,
   verifyPackageDestinationAddress,
   type PackageAddressVerification,
 } from "../lib/packageOcr";
+import {
+  whatsappLink,
+  type PackageNotification,
+} from "../lib/packageNotifications";
 import { supabase } from "../lib/supabase";
 
 type PorterAccount = {
@@ -82,6 +89,7 @@ type PackageRecord = {
   collected_at: string | null;
   collected_by_name: string | null;
   collected_signature: string | null;
+  last_notified_at: string | null;
 };
 
 type PorterView = "home" | "ledger" | "pending";
@@ -90,7 +98,7 @@ const receiptBucket = "package-receipts";
 const maximumImageSize = 10 * 1024 * 1024;
 const acceptedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const packageFields =
-  "id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_at, status, collected_at, collected_by_name, collected_signature";
+  "id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_at, status, collected_at, collected_by_name, collected_signature, last_notified_at";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("pt-BR");
@@ -123,6 +131,8 @@ export function PorterReception() {
   const signatureCanvas = useRef<HTMLCanvasElement>(null);
   const signatureHasInk = useRef(false);
   const hasInternalHistory = useRef(false);
+  const receiveForm = useRef<HTMLFormElement>(null);
+  const allowDuplicate = useRef(false);
   const [loading, setLoading] = useState(true);
   const [account, setAccount] = useState<PorterAccount | null>(null);
   const [condominium, setCondominium] = useState<Condominium | null>(null);
@@ -158,8 +168,15 @@ export function PorterReception() {
   const [recipientIsResident, setRecipientIsResident] = useState(false);
   const [addressVerification, setAddressVerification] =
     useState<PackageAddressVerification | null>(null);
+  const [lastLabelRead, setLastLabelRead] = useState<LabelReadResult | null>(
+    null,
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  const [notificationMessage, setNotificationMessage] = useState("");
+  const [notifyingId, setNotifyingId] = useState("");
+  const [lastPackageId, setLastPackageId] = useState("");
+  const [duplicateWarning, setDuplicateWarning] = useState("");
   const [collectionPackageId, setCollectionPackageId] = useState("");
   const [collectionName, setCollectionName] = useState("");
   const [porterConfirmed, setPorterConfirmed] = useState(false);
@@ -462,13 +479,6 @@ export function PorterReception() {
 
   function openCamera() {
     setPageError("");
-    void releasePackageOcr().catch((error: unknown) => {
-      setPageError(
-        error instanceof Error
-          ? `Não foi possível liberar a memória do leitor de etiquetas. ${error.message}`
-          : "Não foi possível liberar a memória do leitor de etiquetas.",
-      );
-    });
     imageInput.current?.click();
   }
 
@@ -554,6 +564,10 @@ export function PorterReception() {
     setRecipientNameDetected(false);
     setRecipientIsResident(false);
     setAddressVerification(null);
+    setDuplicateWarning("");
+    setNotificationMessage("");
+    setLastPackageId("");
+    allowDuplicate.current = false;
 
     if (!image) return;
     if (!acceptedImageTypes.has(image.type)) {
@@ -569,65 +583,75 @@ export function PorterReception() {
     setPreviewUrl(URL.createObjectURL(image));
     setIsReading(true);
     setOcrMessage("Preparando a foto para leitura...");
+    setLastLabelRead(null);
+
+    let preparedImage: PreparedPackageImage | null = null;
     try {
-      const preparedImage = await preparePackageImage(image);
-      setOcrMessage("Lendo QR e códigos de barras...");
-      const [barcodeResult] = await Promise.allSettled([
-        readPackageCodes(preparedImage),
-      ]);
-      const barcodeValues =
-        barcodeResult.status === "fulfilled" ? barcodeResult.value : [];
-      setOcrMessage("Lendo texto da etiqueta no celular...");
-      const [ocrResult] = await Promise.allSettled([
-        recognizePackageImage(preparedImage, (status, progress) => {
-          setOcrMessage(
-            status === "recognizing text"
-              ? `Lendo etiqueta no celular... ${Math.round(progress * 100)}%`
-              : "Preparando o leitor local de etiquetas...",
-          );
-        }),
-      ]);
-      const barcodeText = barcodeValues.join("\n");
-      const recognizedText =
-        ocrResult.status === "fulfilled" ? ocrResult.value : "";
+      preparedImage = await preparePackageImage(image);
+      const prepared = preparedImage;
+      const residentNames = authorizedResidents
+        .map((resident) => resident.name?.trim() ?? "")
+        .filter(Boolean);
+      const expectedCep = condominium?.cep ?? "";
+
+      const label = await readPackageLabel(
+        prepared,
+        { expectedCep },
+        (status) => setOcrMessage(status),
+      );
+      setLastLabelRead(label);
+
+      const barcodeText = label.barcodeValues.join("\n");
+      const recognizedText = label.text;
+      const destinationText = findDestinationSection(
+        recognizedText,
+        residentNames,
+        expectedCep,
+      );
+
       const detectedRecipientName = extractRecipientName(
         recognizedText,
-        authorizedResidents
-          .map((resident) => resident.name?.trim() ?? "")
-          .filter(Boolean),
+        residentNames,
+        expectedCep,
       );
       setRecipientName(detectedRecipientName);
       setRecipientNameDetected(Boolean(detectedRecipientName));
       setRecipientIsResident(false);
+
       const verification = condominium
-        ? verifyPackageDestinationAddress(
+        ? verifyPackageDestinationAddress({
             recognizedText,
-            condominium,
-            authorizedResidents
-              .map((resident) => resident.name?.trim() ?? "")
-              .filter(Boolean),
-          )
+            numericText: label.numericText,
+            barcodeText,
+            address: condominium,
+            residentNames,
+          })
         : {
             status: "unknown" as const,
             message:
               "Não foi possível carregar o endereço do condomínio para validar a etiqueta.",
           };
       setAddressVerification(verification);
-      const combinedText = `${barcodeText}\n${recognizedText}`;
+
       const residentCandidates = findResidentUnitCandidates(
-        combinedText,
+        `${barcodeText}\n${recognizedText}`,
         units,
         authorizedResidents,
       );
-      const numberCandidates = findUnitCandidates(combinedText, units);
+      // Fora do bloco do destinatário, todo número é pedido, contrato ou CEP.
+      const numberCandidates = findUnitCandidates(
+        `${barcodeText}\n${destinationText || recognizedText}`,
+        units,
+      );
       const candidates = residentCandidates.length
         ? residentCandidates
         : numberCandidates;
+
       const code =
-        barcodeValues.map(extractTrackingCode).find(Boolean) ||
+        label.barcodeValues.map(extractTrackingCode).find(Boolean) ||
         extractTrackingCode(recognizedText);
       const detectedCompany = detectDeliveryCompany(
-        `${combinedText}\n${code}`,
+        `${barcodeText}\n${recognizedText}\n${code}`,
       );
 
       setCompany(detectedCompany);
@@ -636,18 +660,16 @@ export function PorterReception() {
       setTrackingCode(code);
       setTrackingCodeDetected(Boolean(code));
 
-      if (ocrResult.status === "rejected") {
-        if (isStorageCapacityError(ocrResult.reason)) {
+      if (label.error) {
+        if (isStorageCapacityError(label.error)) {
           setPageError(
             "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.",
           );
-          setOcrMessage("Não foi possível concluir o OCR por falta de espaço.");
+          setOcrMessage("Não foi possível concluir a leitura por falta de espaço.");
           return;
         }
         const details =
-          ocrResult.reason instanceof Error
-            ? ` ${ocrResult.reason.message}`
-            : "";
+          label.error instanceof Error ? ` ${label.error.message}` : "";
         setOcrMessage(
           code || detectedCompany || candidates.length
             ? "Código da etiqueta lido, mas o texto não foi reconhecido; confira os dados."
@@ -661,11 +683,14 @@ export function PorterReception() {
         candidates.length === 1 ? "apartamento" : "",
         detectedCompany ? "empresa" : "",
         code ? "rastreio" : "",
+        verification.status === "verified" ? "endereço" : "",
       ].filter(Boolean);
+      const characters = recognizedText.replace(/\s/g, "").length;
+
       setOcrMessage(
         detectedFields.length
           ? `Leitura concluída: ${detectedFields.join(", ")}. Confira os dados.`
-          : `O OCR leu ${recognizedText.replace(/\s/g, "").length} caracteres, mas não identificou os campos. Confira as sugestões e tente novamente se necessário.`,
+          : `A etiqueta foi lida (${characters} caracteres), mas o endereço não foi confirmado. Enquadre a etiqueta inteira, com boa luz, e tire outra foto.`,
       );
     } catch (error) {
       if (isStorageCapacityError(error)) {
@@ -684,6 +709,7 @@ export function PorterReception() {
           : "Não foi possível processar a foto. Tente novamente.",
       );
     } finally {
+      preparedImage?.dispose();
       setIsReading(false);
     }
   }
@@ -705,6 +731,37 @@ export function PorterReception() {
 
     setPageError("");
     setSuccessMessage("");
+    setNotificationMessage("");
+    setLastPackageId("");
+
+    const trimmedTrackingCode = trackingCode.trim();
+    if (trimmedTrackingCode && !allowDuplicate.current) {
+      const { data: duplicateRows } = await supabase.rpc(
+        "find_duplicate_package",
+        {
+          p_condominium_id: account.condominium_id,
+          p_tracking_code: trimmedTrackingCode,
+        },
+      );
+      const duplicate = (
+        Array.isArray(duplicateRows) ? duplicateRows[0] : duplicateRows
+      ) as
+        | {
+            unit_number: string;
+            block_name: string | null;
+            received_at: string;
+          }
+        | null;
+      if (duplicate?.unit_number) {
+        setDuplicateWarning(
+          `Já existe uma encomenda com o rastreio ${trimmedTrackingCode}: ${
+            duplicate.block_name ? `${duplicate.block_name} · ` : ""
+          }${duplicate.unit_number}, recebida em ${formatDate(duplicate.received_at)}. Se for outro volume, registre mesmo assim.`,
+        );
+        return;
+      }
+    }
+
     setIsSaving(true);
     const path = `${account.condominium_id}/${selectedUnit.block_id ?? "no-block"}/${user.id}/${crypto.randomUUID()}.${imageExtension(file)}`;
 
@@ -722,16 +779,19 @@ export function PorterReception() {
         return;
       }
 
-      const { error: createError } = await supabase.rpc("create_package", {
-        p_condominium_id: account.condominium_id,
-        p_unit_id: selectedUnit.id,
-        p_receipt_path: path,
-        p_sender: company.trim(),
-        p_delivery_person: deliveryPerson.trim(),
-        p_tracking_code: trackingCode.trim() || null,
-        p_resident_name: recipientName.trim(),
-        p_recipient_is_resident: recipientIsResident,
-      });
+      const { data: createdPackageId, error: createError } = await supabase.rpc(
+        "create_package",
+        {
+          p_condominium_id: account.condominium_id,
+          p_unit_id: selectedUnit.id,
+          p_receipt_path: path,
+          p_sender: company.trim(),
+          p_delivery_person: deliveryPerson.trim(),
+          p_tracking_code: trackingCode.trim() || null,
+          p_resident_name: recipientName.trim(),
+          p_recipient_is_resident: recipientIsResident,
+        },
+      );
 
       if (createError) {
         const { error: cleanupError } = await supabase.storage
@@ -746,6 +806,11 @@ export function PorterReception() {
       }
 
       setSuccessMessage(`Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`);
+      allowDuplicate.current = false;
+      setDuplicateWarning("");
+      setLastPackageId(
+        typeof createdPackageId === "string" ? createdPackageId : "",
+      );
       setFile(null);
       setPreviewUrl("");
       setUnitId("");
@@ -771,6 +836,43 @@ export function PorterReception() {
     }
   }
 
+  async function handleNotify(packageId: string) {
+    setPageError("");
+    setNotificationMessage("");
+    setNotifyingId(packageId);
+    try {
+      const { data, error } = await supabase.rpc(
+        "register_package_notification",
+        { p_package_id: packageId },
+      );
+      if (error) {
+        setPageError(error.message);
+        return;
+      }
+      const notification = (
+        Array.isArray(data) ? data[0] : data
+      ) as PackageNotification | null;
+      if (!notification?.recipient || !notification?.message) {
+        setPageError("Não foi possível preparar o aviso ao morador.");
+        return;
+      }
+
+      await reloadPackages();
+      setNotificationMessage("Aviso registrado. Abrindo o WhatsApp...");
+      window.location.assign(
+        whatsappLink(notification.recipient, notification.message),
+      );
+    } catch (error) {
+      setPageError(
+        error instanceof Error
+          ? `Não foi possível avisar o morador. ${error.message}`
+          : "Não foi possível avisar o morador.",
+      );
+    } finally {
+      setNotifyingId("");
+    }
+  }
+
   async function handleCollection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!collectionPackageId || !collectionName.trim()) return;
@@ -787,6 +889,7 @@ export function PorterReception() {
         p_package_id: collectionPackageId,
         p_collected_by_name: collectionName.trim(),
         p_resident_signature: canvas.toDataURL("image/png"),
+        p_porter_confirmed: porterConfirmed,
       });
       if (error) {
         setPageError(error.message);
@@ -871,6 +974,23 @@ export function PorterReception() {
     signatureHasInk.current = false;
   }
 
+  async function copyDiagnostics() {
+    if (!lastLabelRead) return;
+    try {
+      await navigator.clipboard.writeText(
+        buildLabelDiagnostics(lastLabelRead, {
+          cep: condominium?.cep ?? "",
+          status: addressVerification?.status ?? "unknown",
+        }),
+      );
+      setOcrMessage("Diagnóstico copiado. Envie o texto para o suporte.");
+    } catch {
+      setPageError(
+        "Não foi possível copiar o diagnóstico. Tire um print desta tela.",
+      );
+    }
+  }
+
   async function handleSignOut() {
     try {
       await signOut();
@@ -893,6 +1013,11 @@ export function PorterReception() {
     setRecipientIsResident(false);
     setAddressVerification(null);
     setOcrMessage("");
+    setDuplicateWarning("");
+    setNotificationMessage("");
+    setLastPackageId("");
+    setLastLabelRead(null);
+    allowDuplicate.current = false;
   }
 
   if (loading) {
@@ -936,6 +1061,36 @@ export function PorterReception() {
             <Check size={18} />
             {successMessage}
           </p>
+        )}
+
+        {notificationMessage && (
+          <p className="porter-success" role="status">
+            <Check size={18} />
+            {notificationMessage}
+          </p>
+        )}
+
+        {lastPackageId && (
+          <section className="porter-notify-prompt">
+            <p>Avise o morador que a encomenda chegou.</p>
+            <button
+              className="porter-primary-button"
+              type="button"
+              disabled={notifyingId === lastPackageId}
+              onClick={() => void handleNotify(lastPackageId)}
+            >
+              {notifyingId === lastPackageId
+                ? "Abrindo o WhatsApp..."
+                : "Avisar morador no WhatsApp"}
+            </button>
+            <button
+              className="porter-secondary-button"
+              type="button"
+              onClick={() => setLastPackageId("")}
+            >
+              Agora não
+            </button>
+          </section>
         )}
 
         {activeView === "home" && (
@@ -990,6 +1145,26 @@ export function PorterReception() {
                   <p className="porter-ocr-status" role="status">
                     {isReading ? "Analisando no celular..." : ocrMessage}
                   </p>
+                  {lastLabelRead && !isReading && (
+                    <details className="porter-diagnostics">
+                      <summary>Diagnóstico da leitura</summary>
+                      <p>
+                        {lastLabelRead.attempts
+                          .map(
+                            (attempt) =>
+                              `${attempt.pass}: ${attempt.characters} caract. em ${attempt.durationMs} ms`,
+                          )
+                          .join(" · ")}
+                      </p>
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => void copyDiagnostics()}
+                      >
+                        Copiar diagnóstico
+                      </button>
+                    </details>
+                  )}
                   {addressVerification && !isReading && (
                     <p
                       className={`porter-address-check porter-address-check-${addressVerification.status}`}
@@ -1004,7 +1179,11 @@ export function PorterReception() {
                   )}
 
                   {!isReading && (
-                    <form className="porter-form" onSubmit={handleReceive}>
+                    <form
+                      ref={receiveForm}
+                      className="porter-form"
+                      onSubmit={handleReceive}
+                    >
                       <label>
                         Apartamento
                         <select
@@ -1115,6 +1294,22 @@ export function PorterReception() {
                           <small>Detectado automaticamente; corrija se necessário.</small>
                         )}
                       </label>
+
+                      {duplicateWarning && (
+                        <div className="porter-duplicate-warning" role="alert">
+                          <p>{duplicateWarning}</p>
+                          <button
+                            className="porter-secondary-button"
+                            type="button"
+                            onClick={() => {
+                              allowDuplicate.current = true;
+                              receiveForm.current?.requestSubmit();
+                            }}
+                          >
+                            Registrar mesmo assim
+                          </button>
+                        </div>
+                      )}
 
                       <button
                         className="porter-primary-button"
@@ -1398,6 +1593,33 @@ export function PorterReception() {
                         </small>
                       )}
                     </div>
+                    {item.status === "received" && (
+                      <div className="porter-notify-block">
+                        <small
+                          className={
+                            item.last_notified_at
+                              ? "porter-notify-status porter-notify-status-sent"
+                              : "porter-notify-status porter-notify-status-pending"
+                          }
+                        >
+                          {item.last_notified_at
+                            ? `Morador avisado em ${formatDate(item.last_notified_at)}`
+                            : "Morador ainda não avisado"}
+                        </small>
+                        <button
+                          className="porter-secondary-button"
+                          type="button"
+                          disabled={notifyingId === item.id}
+                          onClick={() => void handleNotify(item.id)}
+                        >
+                          {notifyingId === item.id
+                            ? "Abrindo o WhatsApp..."
+                            : item.last_notified_at
+                              ? "Avisar novamente"
+                              : "Avisar morador"}
+                        </button>
+                      </div>
+                    )}
                     {item.status === "received" &&
                       (collectionPackageId === item.id ? (
                         <form

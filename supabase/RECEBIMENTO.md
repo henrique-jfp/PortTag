@@ -14,6 +14,11 @@
    de auditoria dos vínculos com instalações existentes. Por fim, execute
    `20261117050000_package_recipient_verification.sql` para salvar o nome lido
    da etiqueta e a confirmação do porteiro sobre o vínculo com o apartamento.
+   Em seguida, execute `20261117060000_package_notifications.sql` para a fila de
+   avisos ao morador, `20261117070000_package_duplicate_tracking.sql` para o
+   alerta de rastreio repetido e
+   `20261117080000_collection_porter_confirmation.sql` para exigir o aceite do
+   porteiro na retirada também no banco.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -67,8 +72,24 @@ conta do porteiro que confirmou; não é necessário criar conta para o morador.
 Avise o morador antes da assinatura de que ela ficará registrada no caderno do
 condomínio.
 
+### Aviso ao morador
+
+O canal inicial é manual e não tem custo por mensagem. Depois de registrar a
+encomenda, o porteiro toca em **Avisar morador**: o servidor grava o aviso em
+`package_notifications`, atualiza `packages.last_notified_at` e o app abre o
+WhatsApp da portaria com o texto pronto, usando o WhatsApp cadastrado em
+`unit_residents.whatsapp`. Se o apartamento não tiver contato cadastrado, o
+aviso é recusado com uma mensagem pedindo o número. O caderno do síndico mostra
+a data do último aviso e a foto da etiqueta.
+
+Esse canal não envia sozinho nem confirma entrega: ele padroniza o texto e
+deixa rastro de quem foi avisado. Canais automáticos (WhatsApp Cloud API, SMS,
+e-mail, push) usam a mesma tabela e entram depois, sem alterar o fluxo do
+porteiro.
+
 As fotos ficam em bucket privado e expiram após 20 dias. A expiração só remove
-o arquivo; os dados do caderno permanecem.
+o arquivo; os dados do caderno permanecem. A foto é aberta no caderno por URL
+assinada de curta duração e deixa de aparecer depois da limpeza.
 
 ## Publicar a limpeza automática das fotos
 
