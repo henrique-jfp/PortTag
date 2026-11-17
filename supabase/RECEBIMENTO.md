@@ -23,7 +23,11 @@
    a execução das funções do schema `public` (as RPCs são todas autenticadas).
    Depois execute
    `20261117190000_allow_webp_collection_signature.sql` para aceitar assinaturas
-   WebP além de PNG na confirmação da retirada.
+   WebP além de PNG na confirmação da retirada. Por último, execute
+   `20261117200000_confirm_collection_batch.sql` para habilitar a retirada em
+   lote: a RPC `confirm_package_collection_batch(uuid[], text, text, boolean)`
+   valida todas as encomendas no banco antes de atualizar qualquer uma e grava a
+   mesma assinatura, nome, horário e porteiro confirmante em todos os selecionados.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -90,6 +94,29 @@ permanentemente no registro, junto com o nome de quem retirou, a data/hora e a
 conta do porteiro que confirmou; não é necessário criar conta para o morador.
 Avise o morador antes da assinatura de que ela ficará registrada no caderno do
 condomínio.
+
+### Importação em massa e retirada em lote
+
+Na tela inicial do porteiro, **Importar várias fotos** aceita várias etiquetas
+da galeria de uma vez. Empresa e entregador padrão podem ser preenchidos antes
+de começar. A fila processa **uma foto por vez**: cada imagem é comprimida uma
+única vez no aparelho, lida pela nuvem com fallback local e salva separadamente
+com sua própria foto no Storage. O progresso mostra quantas foram registradas,
+quantas estão na fila, quantas precisam de revisão e quantas falharam. É
+possível cancelar a fila, tentar novamente um item com erro e revisar os itens
+que ficaram sem unidade, empresa, entregador ou com endereço divergente.
+Rastreio repetido tem confirmação própria: só é registrado depois que o
+porteiro confirma que se trata de outro volume. Cada item salvo tem seu próprio
+link `wa.me` para avisar o morador.
+
+Para a retirada, ao tocar em **Registrar retirada**, o porteiro vê todos os
+pacotes `received` do mesmo condomínio/bloco/unidade já marcados e pode
+desmarcar os que não foram retirados. Uma única assinatura é copiada em cada
+pacote selecionado, junto com o mesmo nome de quem retirou, o mesmo horário e a
+conta do porteiro que confirmou. A operação é atômica (máximo de 50 pacotes):
+se qualquer pacote não estiver mais na portaria ou pertencer a outro
+apartamento, nada é alterado e o porteiro deve atualizar a lista. O aviso ao
+morador continua manual, pelo link de WhatsApp gerado após o recebimento.
 
 ### Aviso ao morador
 

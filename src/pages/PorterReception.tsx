@@ -77,6 +77,7 @@ type UnitResident = {
 type AuthorizedResident = {
   unit_id: string;
   name: string | null;
+  whatsapp?: string | null;
 };
 
 type PackageRecord = {
@@ -160,9 +161,393 @@ function signatureDataUrl(canvas: HTMLCanvasElement) {
     : canvas.toDataURL("image/png");
 }
 
+/**
+ * Estado de uma etiqueta já lida. Serve tanto ao formulário individual quanto
+ * à fila de importação: a foto comprimida é a mesma para a IA e para o Storage.
+ */
+type PackageDraft = {
+  /** Arquivo original, guardado para permitir nova tentativa de leitura. */
+  source: File;
+  /** JPEG comprimido que vai para a nuvem e para o bucket. */
+  file: File;
+  unitId: string;
+  unitCandidates: Unit[];
+  recipientName: string;
+  recipientIsResident: boolean;
+  company: string;
+  deliveryPerson: string;
+  trackingCode: string;
+  addressVerification: PackageAddressVerification;
+  labelRead: LabelReadResult | null;
+  ocrMessage: string;
+};
+
+type BulkItemStatus = "queued" | "processing" | "done" | "error" | "review";
+
+const bulkStatusLabel: Record<BulkItemStatus, string> = {
+  queued: "Na fila",
+  processing: "Processando",
+  done: "Registrado",
+  error: "Erro",
+  review: "Revisar",
+};
+
+type BulkItem = {
+  id: string;
+  name: string;
+  source: File;
+  status: BulkItemStatus;
+  draft: PackageDraft | null;
+  message: string;
+  /** Aceite explícito de endereço divergente. */
+  acknowledged: boolean;
+  /** Aceite explícito de rastreio repetido (outro volume). */
+  allowDuplicate: boolean;
+  createdPackageId: string;
+  whatsappLink: string;
+};
+
+class DuplicatePackageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DuplicatePackageError";
+  }
+}
+
+type LabelReadContext = {
+  condominium: Condominium;
+  units: Unit[];
+  blocks: Block[];
+  residents: AuthorizedResident[];
+  onProgress?: (message: string) => void;
+};
+
+function draftFromAi(
+  ai: AiLabelExtraction<Unit>,
+  barcodeValues: string[],
+  file: File,
+  source: File,
+): PackageDraft {
+  const detectedRecipient = ai.recipientName.trim();
+  const localCode = barcodeValues.map(extractTrackingCode).find(Boolean) ?? "";
+  const code = ai.trackingCode || localCode;
+  const carrier =
+    ai.carrier ||
+    detectDeliveryCompany(`${barcodeValues.join("\n")}\n${code}`);
+
+  const transcript = [
+    `origem: nuvem (${ai.durationMs} ms)`,
+    `destinatario: ${ai.recipientName || "-"}`,
+    `unidade: ${ai.unitNumber || "-"}${ai.blockName ? ` / ${ai.blockName}` : ""}`,
+    `transportadora: ${ai.carrier || "-"}`,
+    `rastreio: ${ai.trackingCode || "-"}`,
+    `cep destino: ${ai.destinationCep || "-"}`,
+    `endereco destino: ${
+      [ai.destinationStreet, ai.destinationNumber].filter(Boolean).join(", ") || "-"
+    }`,
+    `status: ${ai.addressStatus}`,
+    `motivo: ${ai.addressReason || "-"}`,
+  ].join("\n");
+
+  const detectedFields = [
+    detectedRecipient ? "destinatário" : "",
+    ai.unitCandidates.length === 1 ? "apartamento" : "",
+    carrier ? "empresa" : "",
+    code ? "rastreio" : "",
+    ai.addressStatus === "verified" ? "endereço" : "",
+  ].filter(Boolean);
+
+  return {
+    source,
+    file,
+    unitId: ai.unitId,
+    unitCandidates: ai.unitCandidates,
+    recipientName: detectedRecipient,
+    recipientIsResident: false,
+    company: carrier,
+    deliveryPerson: "",
+    trackingCode: code,
+    addressVerification: {
+      status: ai.addressStatus,
+      message: ai.addressReason || defaultAddressMessage(ai.addressStatus),
+    },
+    labelRead: {
+      text: transcript,
+      numericText: ai.destinationCep,
+      barcodeValues,
+      attempts: [
+        {
+          pass: "nuvem",
+          durationMs: ai.durationMs,
+          characters: transcript.replace(/\s/g, "").length,
+        },
+      ],
+      durationMs: ai.durationMs,
+      cropped: false,
+      postalCodes: ai.postalCodes,
+    },
+    ocrMessage: detectedFields.length
+      ? `Leitura na nuvem concluída: ${detectedFields.join(", ")}. Confira os dados.`
+      : "Leitura na nuvem concluída, mas o endereço não foi confirmado automaticamente. Confira a etiqueta antes de salvar.",
+  };
+}
+
+function draftFromLocalOcr(
+  label: LabelReadResult,
+  ctx: LabelReadContext,
+  file: File,
+  source: File,
+): PackageDraft {
+  const expectedCep = ctx.condominium.cep ?? "";
+  const residentNames = ctx.residents
+    .map((resident) => resident.name?.trim() ?? "")
+    .filter(Boolean);
+  const barcodeText = label.barcodeValues.join("\n");
+  const recognizedText = label.text;
+  const destinationText = findDestinationSection(
+    recognizedText,
+    residentNames,
+    expectedCep,
+  );
+  const detectedRecipientName = extractRecipientName(
+    recognizedText,
+    residentNames,
+    expectedCep,
+  );
+  const verification = verifyPackageDestinationAddress({
+    recognizedText,
+    numericText: label.numericText,
+    barcodeText,
+    address: ctx.condominium,
+    residentNames,
+  });
+  const residentCandidates = findResidentUnitCandidates(
+    `${barcodeText}\n${recognizedText}`,
+    ctx.units,
+    ctx.residents,
+  );
+  const numberCandidates = findUnitCandidates(
+    `${barcodeText}\n${destinationText || recognizedText}`,
+    ctx.units,
+  );
+  const candidates = residentCandidates.length
+    ? residentCandidates
+    : numberCandidates;
+  const code =
+    label.barcodeValues.map(extractTrackingCode).find(Boolean) ||
+    extractTrackingCode(recognizedText);
+  const detectedCompany = detectDeliveryCompany(
+    `${barcodeText}\n${recognizedText}\n${code}`,
+  );
+
+  let ocrMessage: string;
+  if (label.error) {
+    if (isStorageCapacityError(label.error)) {
+      ocrMessage =
+        "Não foi possível concluir a leitura por falta de espaço no aparelho.";
+    } else if (code || detectedCompany || candidates.length) {
+      ocrMessage =
+        "Leitura no aparelho (modo offline): código da etiqueta lido, mas o texto não foi reconhecido; confira os dados.";
+    } else {
+      const details =
+        label.error instanceof Error ? ` ${label.error.message}` : "";
+      ocrMessage = `Leitura no aparelho (modo offline): não foi possível ler o texto da etiqueta.${details}`;
+    }
+  } else {
+    const detectedFields = [
+      detectedRecipientName ? "destinatário" : "",
+      candidates.length === 1 ? "apartamento" : "",
+      detectedCompany ? "empresa" : "",
+      code ? "rastreio" : "",
+      verification.status === "verified" ? "endereço" : "",
+    ].filter(Boolean);
+    const characters = recognizedText.replace(/\s/g, "").length;
+    ocrMessage = detectedFields.length
+      ? `Leitura no aparelho (modo offline): ${detectedFields.join(", ")}. Confira os dados.`
+      : `Leitura no aparelho (modo offline): a etiqueta foi lida (${characters} caracteres), mas o endereço não foi confirmado. Enquadre a etiqueta inteira, com boa luz, e tire outra foto.`;
+  }
+
+  return {
+    source,
+    file,
+    unitId: candidates.length === 1 ? candidates[0].id : "",
+    unitCandidates: candidates,
+    recipientName: detectedRecipientName,
+    recipientIsResident: false,
+    company: detectedCompany,
+    deliveryPerson: "",
+    trackingCode: code,
+    addressVerification: verification,
+    labelRead: label,
+    ocrMessage,
+  };
+}
+
+/**
+ * Uma foto, uma leitura: Vision primeiro, OCR local como fallback. Não toca no
+ * estado do React para que a mesma função sirva à fila de importação.
+ */
+async function readLabelFromPhoto(
+  image: File,
+  ctx: LabelReadContext,
+): Promise<PackageDraft> {
+  const compressed = await compressPackagePhoto(image);
+  ctx.onProgress?.("Preparando a foto para leitura...");
+
+  let preparedImage: PreparedPackageImage | null = null;
+  try {
+    preparedImage = await preparePackageImage(compressed.file);
+
+    let barcodeValues: string[] = [];
+    try {
+      barcodeValues = await readPackageCodes(preparedImage.preview);
+    } catch {
+      // Código ilegível não impede a leitura do texto.
+    }
+
+    try {
+      const ai = await extractPackageLabelWithAi({
+        client: supabase,
+        condominiumId: ctx.condominium.id,
+        imageBase64: compressed.base64,
+        mimeType: compressed.mimeType,
+        expectedAddress: {
+          cep: ctx.condominium.cep,
+          street: ctx.condominium.street,
+          address_number: ctx.condominium.address_number,
+        },
+        units: ctx.units,
+        blocks: ctx.blocks,
+        residents: ctx.residents,
+      });
+      return draftFromAi(ai, barcodeValues, compressed.file, image);
+    } catch (aiError) {
+      const detail =
+        aiError instanceof Error
+          ? aiError.message.replace(/\s+/g, " ").trim()
+          : "";
+      ctx.onProgress?.(
+        `Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)${
+          detail ? `: ${detail.slice(0, 120)}` : ""
+        }...`,
+      );
+    }
+
+    const label = await readPackageLabel(
+      preparedImage,
+      { expectedCep: ctx.condominium.cep ?? "" },
+      (status) => ctx.onProgress?.(status),
+    );
+    return draftFromLocalOcr(label, ctx, compressed.file, image);
+  } finally {
+    preparedImage?.dispose();
+  }
+}
+
+function buildWhatsappLink(
+  condominiumName: string,
+  whatsapp: string,
+  unitLabel: string,
+  recipient: string,
+) {
+  const message = `Olá! Chegou uma encomenda para ${unitLabel}${
+    recipient ? ` (${recipient})` : ""
+  } no ${condominiumName}. Por favor, retire na portaria.`;
+  return whatsappLink(whatsapp, message);
+}
+
+/** Upload + create_package. Nunca grava no banco antes da foto estar no Storage. */
+async function persistPackage(
+  draft: PackageDraft,
+  ctx: {
+    userId: string;
+    condominiumId: string;
+    condominiumName: string;
+    unit: Unit;
+    company: string;
+    deliveryPerson: string;
+    whatsapp: string;
+    allowDuplicate: boolean;
+  },
+): Promise<{ id: string; whatsappLink: string }> {
+  const trimmedTrackingCode = draft.trackingCode.trim();
+  if (trimmedTrackingCode && !ctx.allowDuplicate) {
+    const { data: duplicateRows } = await supabase.rpc("find_duplicate_package", {
+      p_condominium_id: ctx.condominiumId,
+      p_tracking_code: trimmedTrackingCode,
+    });
+    const duplicate = (
+      Array.isArray(duplicateRows) ? duplicateRows[0] : duplicateRows
+    ) as
+      | {
+          unit_number: string;
+          block_name: string | null;
+          received_at: string;
+        }
+      | null;
+    if (duplicate?.unit_number) {
+      throw new DuplicatePackageError(
+        `Já existe uma encomenda com o rastreio ${trimmedTrackingCode}: ${
+          duplicate.block_name ? `${duplicate.block_name} · ` : ""
+        }${duplicate.unit_number}, recebida em ${formatDate(duplicate.received_at)}. Se for outro volume, registre mesmo assim.`,
+      );
+    }
+  }
+
+  const path = `${ctx.condominiumId}/${ctx.unit.block_id ?? "no-block"}/${ctx.userId}/${crypto.randomUUID()}.${imageExtension(draft.file)}`;
+  const { error: uploadError } = await supabase.storage
+    .from(receiptBucket)
+    .upload(path, draft.file, {
+      contentType: draft.file.type,
+      cacheControl: "3600",
+      upsert: false,
+    });
+  if (uploadError) {
+    throw new Error(`Não foi possível enviar a foto. ${uploadError.message}`);
+  }
+
+  const { data: createdPackageId, error: createError } = await supabase.rpc(
+    "create_package",
+    {
+      p_condominium_id: ctx.condominiumId,
+      p_unit_id: ctx.unit.id,
+      p_receipt_path: path,
+      p_sender: ctx.company.trim(),
+      p_delivery_person: ctx.deliveryPerson.trim(),
+      p_tracking_code: trimmedTrackingCode || null,
+      p_resident_name: draft.recipientName.trim(),
+      p_recipient_is_resident: draft.recipientIsResident,
+    },
+  );
+
+  if (createError) {
+    const { error: cleanupError } = await supabase.storage
+      .from(receiptBucket)
+      .remove([path]);
+    throw new Error(
+      cleanupError
+        ? `Não foi possível registrar (${createError.message}) nem remover a foto enviada (${cleanupError.message}).`
+        : createError.message,
+    );
+  }
+
+  return {
+    id: typeof createdPackageId === "string" ? createdPackageId : "",
+    whatsappLink: ctx.whatsapp
+      ? buildWhatsappLink(
+          ctx.condominiumName,
+          ctx.whatsapp,
+          `o apartamento ${ctx.unit.unit_number}`,
+          draft.recipientName.trim(),
+        )
+      : "",
+  };
+}
+
 export function PorterReception() {
   const { user, signOut } = useAuth();
   const imageInput = useRef<HTMLInputElement>(null);
+  const bulkInput = useRef<HTMLInputElement>(null);
   const signatureCanvas = useRef<HTMLCanvasElement>(null);
   const signatureHasInk = useRef(false);
   const hasInternalHistory = useRef(false);
@@ -212,7 +597,11 @@ export function PorterReception() {
   const [notifyingId, setNotifyingId] = useState("");
   const [lastPackageId, setLastPackageId] = useState("");
   const [duplicateWarning, setDuplicateWarning] = useState("");
-  const [collectionPackageId, setCollectionPackageId] = useState("");
+  const [collectionBaseId, setCollectionBaseId] = useState("");
+  /** null = todos os pacotes do grupo; array = desmarques feitos pelo porteiro. */
+  const [collectionSelectionOverride, setCollectionSelectionOverride] = useState<
+    string[] | null
+  >(null);
   const [collectionName, setCollectionName] = useState("");
   const [porterConfirmed, setPorterConfirmed] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
@@ -225,6 +614,11 @@ export function PorterReception() {
     contacts: UnitResident[];
   } | null>(null);
   const [lastPackageWhatsapp, setLastPackageWhatsapp] = useState("");
+  const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkCompany, setBulkCompany] = useState("");
+  const [bulkDeliveryPerson, setBulkDeliveryPerson] = useState("");
+  const bulkCancelled = useRef(false);
   const unitDetailsRequest = useRef(0);
 
   const selectedUnit = useMemo(
@@ -265,6 +659,34 @@ export function PorterReception() {
     activeView === "pending"
       ? pendingPackages
       : packages;
+  const bulkCounts = useMemo(
+    () => ({
+      done: bulkItems.filter((item) => item.status === "done").length,
+      review: bulkItems.filter((item) => item.status === "review").length,
+      error: bulkItems.filter((item) => item.status === "error").length,
+      pending: bulkItems.filter(
+        (item) => item.status === "queued" || item.status === "processing",
+      ).length,
+    }),
+    [bulkItems],
+  );
+  const batchCandidates = useMemo(() => {
+    if (!collectionBaseId) return [];
+    const base = pendingPackages.find((item) => item.id === collectionBaseId);
+    if (!base) return [];
+    return pendingPackages.filter(
+      (item) =>
+        item.unit_number === base.unit_number &&
+        (item.block_name ?? "") === (base.block_name ?? ""),
+    );
+  }, [collectionBaseId, pendingPackages]);
+  const collectionCandidateIds = useMemo(
+    () => batchCandidates.map((item) => item.id),
+    [batchCandidates],
+  );
+  const selectedCollectionIds =
+    collectionSelectionOverride ?? collectionCandidateIds;
+  const batchBase = batchCandidates.find((item) => item.id === collectionBaseId);
 
   useEffect(() => {
     return () => {
@@ -308,7 +730,8 @@ export function PorterReception() {
       const params = new URLSearchParams(window.location.search);
       const view = getPorterViewFromLocation();
       setActiveView(view);
-      setCollectionPackageId(params.get("collect") ?? "");
+      setCollectionBaseId(params.get("collect") ?? "");
+      setCollectionSelectionOverride(null);
       setCollectionName("");
       setPorterConfirmed(false);
       setHasSignature(false);
@@ -442,7 +865,7 @@ export function PorterReception() {
           .eq("condominium_id", porterData.condominium_id)
           .eq("status", "received")
           .order("received_at", { ascending: false }),
-        supabase.from("unit_residents").select("unit_id, name"),
+        supabase.from("unit_residents").select("unit_id, name, whatsapp"),
       ]);
 
       if (!active) return;
@@ -549,16 +972,23 @@ export function PorterReception() {
   }
 
   function openCollection(packageRecord: PackageRecord) {
+    const candidates = pendingPackages.filter(
+      (item) =>
+        item.unit_number === packageRecord.unit_number &&
+        (item.block_name ?? "") === (packageRecord.block_name ?? ""),
+    );
+    const ids = candidates.map((item) => item.id);
     const url = new URL(window.location.href);
     url.searchParams.set("view", "pending");
     url.searchParams.set("collect", packageRecord.id);
     window.history.pushState(
-      { porterView: "pending", collectionPackageId: packageRecord.id },
+      { porterView: "pending", collectionBaseId: packageRecord.id },
       "",
       url,
     );
     setActiveView("pending");
-    setCollectionPackageId(packageRecord.id);
+    setCollectionBaseId(packageRecord.id);
+    setCollectionSelectionOverride(ids);
     setCollectionName(packageRecord.resident_name ?? "");
   }
 
@@ -638,92 +1068,20 @@ export function PorterReception() {
     unitLabel: string,
     recipient: string,
   ) {
-    const message = `Olá! Chegou uma encomenda para ${unitLabel}${
-      recipient ? ` (${recipient})` : ""
-    } no ${condominium?.name ?? "condomínio"}. Por favor, retire na portaria.`;
-    return whatsappLink(whatsapp, message);
-  }
-
-  function applyAiResult(ai: AiLabelExtraction<Unit>, barcodeValues: string[]) {
-    const detectedRecipient = ai.recipientName.trim();
-    setRecipientName(detectedRecipient);
-    setRecipientNameDetected(Boolean(detectedRecipient));
-    setRecipientIsResident(false);
-
-    const localCode = barcodeValues.map(extractTrackingCode).find(Boolean) ?? "";
-    const code = ai.trackingCode || localCode;
-    const carrier =
-      ai.carrier ||
-      detectDeliveryCompany(`${barcodeValues.join("\n")}\n${code}`);
-
-    setCompany(carrier);
-    setTrackingCode(code);
-    setTrackingCodeDetected(Boolean(code));
-    setUnitCandidates(ai.unitCandidates);
-    if (ai.unitId) setUnitId(ai.unitId);
-
-    setAddressVerification({
-      status: ai.addressStatus,
-      message: ai.addressReason || defaultAddressMessage(ai.addressStatus),
-    });
-
-    const transcript = [
-      `origem: nuvem (${ai.durationMs} ms)`,
-      `destinatario: ${ai.recipientName || "-"}`,
-      `unidade: ${ai.unitNumber || "-"}${
-        ai.blockName ? ` / ${ai.blockName}` : ""
-      }`,
-      `transportadora: ${ai.carrier || "-"}`,
-      `rastreio: ${ai.trackingCode || "-"}`,
-      `cep destino: ${ai.destinationCep || "-"}`,
-      `endereco destino: ${
-        [ai.destinationStreet, ai.destinationNumber].filter(Boolean).join(", ") ||
-        "-"
-      }`,
-      `status: ${ai.addressStatus}`,
-      `motivo: ${ai.addressReason || "-"}`,
-    ].join("\n");
-
-    setLastLabelRead({
-      text: transcript,
-      numericText: ai.destinationCep,
-      barcodeValues,
-      attempts: [
-        {
-          pass: "nuvem",
-          durationMs: ai.durationMs,
-          characters: transcript.replace(/\s/g, "").length,
-        },
-      ],
-      durationMs: ai.durationMs,
-      cropped: false,
-      postalCodes: ai.postalCodes,
-    });
-
-    const detectedFields = [
-      detectedRecipient ? "destinatário" : "",
-      ai.unitCandidates.length === 1 ? "apartamento" : "",
-      carrier ? "empresa" : "",
-      code ? "rastreio" : "",
-      ai.addressStatus === "verified" ? "endereço" : "",
-    ].filter(Boolean);
-
-    setOcrMessage(
-      detectedFields.length
-        ? `Leitura na nuvem concluída: ${detectedFields.join(", ")}. Confira os dados.`
-        : "Leitura na nuvem concluída, mas o endereço não foi confirmado automaticamente. Confira a etiqueta antes de salvar.",
+    return buildWhatsappLink(
+      condominium?.name ?? "condomínio",
+      whatsapp,
+      unitLabel,
+      recipient,
     );
   }
 
-  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
-    const image = event.target.files?.[0] ?? null;
-    event.target.value = "";
+  function resetReceptionFields() {
     setPageError("");
     setSuccessMessage("");
     setOcrMessage("");
     setUnitCandidates([]);
     setUnitId("");
-    setDeliveryPerson(lastDeliveryPerson);
     setCompany("");
     setTrackingCode("");
     setTrackingCodeDetected(false);
@@ -731,12 +1089,54 @@ export function PorterReception() {
     setRecipientNameDetected(false);
     setRecipientIsResident(false);
     setAddressVerification(null);
+    setLastLabelRead(null);
     setMismatchAcknowledged(false);
     setDuplicateWarning("");
     setNotificationMessage("");
     setLastPackageId("");
     setLastPackageWhatsapp("");
     allowDuplicate.current = false;
+  }
+
+  function applyDraftToForm(draft: PackageDraft, preview: string) {
+    setFile(draft.file);
+    setPreviewUrl(preview);
+    setUnitCandidates(draft.unitCandidates);
+    setUnitId(draft.unitId);
+    setDeliveryPerson(draft.deliveryPerson || lastDeliveryPerson);
+    setCompany(draft.company);
+    setTrackingCode(draft.trackingCode);
+    setTrackingCodeDetected(Boolean(draft.trackingCode));
+    setRecipientName(draft.recipientName);
+    setRecipientNameDetected(Boolean(draft.recipientName));
+    setRecipientIsResident(draft.recipientIsResident);
+    setAddressVerification(draft.addressVerification);
+    setLastLabelRead(draft.labelRead);
+    setOcrMessage(draft.ocrMessage);
+    setMismatchAcknowledged(false);
+    setDuplicateWarning("");
+  }
+
+  function rememberDeliveryPerson(value: string) {
+    if (!account || !value) return;
+    setSavedDeliveryPersonRevision((current) => current + 1);
+    try {
+      window.sessionStorage.setItem(
+        deliveryPersonStorageKey(account.condominium_id),
+        value,
+      );
+    } catch {
+      // Sessão sem storage: só não memoriza o entregador.
+    }
+  }
+
+  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const image = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    resetReceptionFields();
+    setFile(null);
+    setPreviewUrl("");
+    setDeliveryPerson(lastDeliveryPerson);
 
     if (!image) return;
     if (!acceptedImageTypes.has(image.type)) {
@@ -751,150 +1151,20 @@ export function PorterReception() {
 
     setIsReading(true);
     setOcrMessage("Preparando a foto para leitura...");
-    setLastLabelRead(null);
-
-    let preparedImage: PreparedPackageImage | null = null;
     try {
-      // A mesma foto comprimida vai para a nuvem e para o Storage: uma
-      // compressão, ~150–250 KB, em vez de 3–8 MB no bucket.
-      const compressed = await compressPackagePhoto(image);
-      setFile(compressed.file);
-      setPreviewUrl(URL.createObjectURL(compressed.file));
-
-      preparedImage = await preparePackageImage(compressed.file);
-
-      let barcodeValues: string[] = [];
-      try {
-        barcodeValues = await readPackageCodes(preparedImage.preview);
-      } catch {
-        // Código ilegível não impede a leitura do texto.
-      }
-
-      const expectedCep = condominium.cep ?? "";
-      const residentNames = authorizedResidents
-        .map((resident) => resident.name?.trim() ?? "")
-        .filter(Boolean);
-
-      // Caminho principal: Vision LLM. Qualquer falha cai no leitor local.
-      try {
-        const ai = await extractPackageLabelWithAi({
-          client: supabase,
-          condominiumId: condominium.id,
-          imageBase64: compressed.base64,
-          mimeType: compressed.mimeType,
-          expectedAddress: {
-            cep: condominium.cep,
-            street: condominium.street,
-            address_number: condominium.address_number,
-          },
-          units,
-          blocks,
-          residents: authorizedResidents,
-        });
-        applyAiResult(ai, barcodeValues);
-        return;
-      } catch (aiError) {
-        const detail =
-          aiError instanceof Error ? aiError.message.replace(/\s+/g, " ").trim() : "";
-        setOcrMessage(
-          `Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)${
-            detail ? `: ${detail.slice(0, 120)}` : ""
-          }...`,
-        );
-      }
-
-      const label = await readPackageLabel(
-        preparedImage,
-        { expectedCep },
-        (status) => setOcrMessage(status),
-      );
-      setLastLabelRead(label);
-
-      const barcodeText = label.barcodeValues.join("\n");
-      const recognizedText = label.text;
-      const destinationText = findDestinationSection(
-        recognizedText,
-        residentNames,
-        expectedCep,
-      );
-
-      const detectedRecipientName = extractRecipientName(
-        recognizedText,
-        residentNames,
-        expectedCep,
-      );
-      setRecipientName(detectedRecipientName);
-      setRecipientNameDetected(Boolean(detectedRecipientName));
-      setRecipientIsResident(false);
-
-      const verification = verifyPackageDestinationAddress({
-        recognizedText,
-        numericText: label.numericText,
-        barcodeText,
-        address: condominium,
-        residentNames,
+      const draft = await readLabelFromPhoto(image, {
+        condominium,
+        units,
+        blocks,
+        residents: authorizedResidents,
+        onProgress: (message) => setOcrMessage(message),
       });
-      setAddressVerification(verification);
-
-      const residentCandidates = findResidentUnitCandidates(
-        `${barcodeText}\n${recognizedText}`,
-        units,
-        authorizedResidents,
-      );
-      // Fora do bloco do destinatário, todo número é pedido, contrato ou CEP.
-      const numberCandidates = findUnitCandidates(
-        `${barcodeText}\n${destinationText || recognizedText}`,
-        units,
-      );
-      const candidates = residentCandidates.length
-        ? residentCandidates
-        : numberCandidates;
-
-      const code =
-        label.barcodeValues.map(extractTrackingCode).find(Boolean) ||
-        extractTrackingCode(recognizedText);
-      const detectedCompany = detectDeliveryCompany(
-        `${barcodeText}\n${recognizedText}\n${code}`,
-      );
-
-      setCompany(detectedCompany);
-      setUnitCandidates(candidates);
-      if (candidates.length === 1) setUnitId(candidates[0].id);
-      setTrackingCode(code);
-      setTrackingCodeDetected(Boolean(code));
-
-      if (label.error) {
-        if (isStorageCapacityError(label.error)) {
-          setPageError(
-            "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.",
-          );
-          setOcrMessage("Não foi possível concluir a leitura por falta de espaço.");
-          return;
-        }
-        const details =
-          label.error instanceof Error ? ` ${label.error.message}` : "";
-        setOcrMessage(
-          code || detectedCompany || candidates.length
-            ? "Leitura no aparelho (modo offline): código da etiqueta lido, mas o texto não foi reconhecido; confira os dados."
-            : `Leitura no aparelho (modo offline): não foi possível ler o texto da etiqueta.${details}`,
+      applyDraftToForm(draft, URL.createObjectURL(draft.file));
+      if (isStorageCapacityError(draft.labelRead?.error)) {
+        setPageError(
+          "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.",
         );
-        return;
       }
-
-      const detectedFields = [
-        detectedRecipientName ? "destinatário" : "",
-        candidates.length === 1 ? "apartamento" : "",
-        detectedCompany ? "empresa" : "",
-        code ? "rastreio" : "",
-        verification.status === "verified" ? "endereço" : "",
-      ].filter(Boolean);
-      const characters = recognizedText.replace(/\s/g, "").length;
-
-      setOcrMessage(
-        detectedFields.length
-          ? `Leitura no aparelho (modo offline): ${detectedFields.join(", ")}. Confira os dados.`
-          : `Leitura no aparelho (modo offline): a etiqueta foi lida (${characters} caracteres), mas o endereço não foi confirmado. Enquadre a etiqueta inteira, com boa luz, e tire outra foto.`,
-      );
     } catch (error) {
       if (isStorageCapacityError(error)) {
         setPageError(
@@ -911,14 +1181,13 @@ export function PorterReception() {
           : "Não foi possível processar a foto. Tente novamente.",
       );
     } finally {
-      preparedImage?.dispose();
       setIsReading(false);
     }
   }
 
   async function handleReceive(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user || !account || !file || !selectedUnit) return;
+    if (!user || !account || !condominium || !file || !selectedUnit) return;
     if (!recipientName.trim()) {
       setPageError("Confira ou informe o nome do destinatário da etiqueta.");
       return;
@@ -934,133 +1203,298 @@ export function PorterReception() {
     setSuccessMessage("");
     setNotificationMessage("");
     setLastPackageId("");
+    setDuplicateWarning("");
 
-    const trimmedTrackingCode = trackingCode.trim();
-    if (trimmedTrackingCode && !allowDuplicate.current) {
-      const { data: duplicateRows } = await supabase.rpc(
-        "find_duplicate_package",
+    const draft: PackageDraft = {
+      source: file,
+      file,
+      unitId: selectedUnit.id,
+      unitCandidates,
+      recipientName,
+      recipientIsResident,
+      company,
+      deliveryPerson,
+      trackingCode,
+      addressVerification:
+        addressVerification ??
         {
-          p_condominium_id: account.condominium_id,
-          p_tracking_code: trimmedTrackingCode,
+          status: "unknown" as const,
+          message: defaultAddressMessage("unknown"),
         },
-      );
-      const duplicate = (
-        Array.isArray(duplicateRows) ? duplicateRows[0] : duplicateRows
-      ) as
-        | {
-            unit_number: string;
-            block_name: string | null;
-            received_at: string;
-          }
-        | null;
-      if (duplicate?.unit_number) {
-        setDuplicateWarning(
-          `Já existe uma encomenda com o rastreio ${trimmedTrackingCode}: ${
-            duplicate.block_name ? `${duplicate.block_name} · ` : ""
-          }${duplicate.unit_number}, recebida em ${formatDate(duplicate.received_at)}. Se for outro volume, registre mesmo assim.`,
-        );
-        return;
-      }
-    }
+      labelRead: lastLabelRead,
+      ocrMessage,
+    };
 
     setIsSaving(true);
-    const path = `${account.condominium_id}/${selectedUnit.block_id ?? "no-block"}/${user.id}/${crypto.randomUUID()}.${imageExtension(file)}`;
-
     try {
-      const { error: uploadError } = await supabase.storage
-        .from(receiptBucket)
-        .upload(path, file, {
-          contentType: file.type,
-          cacheControl: "3600",
-          upsert: false,
-        });
-      if (uploadError) {
-        setPageError(`Não foi possível enviar a foto. ${uploadError.message}`);
-        return;
-      }
-
-      const { data: createdPackageId, error: createError } = await supabase.rpc(
-        "create_package",
-        {
-          p_condominium_id: account.condominium_id,
-          p_unit_id: selectedUnit.id,
-          p_receipt_path: path,
-          p_sender: company.trim(),
-          p_delivery_person: deliveryPerson.trim(),
-          p_tracking_code: trackingCode.trim() || null,
-          p_resident_name: recipientName.trim(),
-          p_recipient_is_resident: recipientIsResident,
-        },
-      );
-
-      if (createError) {
-        const { error: cleanupError } = await supabase.storage
-          .from(receiptBucket)
-          .remove([path]);
-        setPageError(
-          cleanupError
-            ? `Não foi possível registrar (${createError.message}) nem remover a foto enviada (${cleanupError.message}).`
-            : createError.message,
-        );
-        return;
-      }
-
       const savedWhatsapp =
         selectedUnitContacts.find((resident) => resident.whatsapp)?.whatsapp ??
         "";
-      setLastPackageWhatsapp(
-        savedWhatsapp
-          ? packageWhatsappLink(
-              savedWhatsapp,
-              `o apartamento ${selectedUnit.unit_number}`,
-              recipientName.trim(),
-            )
-          : "",
+      const result = await persistPackage(draft, {
+        userId: user.id,
+        condominiumId: account.condominium_id,
+        condominiumName: condominium.name,
+        unit: selectedUnit,
+        company,
+        deliveryPerson,
+        whatsapp: savedWhatsapp,
+        allowDuplicate: allowDuplicate.current,
+      });
+
+      rememberDeliveryPerson(deliveryPerson.trim());
+      setSuccessMessage(
+        `Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`,
       );
+      setLastPackageId(result.id);
+      setLastPackageWhatsapp(result.whatsappLink);
 
       const trimmedDeliveryPerson = deliveryPerson.trim();
-      if (trimmedDeliveryPerson) {
-        setSavedDeliveryPersonRevision((current) => current + 1);
-        try {
-          window.sessionStorage.setItem(
-            deliveryPersonStorageKey(account.condominium_id),
-            trimmedDeliveryPerson,
-          );
-        } catch {
-          // Sessão sem storage: só não memoriza o entregador.
-        }
-      }
-
-      setSuccessMessage(`Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`);
-      allowDuplicate.current = false;
-      setMismatchAcknowledged(false);
-      setDuplicateWarning("");
-      setLastPackageId(
-        typeof createdPackageId === "string" ? createdPackageId : "",
-      );
+      resetReceptionFields();
       setFile(null);
       setPreviewUrl("");
-      setUnitId("");
-      setUnitCandidates([]);
-      setCompany("");
       setDeliveryPerson(trimmedDeliveryPerson || lastDeliveryPerson);
-      setTrackingCode("");
-      setTrackingCodeDetected(false);
-      setRecipientName("");
-      setRecipientNameDetected(false);
-      setRecipientIsResident(false);
-      setAddressVerification(null);
-      setOcrMessage("");
       await reloadPackages();
     } catch (error) {
-      setPageError(
-        error instanceof Error
-          ? `Não foi possível registrar a encomenda. ${error.message}`
-          : "Não foi possível registrar a encomenda.",
-      );
+      if (error instanceof DuplicatePackageError) {
+        setDuplicateWarning(error.message);
+      } else {
+        setPageError(
+          error instanceof Error
+            ? `Não foi possível registrar a encomenda. ${error.message}`
+            : "Não foi possível registrar a encomenda.",
+        );
+      }
     } finally {
       setIsSaving(false);
     }
+  }
+
+  function updateBulkItem(id: string, patch: Partial<BulkItem>) {
+    setBulkItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    );
+  }
+
+  function handleBulkFilesChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (!files.length) return;
+
+    const accepted = files.filter(
+      (file) =>
+        acceptedImageTypes.has(file.type) && file.size <= maximumImageSize,
+    );
+    if (!accepted.length) {
+      setPageError("Nenhuma foto foi aceita. Use JPG, PNG ou WEBP de até 10 MB.");
+      return;
+    }
+    setPageError("");
+    setSuccessMessage("");
+    if (accepted.length !== files.length) {
+      setPageError(
+        `${files.length - accepted.length} foto(s) ignorada(s): use JPG, PNG ou WEBP de até 10 MB.`,
+      );
+    }
+
+    const newItems: BulkItem[] = accepted.map((file) => ({
+      id: crypto.randomUUID(),
+      name: file.name,
+      source: file,
+      status: "queued",
+      draft: null,
+      message: "Na fila",
+      acknowledged: false,
+      allowDuplicate: false,
+      createdPackageId: "",
+      whatsappLink: "",
+    }));
+    setBulkItems((current) => [...current, ...newItems]);
+    setBulkDeliveryPerson((current) => current || lastDeliveryPerson);
+  }
+
+  function clearBulkQueue() {
+    if (bulkRunning) return;
+    setBulkItems([]);
+    setBulkCompany("");
+    setBulkDeliveryPerson(lastDeliveryPerson);
+    setSuccessMessage("");
+  }
+
+  function updateBulkDraft(id: string, patch: Partial<PackageDraft>) {
+    setBulkItems((current) =>
+      current.map((item) =>
+        item.id === id && item.draft
+          ? { ...item, draft: { ...item.draft, ...patch } }
+          : item,
+      ),
+    );
+  }
+
+  async function saveBulkItem(item: BulkItem, draft: PackageDraft) {
+    if (!user || !account || !condominium) return;
+    const unit = units.find((candidate) => candidate.id === draft.unitId);
+    if (!unit) {
+      updateBulkItem(item.id, {
+        status: "review",
+        draft,
+        message: "Selecione o apartamento antes de salvar.",
+      });
+      return;
+    }
+
+    updateBulkItem(item.id, {
+      status: "processing",
+      message: "Salvando no caderno...",
+    });
+    try {
+      const whatsapp =
+        authorizedResidents.find(
+          (resident) => resident.unit_id === unit.id && resident.whatsapp,
+        )?.whatsapp ?? "";
+      const result = await persistPackage(draft, {
+        userId: user.id,
+        condominiumId: account.condominium_id,
+        condominiumName: condominium.name,
+        unit,
+        company: draft.company,
+        deliveryPerson: draft.deliveryPerson,
+        whatsapp,
+        allowDuplicate: item.allowDuplicate,
+      });
+      updateBulkItem(item.id, {
+        status: "done",
+        draft,
+        message: "Encomenda registrada.",
+        createdPackageId: result.id,
+        whatsappLink: result.whatsappLink,
+      });
+      rememberDeliveryPerson(draft.deliveryPerson.trim());
+    } catch (error) {
+      if (error instanceof DuplicatePackageError) {
+        updateBulkItem(item.id, {
+          status: "review",
+          draft,
+          allowDuplicate: false,
+          message: error.message,
+        });
+        return;
+      }
+      updateBulkItem(item.id, {
+        status: "error",
+        draft,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Não foi possível salvar esta foto.",
+      });
+    }
+  }
+
+  async function processBulkItem(item: BulkItem) {
+    if (!account || !condominium) return;
+    updateBulkItem(item.id, {
+      status: "processing",
+      message: "Lendo a etiqueta...",
+    });
+
+    let draft: PackageDraft;
+    try {
+      draft = await readLabelFromPhoto(item.source, {
+        condominium,
+        units,
+        blocks,
+        residents: authorizedResidents,
+        onProgress: (message) => updateBulkItem(item.id, { message }),
+      });
+    } catch (error) {
+      updateBulkItem(item.id, {
+        status: "error",
+        draft: null,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Não foi possível ler esta foto.",
+      });
+      return;
+    }
+
+    if (isStorageCapacityError(draft.labelRead?.error)) {
+      updateBulkItem(item.id, {
+        status: "error",
+        draft,
+        message: "Sem espaço no aparelho para processar a etiqueta.",
+      });
+      return;
+    }
+
+    // Empresa e entregador podem ser definidos uma vez para a fila inteira.
+    // A leitura preenche o que faltar; o que ainda faltar vai para revisão.
+    const effective: PackageDraft = {
+      ...draft,
+      company: bulkCompany.trim() || draft.company.trim(),
+      deliveryPerson: bulkDeliveryPerson.trim() || lastDeliveryPerson.trim(),
+    };
+    const reasons: string[] = [];
+    if (!effective.unitId) reasons.push("apartamento");
+    if (!effective.company) reasons.push("empresa");
+    if (!effective.deliveryPerson) reasons.push("entregador");
+    if (effective.addressVerification.status === "mismatch") {
+      reasons.push("endereço divergente");
+    }
+    if (reasons.length) {
+      updateBulkItem(item.id, {
+        status: "review",
+        draft: effective,
+        message: `Confira antes de salvar: ${reasons.join(", ")}.`,
+      });
+      return;
+    }
+
+    await saveBulkItem(item, effective);
+  }
+
+  async function startBulkImport() {
+    if (!account || !condominium || bulkRunning) return;
+    const queue = bulkItems.filter((item) => item.status === "queued");
+    if (!queue.length) return;
+
+    setPageError("");
+    setSuccessMessage("");
+    bulkCancelled.current = false;
+    setBulkRunning(true);
+    try {
+      for (const item of queue) {
+        if (bulkCancelled.current) break;
+        await processBulkItem(item);
+      }
+    } finally {
+      setBulkRunning(false);
+    }
+    if (bulkCancelled.current) {
+      setSuccessMessage(
+        "Importação interrompida. As fotos já processadas foram salvas.",
+      );
+    } else {
+      setSuccessMessage(
+        `${queue.length} foto(s) processada(s). Confira o resultado na fila.`,
+      );
+    }
+    await reloadPackages();
+  }
+
+  async function retryBulkItem(item: BulkItem) {
+    if (bulkRunning) return;
+    bulkCancelled.current = false;
+    setBulkRunning(true);
+    try {
+      // Falha de gravação já tem a etiqueta lida; só falha de leitura precisa
+      // abrir a foto original de novo.
+      if (item.draft) await saveBulkItem(item, item.draft);
+      else await processBulkItem(item);
+    } finally {
+      setBulkRunning(false);
+    }
+    await reloadPackages();
   }
 
   async function handleNotify(packageId: string) {
@@ -1102,7 +1536,14 @@ export function PorterReception() {
 
   async function handleCollection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!collectionPackageId || !collectionName.trim()) return;
+    const packageIds = selectedCollectionIds.filter((id) =>
+      collectionCandidateIds.includes(id),
+    );
+    if (!collectionBaseId || !packageIds.length || !collectionName.trim()) return;
+    if (packageIds.length > 50) {
+      setPageError("Selecione no máximo 50 encomendas por retirada.");
+      return;
+    }
     const canvas = signatureCanvas.current;
     if (!canvas || !signatureHasInk.current || !porterConfirmed) {
       setPageError("Peça a assinatura do morador e confirme que você presenciou a retirada.");
@@ -1112,19 +1553,25 @@ export function PorterReception() {
     setPageError("");
     setSavingCollection(true);
     try {
-      const { error } = await supabase.rpc("confirm_package_collection", {
-        p_package_id: collectionPackageId,
-        p_collected_by_name: collectionName.trim(),
-        p_resident_signature: signatureDataUrl(canvas),
-        p_porter_confirmed: porterConfirmed,
-      });
+      const { data, error } = await supabase.rpc(
+        "confirm_package_collection_batch",
+        {
+          p_package_ids: packageIds,
+          p_collected_by_name: collectionName.trim(),
+          p_resident_signature: signatureDataUrl(canvas),
+          p_porter_confirmed: porterConfirmed,
+        },
+      );
       if (error) {
         setPageError(error.message);
         return;
       }
+      // O banco grava a mesma assinatura e o mesmo horário em todos os IDs.
+      const count =
+        typeof data === "number" ? data : packageIds.length;
       cancelCollection();
       await reloadPackages();
-      setSuccessMessage("Retirada registrada.");
+      setSuccessMessage(`Retirada registrada em ${count} encomenda(s).`);
     } catch (error) {
       setPageError(
         error instanceof Error
@@ -1137,7 +1584,7 @@ export function PorterReception() {
   }
 
   useEffect(() => {
-    if (!collectionPackageId) return;
+    if (!collectionBaseId) return;
     const canvas = signatureCanvas.current;
     if (!canvas) return;
     const context = canvas.getContext("2d");
@@ -1153,7 +1600,7 @@ export function PorterReception() {
     signatureHasInk.current = false;
     setHasSignature(false);
     setPorterConfirmed(false);
-  }, [collectionPackageId]);
+  }, [collectionBaseId]);
 
   function drawSignature(event: PointerEvent<HTMLCanvasElement>) {
     const canvas = signatureCanvas.current;
@@ -1191,14 +1638,24 @@ export function PorterReception() {
 
   function cancelCollection() {
     const url = new URL(window.location.href);
-    if (url.searchParams.get("collect") === collectionPackageId) {
+    if (url.searchParams.get("collect") === collectionBaseId) {
       window.history.back();
     }
-    setCollectionPackageId("");
+    setCollectionBaseId("");
+    setCollectionSelectionOverride(null);
     setCollectionName("");
     setPorterConfirmed(false);
     setHasSignature(false);
     signatureHasInk.current = false;
+  }
+
+  function toggleCollectionId(id: string) {
+    setCollectionSelectionOverride((current) => {
+      const selected = current ?? collectionCandidateIds;
+      return selected.includes(id)
+        ? selected.filter((value) => value !== id)
+        : [...selected, id];
+    });
   }
 
   async function copyDiagnostics() {
@@ -1625,6 +2082,232 @@ export function PorterReception() {
 
             {!file && (
               <>
+                <section className="porter-card porter-bulk-card">
+                  <div className="porter-section-heading">
+                    <div>
+                      <h2>Importar várias fotos</h2>
+                      <p>
+                        Selecione várias etiquetas da galeria. O sistema processa
+                        uma por vez e mostra o resultado de cada foto.
+                      </p>
+                    </div>
+                    <ClipboardList size={24} aria-hidden="true" />
+                  </div>
+                  <input
+                    ref={bulkInput}
+                    className="porter-hidden-input"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(event) => void handleBulkFilesChange(event)}
+                  />
+                  <div className="porter-bulk-config">
+                    <label>
+                      Empresa padrão (opcional)
+                      <input
+                        autoComplete="off"
+                        maxLength={120}
+                        placeholder="Ex.: Shopee"
+                        value={bulkCompany}
+                        disabled={bulkRunning}
+                        onChange={(event) => setBulkCompany(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Entregador padrão
+                      <input
+                        autoComplete="off"
+                        maxLength={120}
+                        placeholder="Nome de quem entregou"
+                        value={bulkDeliveryPerson}
+                        disabled={bulkRunning}
+                        onChange={(event) =>
+                          setBulkDeliveryPerson(event.target.value)
+                        }
+                      />
+                    </label>
+                  </div>
+                  <button
+                    className="porter-secondary-button"
+                    type="button"
+                    disabled={bulkRunning || !units.length}
+                    onClick={() => bulkInput.current?.click()}
+                  >
+                    Escolher fotos da galeria
+                  </button>
+
+                  {bulkItems.length > 0 && (
+                    <>
+                      <div className="porter-bulk-progress" role="status">
+                        <span>{bulkCounts.done} registrada(s)</span>
+                        <span>{bulkCounts.review} para revisar</span>
+                        <span>{bulkCounts.error} com erro</span>
+                        <span>{bulkCounts.pending} na fila</span>
+                      </div>
+                      <ul className="porter-bulk-list">
+                        {bulkItems.map((item) => (
+                          <li
+                            key={item.id}
+                            className={`porter-bulk-item porter-bulk-item-${item.status}`}
+                          >
+                            <div className="porter-bulk-item-head">
+                              <strong>{item.name}</strong>
+                              <span>{bulkStatusLabel[item.status]}</span>
+                            </div>
+                            <p>{item.message}</p>
+                            {item.status === "done" && item.whatsappLink && (
+                              <a
+                                className="porter-whatsapp-link"
+                                href={item.whatsappLink}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Avisar morador no WhatsApp
+                              </a>
+                            )}
+                            {item.status === "error" && (
+                              <button
+                                className="porter-secondary-button"
+                                type="button"
+                                disabled={bulkRunning}
+                                onClick={() => void retryBulkItem(item)}
+                              >
+                                Tentar novamente
+                              </button>
+                            )}
+                            {item.status === "review" && item.draft && (
+                              <div className="porter-bulk-review">
+                                <label>
+                                  Apartamento
+                                  <select
+                                    value={item.draft.unitId}
+                                    disabled={bulkRunning}
+                                    onChange={(event) =>
+                                      updateBulkDraft(item.id, {
+                                        unitId: event.target.value,
+                                      })
+                                    }
+                                  >
+                                    <option value="">Selecione</option>
+                                    {units.map((unit) => (
+                                      <option key={unit.id} value={unit.id}>
+                                        {blocks.find(
+                                          (block) => block.id === unit.block_id,
+                                        )?.name
+                                          ? `${blocks.find((block) => block.id === unit.block_id)?.name} · `
+                                          : ""}
+                                        {unit.unit_number}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label>
+                                  Empresa
+                                  <input
+                                    autoComplete="off"
+                                    maxLength={120}
+                                    value={item.draft.company}
+                                    disabled={bulkRunning}
+                                    onChange={(event) =>
+                                      updateBulkDraft(item.id, {
+                                        company: event.target.value,
+                                      })
+                                    }
+                                  />
+                                </label>
+                                {item.draft.addressVerification.status ===
+                                  "mismatch" && (
+                                  <label className="porter-mismatch-check">
+                                    <input
+                                      type="checkbox"
+                                      checked={item.acknowledged}
+                                      onChange={(event) =>
+                                        updateBulkItem(item.id, {
+                                          acknowledged: event.target.checked,
+                                        })
+                                      }
+                                    />
+                                    Confiro que conferi a etiqueta fisicamente e
+                                    a entrega pertence a este condomínio.
+                                  </label>
+                                )}
+                                {item.message.startsWith(
+                                  "Já existe uma encomenda",
+                                ) && (
+                                  <label className="porter-mismatch-check">
+                                    <input
+                                      type="checkbox"
+                                      checked={item.allowDuplicate}
+                                      onChange={(event) =>
+                                        updateBulkItem(item.id, {
+                                          allowDuplicate: event.target.checked,
+                                        })
+                                      }
+                                    />
+                                    Confirmo que é outro volume com o mesmo
+                                    rastreio.
+                                  </label>
+                                )}
+                                <button
+                                  className="porter-primary-button"
+                                  type="button"
+                                  disabled={
+                                    !item.draft.unitId ||
+                                    !item.draft.company.trim() ||
+                                    (item.draft.addressVerification.status ===
+                                      "mismatch" &&
+                                      !item.acknowledged) ||
+                                    (item.message.startsWith(
+                                      "Já existe uma encomenda",
+                                    ) &&
+                                      !item.allowDuplicate)
+                                  }
+                                  onClick={() => {
+                                    if (item.draft) void saveBulkItem(item, item.draft);
+                                  }}
+                                >
+                                  Salvar este pacote
+                                </button>
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="porter-bulk-actions">
+                        <button
+                          className="porter-primary-button"
+                          type="button"
+                          disabled={bulkRunning || bulkCounts.pending === 0}
+                          onClick={() => void startBulkImport()}
+                        >
+                          {bulkRunning
+                            ? "Processando fila..."
+                            : `Processar ${bulkCounts.pending} foto(s)`}
+                        </button>
+                        {bulkRunning ? (
+                          <button
+                            className="porter-secondary-button"
+                            type="button"
+                            onClick={() => {
+                              bulkCancelled.current = true;
+                            }}
+                          >
+                            Cancelar
+                          </button>
+                        ) : (
+                          <button
+                            className="porter-secondary-button"
+                            type="button"
+                            onClick={clearBulkQueue}
+                          >
+                            Limpar fila
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </section>
+
                 <section className="porter-card porter-unit-search">
                   <div className="porter-section-heading">
                     <div>
@@ -1866,6 +2549,135 @@ export function PorterReception() {
                 Início
               </button>
             </div>
+
+            {activeView === "pending" && collectionBaseId && batchBase && (
+              <form
+                className="porter-collection-form"
+                onSubmit={handleCollection}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="collection-signature-title"
+              >
+                <h3 id="collection-signature-title">Retirada em lote</h3>
+                <p>
+                  {batchBase.block_name
+                    ? `${batchBase.block_name} · `
+                    : ""}
+                  Apartamento {batchBase.unit_number}. Todos os pacotes
+                  pendentes deste apartamento vêm marcados. Desmarque os que não
+                  foram retirados.
+                </p>
+                <ul className="porter-batch-list">
+                  {batchCandidates.map((candidate) => (
+                    <li key={candidate.id}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={selectedCollectionIds.includes(candidate.id)}
+                          disabled={savingCollection}
+                          onChange={() => toggleCollectionId(candidate.id)}
+                        />
+                        <span>
+                          <strong>{candidate.sender || "Encomenda"}</strong>
+                          <small>
+                            {candidate.tracking_code || "Sem rastreio"} ·{" "}
+                            {formatDate(candidate.received_at)}
+                          </small>
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                <p className="porter-batch-count">
+                  {selectedCollectionIds.length} de {batchCandidates.length}{" "}
+                  selecionado(s). A mesma assinatura e o mesmo horário serão
+                  gravados em todos os selecionados.
+                </p>
+                <label>
+                  Nome de quem está retirando
+                  <input
+                    required
+                    maxLength={120}
+                    autoComplete="off"
+                    value={collectionName}
+                    onChange={(event) => setCollectionName(event.target.value)}
+                  />
+                </label>
+                <div className="porter-signature-pad">
+                  <canvas
+                    ref={signatureCanvas}
+                    width={500}
+                    height={260}
+                    aria-label="Espaço para o morador assinar"
+                    onPointerDown={drawSignature}
+                    onPointerMove={drawSignature}
+                    onPointerUp={(event) => {
+                      if (
+                        event.currentTarget.hasPointerCapture(event.pointerId)
+                      ) {
+                        event.currentTarget.releasePointerCapture(
+                          event.pointerId,
+                        );
+                      }
+                    }}
+                    onPointerCancel={(event) => {
+                      if (
+                        event.currentTarget.hasPointerCapture(event.pointerId)
+                      ) {
+                        event.currentTarget.releasePointerCapture(
+                          event.pointerId,
+                        );
+                      }
+                    }}
+                  />
+                  {!hasSignature && (
+                    <span>Assine aqui usando o dedo</span>
+                  )}
+                </div>
+                <button
+                  className="porter-secondary-button"
+                  type="button"
+                  onClick={clearSignature}
+                  disabled={!hasSignature || savingCollection}
+                >
+                  Apagar e assinar novamente
+                </button>
+                <label className="porter-confirmation-check">
+                  <input
+                    type="checkbox"
+                    checked={porterConfirmed}
+                    onChange={(event) =>
+                      setPorterConfirmed(event.target.checked)
+                    }
+                  />
+                  Confirmo que presenciei a retirada e a assinatura do morador.
+                </label>
+                <div className="porter-collection-actions">
+                  <button
+                    className="porter-primary-button"
+                    disabled={
+                      savingCollection ||
+                      !selectedCollectionIds.length ||
+                      !hasSignature ||
+                      !porterConfirmed
+                    }
+                  >
+                    {savingCollection
+                      ? "Salvando..."
+                      : `Confirmar retirada de ${selectedCollectionIds.length} encomenda(s)`}
+                  </button>
+                  <button
+                    className="porter-secondary-button"
+                    type="button"
+                    onClick={cancelCollection}
+                    disabled={savingCollection}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            )}
+
             {visiblePackages.length === 0 ? (
               <p className="porter-empty">
                 {activeView === "pending"
@@ -1930,120 +2742,18 @@ export function PorterReception() {
                         </button>
                       </div>
                     )}
-                    {item.status === "received" &&
-                      (collectionPackageId === item.id ? (
-                        <form
-                          className="porter-collection-form"
-                          onSubmit={handleCollection}
-                          role="dialog"
-                          aria-modal="true"
-                          aria-labelledby="collection-signature-title"
-                        >
-                          <h3 id="collection-signature-title">
-                            Assinatura do morador
-                          </h3>
-                          <p>
-                            A assinatura e o nome ficarão vinculados
-                            permanentemente a este registro no caderno do
-                            condomínio.
-                          </p>
-                          <label>
-                            Nome de quem está retirando
-                            <input
-                              required
-                              maxLength={120}
-                              autoComplete="off"
-                              value={collectionName}
-                              onChange={(event) =>
-                                setCollectionName(event.target.value)
-                              }
-                            />
-                          </label>
-                          <div className="porter-signature-pad">
-                            <canvas
-                              ref={signatureCanvas}
-                              width={500}
-                              height={260}
-                              aria-label="Espaço para o morador assinar"
-                              onPointerDown={drawSignature}
-                              onPointerMove={drawSignature}
-                              onPointerUp={(event) => {
-                                if (
-                                  event.currentTarget.hasPointerCapture(
-                                    event.pointerId,
-                                  )
-                                ) {
-                                  event.currentTarget.releasePointerCapture(
-                                    event.pointerId,
-                                  );
-                                }
-                              }}
-                              onPointerCancel={(event) => {
-                                if (
-                                  event.currentTarget.hasPointerCapture(
-                                    event.pointerId,
-                                  )
-                                ) {
-                                  event.currentTarget.releasePointerCapture(
-                                    event.pointerId,
-                                  );
-                                }
-                              }}
-                            />
-                            {!hasSignature && (
-                              <span>Assine aqui usando o dedo</span>
-                            )}
-                          </div>
-                          <button
-                            className="porter-secondary-button"
-                            type="button"
-                            onClick={clearSignature}
-                            disabled={!hasSignature || savingCollection}
-                          >
-                            Apagar e assinar novamente
-                          </button>
-                          <label className="porter-confirmation-check">
-                            <input
-                              type="checkbox"
-                              checked={porterConfirmed}
-                              onChange={(event) =>
-                                setPorterConfirmed(event.target.checked)
-                              }
-                            />
-                            Confirmo que presenciei a retirada e a assinatura do
-                            morador.
-                          </label>
-                          <div className="porter-collection-actions">
-                            <button
-                              className="porter-primary-button"
-                              disabled={
-                                savingCollection ||
-                                !hasSignature ||
-                                !porterConfirmed
-                              }
-                            >
-                              {savingCollection
-                                ? "Salvando..."
-                                : "Confirmar assinatura e retirada"}
-                            </button>
-                            <button
-                              className="porter-secondary-button"
-                              type="button"
-                              onClick={cancelCollection}
-                              disabled={savingCollection}
-                            >
-                              Cancelar
-                            </button>
-                          </div>
-                        </form>
-                      ) : (
-                        <button
-                          className="porter-collection-button"
-                          onClick={() => openCollection(item)}
-                        >
-                          Registrar retirada
-                        </button>
-                      ))}
+                    {item.status === "received" && (
+                      <button
+                        className="porter-collection-button"
+                        type="button"
+                        onClick={() => openCollection(item)}
+                      >
+                        {collectionBaseId &&
+                        selectedCollectionIds.includes(item.id)
+                          ? "Selecionado para retirada"
+                          : "Registrar retirada"}
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
