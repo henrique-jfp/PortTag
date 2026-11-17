@@ -67,7 +67,10 @@ usa o botão **Tirar foto** para abrir a câmera traseira do celular. A foto é
 comprimida no aparelho e a etiqueta é lida primeiro pelo Gemini Vision; se a
 nuvem falhar ou não estiver configurada, o QR Code e o texto são processados
 localmente como fallback para sugerir destinatário, rastreio, empresa e
-unidade. O recebimento é liberado quando o endereço do destinatário confere com
+unidade. A IA somente extrai campos: a decisão `verified` / `mismatch` /
+`unknown` é recalculada no servidor comparando CEP, logradouro e número com o
+cadastro do condomínio — por isso o CEP cadastrado precisa estar correto. O
+recebimento é liberado quando o endereço do destinatário confere com
 CEP, logradouro e número cadastrados, ou quando a leitura é inconclusiva
 (`unknown`) e o porteiro faz a conferência humana. Endereço divergente
 (`mismatch`) exige aceite explícito antes de salvar. O porteiro confere o

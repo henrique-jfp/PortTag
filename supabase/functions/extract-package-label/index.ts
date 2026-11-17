@@ -1,4 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { buildAddressReason, decideAddressStatus } from "./address.ts";
 
 type ExtractLabelRequest = {
   condominiumId?: string;
@@ -10,8 +11,6 @@ type ExtractLabelRequest = {
     address_number?: string;
   };
 };
-
-type AddressStatus = "verified" | "mismatch" | "unknown";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -42,10 +41,6 @@ function digitsOnly(value: unknown) {
   return typeof value === "string" ? value.replace(/\D/g, "").slice(0, 8) : "";
 }
 
-function addressStatus(value: unknown): AddressStatus {
-  return value === "verified" || value === "mismatch" ? value : "unknown";
-}
-
 const acceptedMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 // ~2 MB em binário viram ~2,7 MB em base64. Acima disso a foto não é de uma
 // etiqueta: é engano do cliente ou tentativa de abuso.
@@ -53,10 +48,9 @@ const maximumBase64Length = 2_800_000;
 const requestTimeoutMs = 15_000;
 
 /**
- * Schema devolvido pelo Gemini. `address_status` é o único campo com decisão:
- * o modelo compara o destino lido com o endereço do condomínio enviado pelo
- * app. O servidor não reavalia: a extração é da IA, a regra de endereço
- * continua determinística no cliente local quando não há nuvem.
+ * Schema devolvido pelo Gemini. A IA apenas extrai campos: `address_status`
+ * e `address_reason` são recalculados no servidor por `address.ts`, porque
+ * decisão de endereço não pode depender do modelo.
  */
 const responseSchema = {
   type: "OBJECT",
@@ -105,7 +99,7 @@ function buildPrompt(expectedAddress: {
     "- verified: o CEP do destino confere, ou o logradouro e o número conferem com o condomínio;",
     "- mismatch: você tem certeza de que o CEP ou o logradouro+número do destino pertencem a OUTRO endereço;",
     "- unknown: qualquer parte do destino está ilegível, ausente ou ambígua.",
-    "address_reason: uma frase curta em português explicando a decisão.",
+    "address_status e address_reason são recalculados no servidor: preencha com unknown se não souber, mas sempre extraia os campos de destino.",
     "Não invente dados. Campo ilegível fica string vazia (exceto address_status, que fica unknown).",
   ].join("\n");
 }
@@ -281,6 +275,10 @@ Deno.serve(async (request: Request) => {
     );
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
+    console.error(
+      "extract-package-label: falha ao chamar Gemini",
+      timedOut ? "timeout" : error instanceof Error ? error.message : error,
+    );
     return respond(
       {
         error: timedOut
@@ -294,6 +292,11 @@ Deno.serve(async (request: Request) => {
 
   if (!geminiResponse.ok) {
     const detail = await geminiResponse.text().catch(() => "");
+    console.error(
+      "extract-package-label: Gemini respondeu",
+      geminiResponse.status,
+      detail.slice(0, 500),
+    );
     // 429/403/400 do Gemini são problemas de configuração ou cota: o porteiro
     // não deve ficar preso, então o cliente cai para o OCR local.
     return respond(
@@ -302,14 +305,18 @@ Deno.serve(async (request: Request) => {
         fallback: true,
         detail: detail.slice(0, 300),
       },
-      502,
+      geminiResponse.status === 429 ? 429 : 502,
     );
   }
 
   let payload: GeminiResponse;
   try {
     payload = (await geminiResponse.json()) as GeminiResponse;
-  } catch {
+  } catch (error) {
+    console.error(
+      "extract-package-label: JSON inválido do Gemini",
+      error instanceof Error ? error.message : error,
+    );
     return respond(
       { error: "Resposta inválida da leitura na nuvem.", fallback: true },
       502,
@@ -344,6 +351,13 @@ Deno.serve(async (request: Request) => {
     );
   }
 
+  const destination = {
+    cep: digitsOnly(parsed.destination_cep),
+    street: cleanText(parsed.destination_street, 160),
+    number: cleanText(parsed.destination_number, 20),
+  };
+  const status = decideAddressStatus(destination, expectedAddress);
+
   return respond({
     label: {
       recipient_name: cleanText(parsed.recipient_name, 120),
@@ -351,11 +365,11 @@ Deno.serve(async (request: Request) => {
       block_name: cleanText(parsed.block_name, 40),
       carrier: cleanText(parsed.carrier, 60),
       tracking_code: cleanText(parsed.tracking_code, 80).replace(/\s+/g, ""),
-      destination_cep: digitsOnly(parsed.destination_cep),
-      destination_street: cleanText(parsed.destination_street, 160),
-      destination_number: cleanText(parsed.destination_number, 20),
-      address_status: addressStatus(parsed.address_status),
-      address_reason: cleanText(parsed.address_reason, 240),
+      destination_cep: destination.cep,
+      destination_street: destination.street,
+      destination_number: destination.number,
+      address_status: status,
+      address_reason: buildAddressReason(status, destination, expectedAddress),
     },
   });
 });

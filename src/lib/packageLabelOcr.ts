@@ -835,10 +835,16 @@ export async function extractPackageLabelWithAi<
   try {
     const { data, error } = await Promise.race([invocation, timeout]);
     if (error) {
-      throw new AiLabelExtractionError(
-        "A leitura na nuvem não respondeu.",
-        "unavailable",
-      );
+      const invokeError = error as {
+        message?: string;
+        context?: { body?: { detail?: string; error?: string } };
+      };
+      const detail =
+        invokeError.context?.body?.detail ??
+        invokeError.context?.body?.error ??
+        invokeError.message ??
+        "A leitura na nuvem não respondeu.";
+      throw new AiLabelExtractionError(detail, "unavailable");
     }
 
     const payload = data as EdgeExtractResponse | null;

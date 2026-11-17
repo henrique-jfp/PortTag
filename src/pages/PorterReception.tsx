@@ -793,9 +793,13 @@ export function PorterReception() {
         });
         applyAiResult(ai, barcodeValues);
         return;
-      } catch {
+      } catch (aiError) {
+        const detail =
+          aiError instanceof Error ? aiError.message.replace(/\s+/g, " ").trim() : "";
         setOcrMessage(
-          "Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)...",
+          `Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)${
+            detail ? `: ${detail.slice(0, 120)}` : ""
+          }...`,
         );
       }
 
