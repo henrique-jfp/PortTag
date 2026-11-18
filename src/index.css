@@ -1159,6 +1159,7 @@ input {
 
 .porter-success {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 9px;
   margin: 0;
@@ -1768,6 +1769,8 @@ input {
 
 .porter-signature-pad {
   position: relative;
+  width: min(100%, 420px);
+  margin-inline: auto;
   overflow: hidden;
   border: 1px solid #cbd4e2;
   border-radius: 12px;
@@ -1780,7 +1783,7 @@ input {
   display: block;
   width: 100%;
   height: auto;
-  aspect-ratio: 500 / 260;
+  aspect-ratio: 1 / 1;
   touch-action: none;
 }
 
@@ -2111,6 +2114,12 @@ input {
     transform: none;
     border: 0;
     border-radius: 0;
+  }
+
+  /* No celular em pé, a área de assinatura é quadrada e ocupa 70% da tela. */
+  .porter-signature-pad {
+    width: min(70vw, 70dvh);
+    max-width: none;
   }
 
   .porter-card {

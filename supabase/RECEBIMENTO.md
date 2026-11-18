@@ -30,7 +30,9 @@
    mesma assinatura, nome, horário e porteiro confirmante em todos os selecionados.
    Execute por último `20261117210000_optional_sender.sql`: ela redefine
    `create_package` para aceitar empresa em branco, mantendo unidade e nome do
-   entregador obrigatórios no banco.
+   entregador obrigatórios no banco. Depois aplique
+   `20261117220000_notification_message.sql` para que o aviso ao morador cite
+   o porteiro que recebeu, o rastreio e a retirada já disponível na portaria.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -121,17 +123,22 @@ pacote selecionado, junto com o mesmo nome de quem retirou, o mesmo horário e a
 conta do porteiro que confirmou. A operação é atômica (máximo de 50 pacotes):
 se qualquer pacote não estiver mais na portaria ou pertencer a outro
 apartamento, nada é alterado e o porteiro deve atualizar a lista. O aviso ao
-morador continua manual, pelo link de WhatsApp gerado após o recebimento.
+morador continua manual: o link de WhatsApp pode ser gerado no ato do
+recebimento ou depois, enquanto a encomenda estiver na portaria. Quando o
+apartamento não tem mais nada pendente, o botão de avisar não aparece.
 
 ### Aviso ao morador
 
-O canal inicial é manual e não tem custo por mensagem. Depois de registrar a
-encomenda, o porteiro toca em **Avisar morador**: o servidor grava o aviso em
+O canal inicial é manual e não tem custo por mensagem. No recebimento, o
+porteiro confirma que recebeu a encomenda do entregador e pode marcar
+**Quero avisar o morador no WhatsApp**: o servidor grava o aviso em
 `package_notifications`, atualiza `packages.last_notified_at` e o app abre o
 WhatsApp da portaria com o texto pronto, usando o WhatsApp cadastrado em
-`unit_residents.whatsapp`. Se o apartamento não tiver contato cadastrado, o
-aviso é recusado com uma mensagem pedindo o número. O caderno do síndico mostra
-a data do último aviso e a foto da etiqueta.
+`unit_residents.whatsapp`. O texto cita o porteiro que recebeu (gravado em
+`packages.received_by`), o código de rastreio e que a encomenda já pode ser
+retirada. Se o apartamento não tiver contato cadastrado, o aviso é recusado com
+uma mensagem pedindo o número. O caderno do síndico mostra a data do último
+aviso e a foto da etiqueta.
 
 Esse canal não envia sozinho nem confirma entrega: ele padroniza o texto e
 deixa rastro de quem foi avisado. Canais automáticos (WhatsApp Cloud API, SMS,

@@ -39,6 +39,7 @@ import {
   type PackageAddressVerification,
 } from "../lib/packageOcr";
 import {
+  buildPackageNotificationMessage,
   whatsappLink,
   type PackageNotification,
 } from "../lib/packageNotifications";
@@ -453,10 +454,16 @@ function buildWhatsappLink(
   whatsapp: string,
   unitLabel: string,
   recipient: string,
+  porterName: string,
+  trackingCode: string,
 ) {
-  const message = `Olá! Chegou uma encomenda para ${unitLabel}${
-    recipient ? ` (${recipient})` : ""
-  } no ${condominiumName}. Por favor, retire na portaria.`;
+  const message = buildPackageNotificationMessage({
+    condominiumName,
+    unitLabel,
+    recipientName: recipient,
+    porterName,
+    trackingCode,
+  });
   return whatsappLink(whatsapp, message);
 }
 
@@ -470,6 +477,7 @@ async function persistPackage(
     unit: Unit;
     company: string;
     deliveryPerson: string;
+    porterName: string;
     whatsapp: string;
     allowDuplicate: boolean;
   },
@@ -543,6 +551,8 @@ async function persistPackage(
           ctx.whatsapp,
           `o apartamento ${ctx.unit.unit_number}`,
           draft.recipientName.trim(),
+          ctx.porterName,
+          trimmedTrackingCode,
         )
       : "",
   };
@@ -599,7 +609,9 @@ export function PorterReception() {
   const [successMessage, setSuccessMessage] = useState("");
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notifyingId, setNotifyingId] = useState("");
-  const [lastPackageId, setLastPackageId] = useState("");
+  const [notificationLink, setNotificationLink] = useState("");
+  /** Confirmação do recebimento do entregador feita no ato do cadastro. */
+  const [notifyOnReceive, setNotifyOnReceive] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState("");
   const [collectionBaseId, setCollectionBaseId] = useState("");
   /** null = todos os pacotes do grupo; array = desmarques feitos pelo porteiro. */
@@ -617,7 +629,6 @@ export function PorterReception() {
     unitId: string;
     contacts: UnitResident[];
   } | null>(null);
-  const [lastPackageWhatsapp, setLastPackageWhatsapp] = useState("");
   const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkCompany, setBulkCompany] = useState("");
@@ -649,6 +660,10 @@ export function PorterReception() {
   const selectedSearchUnit = useMemo(
     () => units.find((unit) => unit.id === searchedUnitId) ?? null,
     [searchedUnitId, units],
+  );
+  const pendingUnitPackages = useMemo(
+    () => unitPackages.filter((item) => item.status === "received"),
+    [unitPackages],
   );
   const unitSearchResults = useMemo(() => {
     const query = unitSearchQuery.trim().toLocaleLowerCase("pt-BR");
@@ -1071,12 +1086,15 @@ export function PorterReception() {
     whatsapp: string,
     unitLabel: string,
     recipient: string,
+    trackingCode: string,
   ) {
     return buildWhatsappLink(
       condominium?.name ?? "condomínio",
       whatsapp,
       unitLabel,
       recipient,
+      account?.name ?? "",
+      trackingCode,
     );
   }
 
@@ -1097,8 +1115,8 @@ export function PorterReception() {
     setMismatchAcknowledged(false);
     setDuplicateWarning("");
     setNotificationMessage("");
-    setLastPackageId("");
-    setLastPackageWhatsapp("");
+    setNotificationLink("");
+    setNotifyOnReceive(false);
     allowDuplicate.current = false;
   }
 
@@ -1206,7 +1224,7 @@ export function PorterReception() {
     setPageError("");
     setSuccessMessage("");
     setNotificationMessage("");
-    setLastPackageId("");
+    setNotificationLink("");
     setDuplicateWarning("");
 
     const draft: PackageDraft = {
@@ -1230,6 +1248,9 @@ export function PorterReception() {
     };
 
     setIsSaving(true);
+    // O checkbox pode ser desligado pelo reset abaixo; guardamos a decisão
+    // feita no momento em que o porteiro confirmou o recebimento do entregador.
+    const shouldNotify = notifyOnReceive;
     try {
       const savedWhatsapp =
         selectedUnitContacts.find((resident) => resident.whatsapp)?.whatsapp ??
@@ -1241,6 +1262,7 @@ export function PorterReception() {
         unit: selectedUnit,
         company,
         deliveryPerson,
+        porterName: account.name,
         whatsapp: savedWhatsapp,
         allowDuplicate: allowDuplicate.current,
       });
@@ -1249,8 +1271,6 @@ export function PorterReception() {
       setSuccessMessage(
         `Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`,
       );
-      setLastPackageId(result.id);
-      setLastPackageWhatsapp(result.whatsappLink);
 
       const trimmedDeliveryPerson = deliveryPerson.trim();
       resetReceptionFields();
@@ -1258,6 +1278,7 @@ export function PorterReception() {
       setPreviewUrl("");
       setDeliveryPerson(trimmedDeliveryPerson || lastDeliveryPerson);
       await reloadPackages();
+      if (shouldNotify && result.id) await notifyPackage(result.id);
     } catch (error) {
       if (error instanceof DuplicatePackageError) {
         setDuplicateWarning(error.message);
@@ -1390,6 +1411,7 @@ export function PorterReception() {
         unit,
         company: draft.company,
         deliveryPerson: draft.deliveryPerson,
+        porterName: account.name,
         whatsapp,
         allowDuplicate: item.allowDuplicate,
       });
@@ -1524,9 +1546,10 @@ export function PorterReception() {
     await reloadPackages();
   }
 
-  async function handleNotify(packageId: string) {
+  async function notifyPackage(packageId: string) {
     setPageError("");
     setNotificationMessage("");
+    setNotificationLink("");
     setNotifyingId(packageId);
     try {
       const { data, error } = await supabase.rpc(
@@ -1546,10 +1569,10 @@ export function PorterReception() {
       }
 
       await reloadPackages();
+      const link = whatsappLink(notification.recipient, notification.message);
       setNotificationMessage("Aviso registrado. Abrindo o WhatsApp...");
-      window.location.assign(
-        whatsappLink(notification.recipient, notification.message),
-      );
+      setNotificationLink(link);
+      window.open(link, "_blank", "noopener,noreferrer");
     } catch (error) {
       setPageError(
         error instanceof Error
@@ -1727,8 +1750,8 @@ export function PorterReception() {
     setOcrMessage("");
     setDuplicateWarning("");
     setNotificationMessage("");
-    setLastPackageId("");
-    setLastPackageWhatsapp("");
+    setNotificationLink("");
+    setNotifyOnReceive(false);
     setLastLabelRead(null);
     allowDuplicate.current = false;
   }
@@ -1780,43 +1803,17 @@ export function PorterReception() {
           <p className="porter-success" role="status">
             <Check size={18} />
             {notificationMessage}
-          </p>
-        )}
-
-        {lastPackageId && (
-          <section className="porter-notify-prompt">
-            <p>Avise o morador que a encomenda chegou.</p>
-            <button
-              className="porter-primary-button"
-              type="button"
-              disabled={notifyingId === lastPackageId}
-              onClick={() => void handleNotify(lastPackageId)}
-            >
-              {notifyingId === lastPackageId
-                ? "Abrindo o WhatsApp..."
-                : "Avisar morador no WhatsApp"}
-            </button>
-            {lastPackageWhatsapp && (
+            {notificationLink && (
               <a
                 className="porter-whatsapp-link"
-                href={lastPackageWhatsapp}
+                href={notificationLink}
                 target="_blank"
                 rel="noreferrer"
               >
-                Abrir conversa direta no WhatsApp (sem custo)
+                Abrir conversa no WhatsApp (sem custo)
               </a>
             )}
-            <button
-              className="porter-secondary-button"
-              type="button"
-              onClick={() => {
-                setLastPackageId("");
-                setLastPackageWhatsapp("");
-              }}
-            >
-              Agora não
-            </button>
-          </section>
+          </p>
         )}
 
         {activeView === "home" && (
@@ -1986,6 +1983,7 @@ export function PorterReception() {
                                     resident.whatsapp as string,
                                     `o apartamento ${selectedUnit.unit_number}`,
                                     resident.name ?? "",
+                                    trackingCode,
                                   )}
                                   target="_blank"
                                   rel="noreferrer"
@@ -2048,6 +2046,17 @@ export function PorterReception() {
                               Usar último entregador ({lastDeliveryPerson})
                             </button>
                           )}
+                      </label>
+
+                      <label className="porter-resident-confirmation">
+                        <input
+                          type="checkbox"
+                          checked={notifyOnReceive}
+                          onChange={(event) =>
+                            setNotifyOnReceive(event.target.checked)
+                          }
+                        />
+                        Confirmo que recebi a encomenda do entregador e quero avisar o morador no WhatsApp.
                       </label>
 
                       <label>
@@ -2469,20 +2478,27 @@ export function PorterReception() {
                                     {resident.whatsapp && (
                                       <span>WhatsApp: {resident.whatsapp}</span>
                                     )}
-                                    {resident.whatsapp && selectedSearchUnit && (
-                                      <a
-                                        className="porter-whatsapp-link"
-                                        href={packageWhatsappLink(
-                                          resident.whatsapp,
-                                          `o apartamento ${selectedSearchUnit.unit_number}`,
-                                          resident.name ?? "",
-                                        )}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                      >
-                                        Avisar no WhatsApp
-                                      </a>
-                                    )}
+                                    {resident.whatsapp &&
+                                      selectedSearchUnit &&
+                                      (pendingUnitPackages.length > 0 ? (
+                                        <a
+                                          className="porter-whatsapp-link"
+                                          href={packageWhatsappLink(
+                                            resident.whatsapp,
+                                            `o apartamento ${selectedSearchUnit.unit_number}`,
+                                            resident.name ?? "",
+                                            pendingUnitPackages[0]?.tracking_code ?? "",
+                                          )}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                        >
+                                          Avisar no WhatsApp
+                                        </a>
+                                      ) : (
+                                        <small className="porter-notify-status">
+                                          Sem encomendas para avisar
+                                        </small>
+                                      ))}
                                   </li>
                                 ))}
                               </ul>
@@ -2655,7 +2671,7 @@ export function PorterReception() {
                   <canvas
                     ref={signatureCanvas}
                     width={500}
-                    height={260}
+                    height={500}
                     aria-label="Espaço para o morador assinar"
                     onPointerDown={drawSignature}
                     onPointerMove={drawSignature}
@@ -2780,7 +2796,7 @@ export function PorterReception() {
                           className="porter-secondary-button"
                           type="button"
                           disabled={notifyingId === item.id}
-                          onClick={() => void handleNotify(item.id)}
+                          onClick={() => void notifyPackage(item.id)}
                         >
                           {notifyingId === item.id
                             ? "Abrindo o WhatsApp..."
