@@ -1,0 +1,27 @@
+{
+  "id": "/porter.html",
+  "name": "PortTag",
+  "short_name": "PortTag",
+  "description": "Recebimento de encomendas com leitura de etiqueta.",
+  "lang": "pt-BR",
+  "start_url": "/porter.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f5f9",
+  "theme_color": "#863bff",
+  "icons": [
+    {
+      "src": "/icon-porttag-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-porttag-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

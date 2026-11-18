@@ -33,6 +33,15 @@
    entregador obrigatórios no banco. Depois aplique
    `20261117220000_notification_message.sql` para que o aviso ao morador cite
    o porteiro que recebeu, o rastreio e a retirada já disponível na portaria.
+   Execute por último
+   `20261118160000_damage_photo_only.sql`: a foto da etiqueta deixa de ser
+   armazenada, `create_package` passa a aceitar `p_receipt_path` nulo e exige uma
+   foto separada somente quando `p_is_damaged` for verdadeiro. Por último,
+   execute `20261118180000_package_drawer_pagination.sql`: cria o índice
+   `(condominium_id, unit_id, received_at desc)` e as RPCs paginadas
+   `package_daily_counts`, `search_package_drawers` e `search_package_records`.
+   Elas usam `security invoker`, então as policies RLS de `packages` continuam
+   decidindo o que síndico e porteiro podem ler; não reduza esse isolamento.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -42,30 +51,49 @@
    como serviço systemd `encomenda-web.service`; o site principal do domínio
    não é substituído.
 3. Associe o projeto ao Supabase CLI e publique as funções de gestão de
-   porteiros e de leitura de etiqueta:
+   porteiros, de gestão de síndicos e de leitura de etiqueta:
 
    ```powershell
    supabase link --project-ref SEU_PROJECT_REF
    supabase functions deploy manage-porter
-   supabase secrets set GEMINI_API_KEY=SUA_CHAVE_AQUI
+   supabase functions deploy manage-manager
+   $groq = (Get-Content ".\caminho\fora\do\repo\groq-key.txt" -Raw).Trim() -replace '^GROQ_API_KEY=', ''
+   supabase secrets set GROQ_API_KEY="$groq"
+   # O JSON da service account deve ir pela Management API: passá-lo como
+   # argumento do CLI corrompe o valor e a função responde 503.
+   $token = "SEU_ACCESS_TOKEN"
+   $sa = (Get-Content ".\caminho\fora\do\repo\vision-sa.json" -Raw).Trim()
+   $body = '[{"name":"VISION_SERVICE_ACCOUNT_JSON","value":' +
+     (ConvertTo-Json $sa -Compress) + '}]'
+   Invoke-RestMethod -Method Post `
+     -Uri 'https://api.supabase.com/v1/projects/SEU_PROJECT_REF/secrets' `
+     -Headers @{ Authorization = "Bearer $token" } `
+     -ContentType 'application/json' -Body $body
    supabase functions deploy extract-package-label
    ```
 
-   A função `manage-porter` verifica a sessão e o perfil Super Admin no
-   servidor. A função `extract-package-label` também exige JWT válido e confirma
-   no banco se a conta ativa pertence ao condomínio informado. Ela usa a chave
-   do Gemini somente no ambiente da Edge Function. Se a chave não estiver
-   configurada, a função responde `503` com `fallback: true` e o app do porteiro
-   continua com o OCR local. A extração usa `gemini-3.6-flash` com raciocínio
-   baixo, transportadora em enum fechado e decisão de endereço calculada no
-   servidor. A chave `service_role` não deve ser adicionada ao frontend.
+   As funções `manage-porter` e `manage-manager` verificam a sessão e o perfil
+   Super Admin no servidor. A função `extract-package-label` também exige JWT válido e confirma
+   no banco se a conta ativa pertence ao condomínio informado. O pipeline padrão
+   lê o texto com Google Cloud Vision, aplica regras determinísticas e só chama
+   o Groq nas exceções (nome/unidade/endereço vazios ou divergentes), com cada
+   valor conferido como substring do OCR. Rastreio e transportadora vêm sempre
+   das regras; a decisão de endereço é calculada no servidor. Sem credencial da
+   Vision a função responde `503` com `fallback: true` e o app do porteiro
+   continua com o OCR local. Para comparar com o caminho antigo, use
+   `supabase secrets set OCR_ENGINE=gemini GEMINI_API_KEY=...` e depois remova a
+   flag. A chave `service_role` não deve ser adicionada ao frontend.
 
 ## Criar os acessos
 
-- **Síndico:** crie ou convide a conta de e-mail em Supabase Authentication >
-  Users. No app Super Admin, abra **Porteiros** e vincule esse e-mail ao
-  condomínio como Síndico. O Síndico entra em `manager.html` com e-mail e
-  senha.
+- **Síndico:** no app Super Admin, abra a seção **Criar síndico**, selecione o
+  condomínio, informe nome e e-mail pessoal e clique em **Criar síndico e gerar
+  senha**. A senha temporária de 8 caracteres aparece uma única vez; anote e
+  entregue ao síndico. Ele entra em `manager.html` com esse e-mail e senha. Se a
+  conta de e-mail já existir no Supabase Authentication, use **Vincular síndico
+  existente** — nesse caso a senha é a da conta existente. Na lista de síndicos,
+  **Nova senha** gera outra senha temporária, **Reativar e gerar senha** devolve
+  o acesso e **Remover acesso** desativa o vínculo com o condomínio.
 - **Porteiro:** no mesmo painel, selecione o condomínio, informe nome e
   usuário, marque um ou mais blocos de trabalho e escolha o prazo de acesso:
   sem expiração, 7 dias a partir do cadastro ou uma data/hora personalizada.
@@ -77,8 +105,8 @@
 
 O Porteiro entra em `porter.html` com usuário e senha. A tela é mobile-first e
 usa o botão **Tirar foto** para abrir a câmera traseira do celular. A foto é
-comprimida no aparelho e a etiqueta é lida primeiro pelo Gemini Vision; se a
-nuvem falhar ou não estiver configurada, o QR Code e o texto são processados
+comprimida no aparelho e a etiqueta é lida primeiro pelo Google Cloud Vision;
+se a nuvem falhar ou não estiver configurada, o QR Code e o texto são processados
 localmente como fallback para sugerir destinatário, rastreio, empresa e
 unidade. A IA somente extrai campos: a decisão `verified` / `mismatch` /
 `unknown` é recalculada no servidor comparando CEP, logradouro e número com o
@@ -93,8 +121,12 @@ manualmente ou deixado em branco.
 
 O caderno em `manager.html` mostra o calendário do ano vigente e permite
 pesquisar por período, dia, apartamento, empresa, porteiro, código de rastreio
-e situação. Ele exibe quem recebeu a encomenda, data/hora, morador e quem
-confirmou a retirada. Na retirada, o morador assina na tela do celular e o
+e situação. O resultado aparece como **gavetas de apartamento**, paginadas no
+servidor (12 por página). Ao abrir uma gaveta, os recebimentos daquele
+apartamento vêm do mais recente ao mais antigo, com 12 registros por página e
+ordenação por dia, rastreio ou entregador/loja. O detalhe de cada recebimento
+mostra quem recebeu, data/hora, morador, estado na chegada e quem confirmou a
+retirada; a assinatura é carregada só quando você pede para vê-la. Na retirada, o morador assina na tela do celular e o
 porteiro confirma que presenciou o ato. A assinatura é mantida
 permanentemente no registro, junto com o nome de quem retirou, a data/hora e a
 conta do porteiro que confirmou; não é necessário criar conta para o morador.
@@ -139,16 +171,18 @@ WhatsApp da portaria com o texto pronto, usando o WhatsApp cadastrado em
 `packages.received_by`), o código de rastreio e que a encomenda já pode ser
 retirada. Se o apartamento não tiver contato cadastrado, o aviso é recusado com
 uma mensagem pedindo o número. O caderno do síndico mostra a data do último
-aviso e a foto da etiqueta.
+aviso e, quando houver, a foto da avaria.
 
 Esse canal não envia sozinho nem confirma entrega: ele padroniza o texto e
 deixa rastro de quem foi avisado. Canais automáticos (WhatsApp Cloud API, SMS,
 e-mail, push) usam a mesma tabela e entram depois, sem alterar o fluxo do
 porteiro.
 
-As fotos ficam em bucket privado e expiram após 20 dias. A expiração só remove
-o arquivo; os dados do caderno permanecem. A foto é aberta no caderno por URL
-assinada de curta duração e deixa de aparecer depois da limpeza.
+A foto da etiqueta é usada apenas na leitura e não é salva. Quando o porteiro
+marca **Pacote chegou avariado**, ele tira uma foto do volume inteiro; essa é a
+única imagem guardada, em bucket privado, e expira após 20 dias. A limpeza só
+remove o arquivo; os dados do caderno permanecem. A foto é aberta no caderno por
+URL assinada de curta duração e deixa de aparecer depois da limpeza.
 
 ## Publicar a limpeza automática das fotos
 

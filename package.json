@@ -11,6 +11,7 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "measure:labels": "node scripts/measure-label-accuracy.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

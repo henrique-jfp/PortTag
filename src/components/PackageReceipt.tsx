@@ -4,16 +4,22 @@ import { supabase } from "../lib/supabase";
 type PackageReceiptProps = {
   path: string | null;
   deletedAt: string | null;
+  isDamaged?: boolean;
 };
 
 const receiptBucket = "package-receipts";
 const signedUrlLifetimeSeconds = 120;
 
 /**
- * Mostra a foto da etiqueta sob demanda. O bucket é privado, então a URL é
- * assinada e vale por poucos minutos.
+ * Mostra a foto da avaria sob demanda. O bucket é privado, então a URL é
+ * assinada e vale por poucos minutos. A foto da etiqueta não é armazenada.
  */
-export function PackageReceipt({ path, deletedAt }: PackageReceiptProps) {
+export function PackageReceipt({
+  path,
+  deletedAt,
+  isDamaged = false,
+}: PackageReceiptProps) {
+  const label = isDamaged ? "Foto da avaria" : "Foto do recebimento";
   const [signedUrl, setSignedUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -44,7 +50,7 @@ export function PackageReceipt({ path, deletedAt }: PackageReceiptProps) {
   if (deletedAt) {
     return (
       <div className="ledger-receipt">
-        <span>Comprovante da etiqueta</span>
+        <span>{label}</span>
         <p className="field-hint">
           A foto foi removida após o prazo de retenção de 20 dias.
         </p>
@@ -54,10 +60,10 @@ export function PackageReceipt({ path, deletedAt }: PackageReceiptProps) {
 
   return (
     <div className="ledger-receipt">
-      <span>Comprovante da etiqueta</span>
+      <span>{label}</span>
       {signedUrl ? (
         <a href={signedUrl} target="_blank" rel="noreferrer">
-          <img src={signedUrl} alt="Foto da etiqueta da encomenda" />
+          <img src={signedUrl} alt={label} />
         </a>
       ) : (
         <button
@@ -66,7 +72,7 @@ export function PackageReceipt({ path, deletedAt }: PackageReceiptProps) {
           onClick={() => void handleOpen()}
           disabled={loading}
         >
-          {loading ? "Abrindo..." : "Ver foto da etiqueta"}
+          {loading ? "Abrindo..." : `Ver ${label.toLowerCase()}`}
         </button>
       )}
       {errorMessage && (

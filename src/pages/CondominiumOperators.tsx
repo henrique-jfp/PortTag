@@ -37,7 +37,8 @@ type Manager = {
 
 type Credentials = {
   name: string;
-  username: string;
+  username?: string;
+  email?: string;
   password: string;
 };
 
@@ -102,6 +103,8 @@ export function CondominiumOperators({
   const [accessDuration, setAccessDuration] = useState<AccessDuration>("never");
   const [customAccessExpiry, setCustomAccessExpiry] = useState("");
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
+  const [newManagerName, setNewManagerName] = useState("");
+  const [newManagerEmail, setNewManagerEmail] = useState("");
   const [managerEmail, setManagerEmail] = useState("");
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [listVersion, setListVersion] = useState(0);
@@ -484,6 +487,106 @@ export function CondominiumOperators({
     setReactivateCustomExpiry("");
   }
 
+  async function handleCreateManager(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedCondominiumId) return;
+
+    setPageError("");
+    setSuccessMessage("");
+    setCredentials(null);
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-manager", {
+        body: {
+          action: "create",
+          condominiumId: selectedCondominiumId,
+          name: newManagerName.trim(),
+          email: newManagerEmail.trim(),
+        },
+      });
+
+      if (error) {
+        setPageError(await getFunctionErrorMessage(error));
+        return;
+      }
+      if (
+        typeof data?.credentials?.email !== "string" ||
+        typeof data?.credentials?.password !== "string"
+      ) {
+        setPageError("A conta pode ter sido criada, mas as credenciais não foram retornadas. Atualize a lista antes de tentar novamente.");
+        setListVersion((version) => version + 1);
+        return;
+      }
+
+      setCredentials({
+        name: data.credentials.name,
+        email: data.credentials.email,
+        password: data.credentials.password,
+      });
+      setNewManagerName("");
+      setNewManagerEmail("");
+      setSuccessMessage("Síndico cadastrado. A senha temporária é exibida somente agora.");
+      setListVersion((version) => version + 1);
+    } catch (error) {
+      setPageError(
+        error instanceof Error
+          ? `Não foi possível cadastrar o síndico. ${error.message}`
+          : "Não foi possível cadastrar o síndico.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleManagerAction(
+    manager: Manager,
+    action: "reset-password" | "activate",
+  ) {
+    const confirmation =
+      action === "activate"
+        ? `Reativar o acesso de ${manager.email} e gerar uma nova senha?`
+        : `Gerar uma nova senha temporária para ${manager.email}?`;
+    if (!window.confirm(confirmation)) return;
+
+    setPageError("");
+    setSuccessMessage("");
+    setCredentials(null);
+    setWorkingId(manager.id);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-manager", {
+        body: { action, membershipId: manager.id },
+      });
+      if (error) {
+        setPageError(await getFunctionErrorMessage(error));
+        return;
+      }
+      if (typeof data?.credentials?.password !== "string") {
+        setPageError("A senha não foi retornada. Tente novamente.");
+        return;
+      }
+
+      setCredentials({
+        name: data.credentials.name ?? manager.email,
+        email: data.credentials.email ?? manager.email,
+        password: data.credentials.password,
+      });
+      setSuccessMessage(
+        action === "activate"
+          ? "Acesso reativado. Guarde a nova senha temporária."
+          : "Senha redefinida. Guarde a nova senha agora.",
+      );
+      setListVersion((version) => version + 1);
+    } catch (error) {
+      setPageError(
+        error instanceof Error
+          ? `Não foi possível atualizar o síndico. ${error.message}`
+          : "Não foi possível atualizar o síndico.",
+      );
+    } finally {
+      setWorkingId("");
+    }
+  }
+
   async function handleAssignManager(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCondominiumId) return;
@@ -542,9 +645,11 @@ export function CondominiumOperators({
     if (!credentials) return;
     try {
       await navigator.clipboard.writeText(
-        `Usuário: ${credentials.username}\nSenha: ${credentials.password}`,
+        `${credentials.email ? "E-mail" : "Usuário"}: ${
+          credentials.email ?? credentials.username
+        }\nSenha: ${credentials.password}`,
       );
-      setSuccessMessage("Usuário e senha copiados.");
+      setSuccessMessage("Credenciais copiadas.");
     } catch (error) {
       setPageError(
         error instanceof Error
@@ -563,6 +668,38 @@ export function CondominiumOperators({
       {pageError && (
         <p className="feedback-message feedback-error" role="alert">
           {pageError}
+        </p>
+      )}
+      {credentials && (
+        <div className="credentials-card" role="status">
+          <strong>Credenciais temporárias de {credentials.name}</strong>
+          <p>
+            {credentials.email ? "E-mail" : "Usuário"}:{" "}
+            <code>{credentials.email ?? credentials.username}</code>
+            <br />
+            Senha: <code>{credentials.password}</code>
+          </p>
+          <div className="form-actions">
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void copyCredentials()}
+            >
+              Copiar credenciais
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setCredentials(null)}
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
+      {successMessage && (
+        <p className="feedback-message feedback-success" role="status">
+          {successMessage}
         </p>
       )}
       {!isSuperAdmin ? (
@@ -690,38 +827,6 @@ export function CondominiumOperators({
               </div>
             </form>
 
-            {credentials && (
-              <div className="credentials-card" role="status">
-                <strong>Credenciais temporárias de {credentials.name}</strong>
-                <p>
-                  Usuário: <code>{credentials.username}</code>
-                  <br />
-                  Senha: <code>{credentials.password}</code>
-                </p>
-                <div className="form-actions">
-                  <button
-                    className="primary-button"
-                    type="button"
-                    onClick={() => void copyCredentials()}
-                  >
-                    Copiar credenciais
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => setCredentials(null)}
-                  >
-                    Fechar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {successMessage && (
-              <p className="feedback-message feedback-success" role="status">
-                {successMessage}
-              </p>
-            )}
           </section>
 
           <section className="admin-section">
@@ -897,10 +1002,55 @@ export function CondominiumOperators({
 
           <section className="admin-section">
             <div className="section-heading">
-              <h2>Vincular síndico</h2>
+              <h2>Criar síndico</h2>
+              <p>
+                Condomínio: {selectedCondominium?.name ?? "Carregando..."}. O
+                sistema cria a conta com o e-mail do síndico e uma senha
+                temporária de 8 caracteres. Guarde a senha: ela aparece somente
+                na criação ou quando você gerar uma nova.
+              </p>
+            </div>
+            <form className="condominium-form" onSubmit={handleCreateManager}>
+              <label className="form-field">
+                Nome do síndico
+                <input
+                  required
+                  maxLength={120}
+                  autoComplete="name"
+                  value={newManagerName}
+                  onChange={(event) => setNewManagerName(event.target.value)}
+                />
+              </label>
+              <label className="form-field">
+                E-mail pessoal
+                <input
+                  required
+                  type="email"
+                  autoComplete="email"
+                  value={newManagerEmail}
+                  onChange={(event) => setNewManagerEmail(event.target.value)}
+                />
+                <span className="field-hint">
+                  Será o usuário de login em manager.html. Não use um e-mail que
+                  já tenha conta no Supabase; para esses casos, use “Vincular
+                  síndico existente” abaixo.
+                </span>
+              </label>
+              <div className="form-actions">
+                <button className="primary-button" disabled={saving}>
+                  {saving ? "Criando conta..." : "Criar síndico e gerar senha"}
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="admin-section">
+            <div className="section-heading">
+              <h2>Vincular síndico existente</h2>
               <p>
                 Condomínio: {selectedCondominium?.name ?? "Carregando..."}.
-                O síndico usa uma conta já criada no Supabase Authentication.
+                Use esta opção quando a conta de e-mail já existir no Supabase
+                Authentication.
               </p>
             </div>
             <form className="inline-form" onSubmit={handleAssignManager}>
@@ -928,14 +1078,38 @@ export function CondominiumOperators({
                         {manager.status === "active" ? "Ativo" : "Inativo"}
                       </span>
                     </div>
-                    {manager.status === "active" && (
-                      <button
-                        className="text-button danger-text-button"
-                        onClick={() => void handleDeactivateManager(manager)}
-                      >
-                        Remover acesso
-                      </button>
-                    )}
+                    <div className="table-actions">
+                      {manager.status === "active" ? (
+                        <>
+                          <button
+                            className="text-button"
+                            disabled={workingId === manager.id}
+                            onClick={() =>
+                              void handleManagerAction(manager, "reset-password")
+                            }
+                          >
+                            Nova senha
+                          </button>
+                          <button
+                            className="text-button danger-text-button"
+                            disabled={workingId === manager.id}
+                            onClick={() => void handleDeactivateManager(manager)}
+                          >
+                            Remover acesso
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="text-button"
+                          disabled={workingId === manager.id}
+                          onClick={() =>
+                            void handleManagerAction(manager, "activate")
+                          }
+                        >
+                          Reativar e gerar senha
+                        </button>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>

@@ -1,6 +1,11 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { buildAddressReason, decideAddressStatus } from "./address.ts";
-import { carrierForLabel, carrierValues } from "./carrier.ts";
+import { carrierForLabel } from "./carrier.ts";
+import { grounded } from "./grounding.ts";
+import { readWithGemini } from "./gemini.ts";
+import { aiFields, interpretWithGroq } from "./groq.ts";
+import { parseLabel, type ParsedLabel } from "./parser.ts";
+import { readLabelText, visionConfig, visionConfigDebug } from "./vision.ts";
 
 type ExtractLabelRequest = {
   condominiumId?: string;
@@ -15,7 +20,8 @@ type ExtractLabelRequest = {
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const responseHeaders = { ...corsHeaders, "Content-Type": "application/json" };
@@ -28,8 +34,10 @@ function respond(body: Record<string, unknown>, status = 200) {
 }
 
 function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
   );
 }
 
@@ -47,84 +55,44 @@ const acceptedMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 // etiqueta: é engano do cliente ou tentativa de abuso.
 const maximumBase64Length = 2_800_000;
 const requestTimeoutMs = 15_000;
+// O cliente espera no máximo 9 s. O orçamento de 8,5 s é medido desde o início
+// da requisição: se a Vision consumir quase tudo, a IA é pulada e devolvemos o
+// que as regras encontraram em vez de estourar o timeout do celular.
+const visionTimeoutMs = 6_500;
+const requestBudgetMs = 8_500;
+const groqMaxTimeoutMs = 3_000;
 
-/**
- * Schema devolvido pelo Gemini. A IA apenas extrai campos: `address_status`
- * e `address_reason` não são pedidos ao modelo e continuam sendo calculados por
- * `address.ts` na resposta da função, para a decisão nunca depender da IA.
- */
-const responseSchema = {
-  type: "OBJECT",
-  properties: {
-    recipient_name: { type: "STRING" },
-    unit_number: { type: "STRING" },
-    block_name: { type: "STRING" },
-    carrier: {
-      type: "STRING",
-      enum: [...carrierValues],
-      description:
-        "Use unknown quando a transportadora ou o código não permitirem identificação segura.",
-    },
-    tracking_code: { type: "STRING" },
-    destination_cep: { type: "STRING" },
-    destination_street: { type: "STRING" },
-    destination_number: { type: "STRING" },
-  },
-  required: [
-    "recipient_name",
-    "unit_number",
-    "block_name",
-    "carrier",
-    "tracking_code",
-    "destination_cep",
-    "destination_street",
-    "destination_number",
-  ],
-};
-
-function buildPrompt(expectedAddress: {
+function labelFrom(parsed: ParsedLabel, expectedAddress: {
   cep: string;
   street: string;
   address_number: string;
 }) {
-  return [
-    "Leia esta foto de etiqueta de encomenda brasileira.",
-    "Extraia SOMENTE os dados do DESTINATÁRIO. Ignore remetente, vendedor, transportadora emitente, código de acesso da NF-e, pedido e dados fiscais.",
-    "unit_number é só o número da unidade (ex.: \"901\", \"102B\", \"Cobertura 1\"). block_name é o bloco/torre (ex.: \"A\", \"Bloco 2\").",
-    "destination_cep deve conter somente dígitos. Se a etiqueta mostrar o endereço em duas linhas, junte rua e número.",
-    `Endereço do condomínio que está recebendo (referência para a leitura): CEP ${expectedAddress.cep || "não informado"}, logradouro ${expectedAddress.street || "não informado"}, número ${expectedAddress.address_number || "não informado"}.`,
-    "Para carrier, escolha somente uma das opções do schema. Use unknown se a transportadora estiver ilegível, ausente ou se o código não permitir identificação segura.",
-    "Padrões de código de rastreio:",
-    "- Correios: 2 letras + 9 dígitos + BR;",
-    "- Amazon: TBR + 9 dígitos, ou AMZC + 9 dígitos + 2 letras;",
-    "- Shopee: BR + 12 dígitos + 1 letra ou dígito, totalizando 15 caracteres;",
-    "- Anjun: AJ + 15 dígitos;",
-    "- J&T Express: 15 dígitos, na prática começando com 999 ou 888;",
-    "- iMile: 13 ou 14 dígitos;",
-    "- Mercado Livre: 11 dígitos.",
-    "Os padrões de J&T Express, iMile e Mercado Livre são fracos: na dúvida, prefira unknown a inventar a empresa.",
-    "Não invente dados. Campo ilegível fica string vazia; carrier usa unknown.",
-  ].join("\n");
-}
-
-type GeminiCandidate = {
-  content?: { parts?: Array<{ text?: string }> };
-  finishReason?: string;
-};
-
-type GeminiResponse = {
-  candidates?: GeminiCandidate[];
-  promptFeedback?: { blockReason?: string };
-  error?: { message?: string };
-};
-
-function stripJsonFence(value: string) {
-  const trimmed = value.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced ? fenced[1] : trimmed;
+  const destination = {
+    cep: digitsOnly(parsed.destination_cep),
+    street: cleanText(parsed.destination_street, 160),
+    number: cleanText(parsed.destination_number, 20),
+  };
+  const status = decideAddressStatus(destination, expectedAddress);
+  return {
+    label: {
+      recipient_name: cleanText(parsed.recipient_name, 120),
+      unit_number: cleanText(parsed.unit_number, 30),
+      block_name: cleanText(parsed.block_name, 40),
+      carrier: carrierForLabel(parsed.carrier),
+      tracking_code: cleanText(parsed.tracking_code, 80).replace(/\s+/g, ""),
+      destination_cep: destination.cep,
+      destination_street: destination.street,
+      destination_number: destination.number,
+      address_status: status,
+      address_reason: buildAddressReason(status, destination, expectedAddress),
+    },
+    destination,
+    status,
+  };
 }
 
 Deno.serve(async (request: Request) => {
+  const requestStartedAt = Date.now();
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -135,19 +103,9 @@ Deno.serve(async (request: Request) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
   const authorization = request.headers.get("Authorization");
   if (!supabaseUrl || !anonKey || !serviceRoleKey || !authorization) {
     return respond({ error: "Server configuration or login missing" }, 500);
-  }
-
-  // Sem chave da Vision API o app deve continuar funcionando com o leitor
-  // local. 503 + fallback é o sinal para o cliente não tratar como erro.
-  if (!geminiApiKey) {
-    return respond(
-      { error: "Vision OCR not configured", fallback: true },
-      503,
-    );
   }
 
   const userClient = createClient(supabaseUrl, anonKey, {
@@ -229,150 +187,131 @@ Deno.serve(async (request: Request) => {
       .maybeSingle();
     if (profileError) return respond({ error: profileError.message }, 500);
     if (!profile?.is_super_admin) {
-      return respond(
-        { error: "Sem acesso a este condomínio." },
-        403,
-      );
+      return respond({ error: "Sem acesso a este condomínio." }, 403);
     }
   }
 
-  const body = {
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: buildPrompt(expectedAddress) },
-          {
-            inlineData: {
-              mimeType: mimeType,
-              data: imageBase64,
-            },
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema,
-      maxOutputTokens: 1024,
-      // Modelos Gemini 3.6+ ignoram temperature/top_p/top_k; o nível de
-      // raciocínio é controlado por thinkingConfig.
-      thinkingConfig: { thinkingLevel: "low" },
-    },
-  };
-
-  let geminiResponse: Response;
-  try {
-    geminiResponse = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": geminiApiKey,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(requestTimeoutMs),
-      },
+  // Caminho antigo, só para comparação A/B. Não é o padrão.
+  if (
+    Deno.env.get("OCR_ENGINE") === "gemini" ||
+    Deno.env.get("USE_GEMINI") === "1"
+  ) {
+    const geminiKey = Deno.env.get("GEMINI_API_KEY") ?? "";
+    if (!geminiKey) {
+      return respond(
+        { error: "Vision OCR not configured", fallback: true },
+        503,
+      );
+    }
+    const read = await readWithGemini(
+      { imageBase64, mimeType, expectedAddress, apiKey: geminiKey },
+      requestTimeoutMs,
     );
-  } catch (error) {
-    const timedOut = error instanceof Error && error.name === "TimeoutError";
-    console.error(
-      "extract-package-label: falha ao chamar Gemini",
-      timedOut ? "timeout" : error instanceof Error ? error.message : error,
-    );
-    return respond(
-      {
-        error: timedOut
-          ? "A leitura na nuvem excedeu o tempo limite."
-          : "Não foi possível falar com a leitura na nuvem.",
-        fallback: true,
-      },
-      timedOut ? 504 : 502,
-    );
+    if (!read.fields) {
+      return respond(
+        { error: read.error ?? "Falha na leitura na nuvem.", fallback: read.fallback ?? true },
+        read.status ?? 502,
+      );
+    }
+    const parsed: ParsedLabel = {
+      recipient_name: cleanText(read.fields.recipient_name, 120),
+      unit_number: cleanText(read.fields.unit_number, 30),
+      block_name: cleanText(read.fields.block_name, 40),
+      carrier: cleanText(read.fields.carrier, 60),
+      tracking_code: cleanText(read.fields.tracking_code, 80).replace(/\s+/g, ""),
+      destination_cep: digitsOnly(read.fields.destination_cep),
+      destination_street: cleanText(read.fields.destination_street, 160),
+      destination_number: cleanText(read.fields.destination_number, 20),
+    };
+    const result = labelFrom(parsed, expectedAddress);
+    return respond({
+      label: result.label,
+      diagnostics: { engine: "gemini", aiMs: read.durationMs, aiUsed: [...aiFields] },
+    });
   }
 
-  if (!geminiResponse.ok) {
-    const detail = await geminiResponse.text().catch(() => "");
+  const vision = visionConfig();
+  if (!vision) {
+    // Sem credencial da Vision o app continua com o leitor local. O diagnóstico
+    // vai só para o log: nunca devolvemos metadados da credencial ao cliente.
     console.error(
-      "extract-package-label: Gemini respondeu",
-      geminiResponse.status,
-      detail.slice(0, 500),
+      "extract-package-label: credencial da Vision ausente",
+      visionConfigDebug(),
     );
-    // 429/403/400 do Gemini são problemas de configuração ou cota: o porteiro
-    // não deve ficar preso, então o cliente cai para o OCR local.
-    return respond(
-      {
-        error: `Vision OCR failed (${geminiResponse.status}).`,
-        fallback: true,
-        detail: detail.slice(0, 300),
-      },
-      geminiResponse.status === 429 ? 429 : 502,
-    );
+    return respond({ error: "Vision OCR not configured", fallback: true }, 503);
   }
 
-  let payload: GeminiResponse;
+  let ocrText = "";
+  let ocrWords = 0;
+  let ocrMs = 0;
   try {
-    payload = (await geminiResponse.json()) as GeminiResponse;
+    const read = await readLabelText(imageBase64, vision, visionTimeoutMs);
+    ocrText = read.text;
+    ocrWords = read.words;
+    ocrMs = read.durationMs;
   } catch (error) {
     console.error(
-      "extract-package-label: JSON inválido do Gemini",
-      error instanceof Error ? error.message : error,
+      "extract-package-label: falha na Vision",
+      error instanceof Error ? error.message : String(error),
     );
     return respond(
-      { error: "Resposta inválida da leitura na nuvem.", fallback: true },
+      { error: "Não foi possível ler a etiqueta na nuvem.", fallback: true },
       502,
     );
   }
 
-  const candidate = payload.candidates?.[0];
-  const raw = candidate?.content?.parts
-    ?.map((part) => part.text ?? "")
-    .join("")
-    .trim();
+  // 1º voto: regras determinísticas. Rastreio e transportadora ficam aqui para
+  // sempre — o LLM erra esses dois campos e não é determinístico.
+  const rules = parseLabel(ocrText);
+  const preliminary = labelFrom(rules, expectedAddress);
+  const groqKey = (Deno.env.get("GROQ_API_KEY") ?? "").trim();
+  const remainingMs = requestBudgetMs - (Date.now() - requestStartedAt);
+  const needsAi =
+    ocrText.length >= 20 &&
+    Boolean(groqKey) &&
+    remainingMs >= 800 &&
+    (!rules.recipient_name ||
+      !rules.unit_number ||
+      preliminary.status !== "verified");
 
-  if (!raw) {
-    return respond(
-      {
-        error:
-          payload.promptFeedback?.blockReason ??
-          "A leitura na nuvem não devolveu conteúdo.",
-        fallback: true,
-      },
-      422,
-    );
-  }
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(stripJsonFence(raw)) as Record<string, unknown>;
-  } catch {
-    return respond(
-      { error: "A leitura na nuvem devolveu um formato inesperado.", fallback: true },
-      502,
-    );
-  }
-
-  const destination = {
-    cep: digitsOnly(parsed.destination_cep),
-    street: cleanText(parsed.destination_street, 160),
-    number: cleanText(parsed.destination_number, 20),
+  const diagnostics: Record<string, unknown> = {
+    engine: needsAi ? "vision+regras+groq" : "vision+regras",
+    ...(groqKey && remainingMs < 800 ? { aiSkipped: "sem tempo no orçamento" } : {}),
+    ocrMs,
+    ocrWords,
+    ocrChars: ocrText.length,
+    ocrText: ocrText.slice(0, 3000),
+    aiUsed: [] as string[],
   };
-  const status = decideAddressStatus(destination, expectedAddress);
-  const carrier = carrierForLabel(parsed.carrier);
 
-  return respond({
-    label: {
-      recipient_name: cleanText(parsed.recipient_name, 120),
-      unit_number: cleanText(parsed.unit_number, 30),
-      block_name: cleanText(parsed.block_name, 40),
-      carrier,
-      tracking_code: cleanText(parsed.tracking_code, 80).replace(/\s+/g, ""),
-      destination_cep: destination.cep,
-      destination_street: destination.street,
-      destination_number: destination.number,
-      address_status: status,
-      address_reason: buildAddressReason(status, destination, expectedAddress),
-    },
-  });
+  const final: ParsedLabel = { ...rules };
+
+  if (needsAi) {
+    const ai = await interpretWithGroq(
+      ocrText,
+      groqKey,
+      Math.min(groqMaxTimeoutMs, remainingMs),
+    );
+    diagnostics.aiMs = ai.durationMs;
+    if (ai.fields) {
+      const accepted: string[] = [];
+      for (const field of aiFields) {
+        const value = ai.fields[field];
+        if (value && grounded(field, value, ocrText) !== false) {
+          final[field] = value;
+          accepted.push(field);
+        }
+      }
+      diagnostics.aiUsed = accepted;
+    } else {
+      diagnostics.aiError = ai.error;
+    }
+  }
+
+  // Rastreio e transportadora nunca são substituídos pela IA.
+  final.tracking_code = rules.tracking_code;
+  final.carrier = rules.carrier;
+
+  const result = labelFrom(final, expectedAddress);
+  return respond({ label: result.label, diagnostics });
 });

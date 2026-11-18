@@ -574,7 +574,7 @@ export type CompressedPackagePhoto = {
   height: number;
 };
 
-/** Lado maior da foto enviada à Vision API e ao Storage. */
+/** Lado maior da foto enviada à Vision API. */
 const aiImageLongEdge = 1280;
 const aiImageQuality = 0.8;
 
@@ -613,19 +613,22 @@ function jpegFileName(name: string) {
 /**
  * Normaliza a foto em JPEG de até 1280 px no maior lado.
  *
- * A imagem original do celular tem 3–8 MB e não serve nem para a Vision API
- * (limite de payload) nem para o Storage (cota). A compressão é feita uma vez
- * e o MESMO arquivo vai para as duas pontas. Nada de grayscale ou filtro
- * destrutivo: a IA lê a etiqueta colorida, inclusive logos de transportadora.
+ * A imagem original do celular tem 3–8 MB e não serve para a Vision API
+ * (limite de payload). Nada de grayscale ou filtro destrutivo: a IA lê a
+ * etiqueta colorida, inclusive logos de transportadora. Para a foto de avaria,
+ * os parâmetros opcionais permitem guardar mais detalhe do volume inteiro.
  */
 export async function compressPackagePhoto(
   file: File,
+  options: { longEdge?: number; quality?: number } = {},
 ): Promise<CompressedPackagePhoto> {
+  const longEdge = options.longEdge ?? aiImageLongEdge;
+  const quality = options.quality ?? aiImageQuality;
   const source = await loadImageSource(file);
   try {
     const scale = Math.min(
       1,
-      aiImageLongEdge / Math.max(source.width, source.height, 1),
+      longEdge / Math.max(source.width, source.height, 1),
     );
     const canvas = createCanvas(
       Math.max(1, Math.round(source.width * scale)),
@@ -640,7 +643,7 @@ export async function compressPackagePhoto(
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(source.element, 0, 0, canvas.width, canvas.height);
 
-    const blob = await canvasToBlob(canvas, "image/jpeg", aiImageQuality);
+    const blob = await canvasToBlob(canvas, "image/jpeg", quality);
     const base64 = await blobToBase64(blob);
 
     return {
@@ -660,6 +663,19 @@ export async function compressPackagePhoto(
 
 export type AiLabelAddressStatus = "verified" | "mismatch" | "unknown";
 
+/** Diagnóstico da leitura na nuvem, aparece no painel de detalhes do porteiro. */
+export type LabelDiagnostics = {
+  engine?: string;
+  ocrMs?: number;
+  ocrWords?: number;
+  ocrChars?: number;
+  ocrText?: string;
+  aiMs?: number;
+  aiUsed?: string[];
+  aiError?: string;
+  aiSkipped?: string;
+};
+
 export type AiPackageLabel = {
   recipientName: string;
   unitNumber: string;
@@ -671,6 +687,7 @@ export type AiPackageLabel = {
   destinationNumber: string;
   addressStatus: AiLabelAddressStatus;
   addressReason: string;
+  diagnostics?: LabelDiagnostics;
 };
 
 export type AiLabelUnit = {
@@ -720,6 +737,7 @@ export class AiLabelExtractionError extends Error {
 
 type EdgeExtractResponse = {
   label?: Record<string, unknown>;
+  diagnostics?: LabelDiagnostics;
   error?: string;
   fallback?: boolean;
 };
@@ -730,7 +748,10 @@ function textField(value: unknown, maxLength = 200) {
     : "";
 }
 
-function parseAiLabel(raw: Record<string, unknown>): AiPackageLabel {
+function parseAiLabel(
+  raw: Record<string, unknown>,
+  diagnostics?: LabelDiagnostics,
+): AiPackageLabel {
   const status = raw.address_status;
   return {
     recipientName: textField(raw.recipient_name, 120),
@@ -746,6 +767,7 @@ function parseAiLabel(raw: Record<string, unknown>): AiPackageLabel {
     addressStatus:
       status === "verified" || status === "mismatch" ? status : "unknown",
     addressReason: textField(raw.address_reason, 240),
+    diagnostics,
   };
 }
 
@@ -827,7 +849,7 @@ function matchAiUnits<T extends AiLabelUnit>(
 }
 
 /**
- * Extrai a etiqueta na nuvem (Gemini) com prazo curto. Em qualquer falha,
+ * Extrai a etiqueta na nuvem (Vision + regras + Groq) com prazo curto. Em qualquer falha,
  * timeout ou ausência de configuração a função lança: o chamador cai para o
  * leitor local. Nada aqui bloqueia o recebimento.
  */
@@ -887,7 +909,7 @@ export async function extractPackageLabelWithAi<
       );
     }
 
-    const label = parseAiLabel(payload.label);
+    const label = parseAiLabel(payload.label, payload.diagnostics);
     const unitCandidates = matchAiUnits(
       label,
       input.units,

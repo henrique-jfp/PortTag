@@ -1,17 +1,26 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   BookOpen,
   Camera,
   Check,
   ChevronRight,
   ClipboardList,
+  Download,
   LogOut,
   PackageCheck,
   Search,
   X,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { Pagination } from "../components/Pagination";
+import {
+  RECORD_PAGE_SIZE,
+  fetchPackageRecords,
+  fetchPackageSignature,
+  type PackageSort,
+} from "../lib/packageQueries";
 import {
   bulkReviewReasons,
   isDuplicateBulkMessage,
@@ -45,6 +54,12 @@ import {
   type PackageNotification,
 } from "../lib/packageNotifications";
 import { supabase } from "../lib/supabase";
+
+/** Evento não padronizado emitido pelo Chrome quando o app pode ser instalado. */
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
 
 type PorterAccount = {
   id: string;
@@ -99,26 +114,23 @@ type PackageRecord = {
   status: "received" | "collected";
   collected_at: string | null;
   collected_by_name: string | null;
-  collected_signature: string | null;
+  collected_signature?: string | null;
+  is_damaged: boolean;
   last_notified_at: string | null;
 };
 
 type PorterView = "home" | "ledger" | "pending";
 
+const UNIT_SEARCH_PAGE_SIZE = 6;
+
 const receiptBucket = "package-receipts";
 const maximumImageSize = 10 * 1024 * 1024;
 const acceptedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const packageFields =
-  "id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_at, status, collected_at, collected_by_name, collected_signature, last_notified_at";
+  "id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_at, status, collected_at, collected_by_name, collected_signature, is_damaged, last_notified_at";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("pt-BR");
-}
-
-function imageExtension(file: File) {
-  if (file.type === "image/png") return "png";
-  if (file.type === "image/webp") return "webp";
-  return "jpg";
 }
 
 function getPorterViewFromLocation(): PorterView {
@@ -169,12 +181,13 @@ function signatureDataUrl(canvas: HTMLCanvasElement) {
 
 /**
  * Estado de uma etiqueta já lida. Serve tanto ao formulário individual quanto
- * à fila de importação: a foto comprimida é a mesma para a IA e para o Storage.
+ * à fila de importação. A foto comprimida vai só para a leitura e é descartada
+ * depois; nenhuma imagem da etiqueta é enviada ao Storage.
  */
 type PackageDraft = {
   /** Arquivo original, guardado para permitir nova tentativa de leitura. */
   source: File;
-  /** JPEG comprimido que vai para a nuvem e para o bucket. */
+  /** JPEG comprimido enviado apenas para a leitura da etiqueta. */
   file: File;
   unitId: string;
   unitCandidates: Unit[];
@@ -245,8 +258,22 @@ function draftFromAi(
     ai.carrier ||
     detectDeliveryCompany(`${barcodeValues.join("\n")}\n${code}`);
 
+  const diag = ai.diagnostics;
   const transcript = [
     `origem: nuvem (${ai.durationMs} ms)`,
+    ...(diag?.engine ? [`motor: ${diag.engine}`] : []),
+    ...(diag
+      ? [
+          `tempos: ocr ${diag.ocrMs ?? "-"} ms · ia ${diag.aiMs ?? "-"} ms · ${diag.ocrWords ?? "-"} palavras`,
+        ]
+      : []),
+    ...(diag?.aiUsed?.length
+      ? [`campos IA ancorados: ${diag.aiUsed.join(", ")}`]
+      : diag?.aiError
+        ? [`IA indisponível: ${diag.aiError}`]
+        : diag
+          ? ["campos IA: nenhum (somente regras)"]
+          : []),
     `destinatario: ${ai.recipientName || "-"}`,
     `unidade: ${ai.unitNumber || "-"}${ai.blockName ? ` / ${ai.blockName}` : ""}`,
     `transportadora: ${carrier || "-"}`,
@@ -262,6 +289,7 @@ function draftFromAi(
     }`,
     `status: ${ai.addressStatus}`,
     `motivo: ${ai.addressReason || "-"}`,
+    ...(diag?.ocrText ? ["", "--- OCR Vision ---", diag.ocrText] : []),
   ].join("\n");
 
   const detectedFields = [
@@ -494,7 +522,11 @@ function buildWhatsappLink(
   return whatsappLink(whatsapp, message);
 }
 
-/** Upload + create_package. Nunca grava no banco antes da foto estar no Storage. */
+/**
+ * Grava o recebimento. A foto da etiqueta não é enviada ao Storage: ela só
+ * existe na memória durante a leitura. Quando há avaria, uma foto separada do
+ * volume inteiro é anexada e removida pela limpeza após 20 dias.
+ */
 async function persistPackage(
   draft: PackageDraft,
   ctx: {
@@ -507,6 +539,8 @@ async function persistPackage(
     porterName: string;
     whatsapp: string;
     allowDuplicate: boolean;
+    isDamaged: boolean;
+    damageFile: File | null;
   },
 ): Promise<{ id: string; whatsappLink: string }> {
   const trimmedTrackingCode = draft.trackingCode.trim();
@@ -533,16 +567,25 @@ async function persistPackage(
     }
   }
 
-  const path = `${ctx.condominiumId}/${ctx.unit.block_id ?? "no-block"}/${ctx.userId}/${crypto.randomUUID()}.${imageExtension(draft.file)}`;
-  const { error: uploadError } = await supabase.storage
-    .from(receiptBucket)
-    .upload(path, draft.file, {
-      contentType: draft.file.type,
-      cacheControl: "3600",
-      upsert: false,
+  let damagePath: string | null = null;
+  if (ctx.isDamaged && ctx.damageFile) {
+    const evidence = await compressPackagePhoto(ctx.damageFile, {
+      longEdge: 1920,
+      quality: 0.85,
     });
-  if (uploadError) {
-    throw new Error(`Não foi possível enviar a foto. ${uploadError.message}`);
+    damagePath = `${ctx.condominiumId}/${ctx.unit.block_id ?? "no-block"}/${ctx.userId}/damage-${crypto.randomUUID()}.jpg`;
+    const { error: uploadError } = await supabase.storage
+      .from(receiptBucket)
+      .upload(damagePath, evidence.file, {
+        contentType: "image/jpeg",
+        cacheControl: "3600",
+        upsert: false,
+      });
+    if (uploadError) {
+      throw new Error(
+        `Não foi possível enviar a foto da avaria. ${uploadError.message}`,
+      );
+    }
   }
 
   const { data: createdPackageId, error: createError } = await supabase.rpc(
@@ -550,24 +593,21 @@ async function persistPackage(
     {
       p_condominium_id: ctx.condominiumId,
       p_unit_id: ctx.unit.id,
-      p_receipt_path: path,
+      p_receipt_path: damagePath,
       p_sender: ctx.company.trim(),
       p_delivery_person: ctx.deliveryPerson.trim(),
       p_tracking_code: trimmedTrackingCode || null,
       p_resident_name: draft.recipientName.trim(),
       p_recipient_is_resident: draft.recipientIsResident,
+      p_is_damaged: ctx.isDamaged,
     },
   );
 
   if (createError) {
-    const { error: cleanupError } = await supabase.storage
-      .from(receiptBucket)
-      .remove([path]);
-    throw new Error(
-      cleanupError
-        ? `Não foi possível registrar (${createError.message}) nem remover a foto enviada (${cleanupError.message}).`
-        : createError.message,
-    );
+    if (damagePath) {
+      await supabase.storage.from(receiptBucket).remove([damagePath]);
+    }
+    throw new Error(createError.message);
   }
 
   return {
@@ -588,12 +628,16 @@ async function persistPackage(
 export function PorterReception() {
   const { user, signOut } = useAuth();
   const imageInput = useRef<HTMLInputElement>(null);
+  const damageInput = useRef<HTMLInputElement>(null);
   const bulkInput = useRef<HTMLInputElement>(null);
   const signatureCanvas = useRef<HTMLCanvasElement>(null);
   const signatureHasInk = useRef(false);
   const hasInternalHistory = useRef(false);
   const receiveForm = useRef<HTMLFormElement>(null);
   const allowDuplicate = useRef(false);
+  // Invalida leituras antigas quando o porteiro cancela ou troca de foto, para
+  // que um resultado tardio não reapareça depois de voltar à tela inicial.
+  const readRequestId = useRef(0);
   const [loading, setLoading] = useState(true);
   const [account, setAccount] = useState<PorterAccount | null>(null);
   const [condominium, setCondominium] = useState<Condominium | null>(null);
@@ -605,17 +649,32 @@ export function PorterReception() {
   const [authorizedResidents, setAuthorizedResidents] = useState<
     AuthorizedResident[]
   >([]);
-  const [packages, setPackages] = useState<PackageRecord[]>([]);
   const [pendingPackages, setPendingPackages] = useState<PackageRecord[]>([]);
   const [unitSearchQuery, setUnitSearchQuery] = useState("");
   const [searchedUnitId, setSearchedUnitId] = useState("");
   const [unitResidents, setUnitResidents] = useState<UnitResident[]>([]);
   const [unitPackages, setUnitPackages] = useState<PackageRecord[]>([]);
+  const [unitTotal, setUnitTotal] = useState(0);
+  const [unitPending, setUnitPending] = useState<PackageRecord[]>([]);
+  const [unitPage, setUnitPage] = useState(1);
+  const [unitSearchPage, setUnitSearchPage] = useState(1);
   const [isLoadingUnitDetails, setIsLoadingUnitDetails] = useState(false);
   const [unitDetailsError, setUnitDetailsError] = useState("");
+  const [ledgerRecords, setLedgerRecords] = useState<PackageRecord[]>([]);
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const [ledgerTotal, setLedgerTotal] = useState(0);
+  const [ledgerSort, setLedgerSort] = useState<PackageSort>("recent");
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [pendingPage, setPendingPage] = useState(1);
+  const [signatureCache, setSignatureCache] = useState<
+    Record<string, string | null>
+  >({});
   const [pageError, setPageError] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
+  const [isDamaged, setIsDamaged] = useState(false);
+  const [damageFile, setDamageFile] = useState<File | null>(null);
+  const [damagePreviewUrl, setDamagePreviewUrl] = useState("");
   const [isReading, setIsReading] = useState(false);
   const [ocrMessage, setOcrMessage] = useState("");
   const [unitCandidates, setUnitCandidates] = useState<Unit[]>([]);
@@ -660,6 +719,9 @@ export function PorterReception() {
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkCompany, setBulkCompany] = useState("");
   const [bulkDeliveryPerson, setBulkDeliveryPerson] = useState("");
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(
+    null,
+  );
   const bulkCancelled = useRef(false);
   const unitDetailsRequest = useRef(0);
 
@@ -688,23 +750,33 @@ export function PorterReception() {
     () => units.find((unit) => unit.id === searchedUnitId) ?? null,
     [searchedUnitId, units],
   );
-  const pendingUnitPackages = useMemo(
-    () => unitPackages.filter((item) => item.status === "received"),
-    [unitPackages],
-  );
-  const unitSearchResults = useMemo(() => {
+  const pendingUnitPackages = unitPending;
+  const matchingSearchUnits = useMemo(() => {
     const query = unitSearchQuery.trim().toLocaleLowerCase("pt-BR");
     if (!query) return [];
-    return units
-      .filter((unit) =>
-        unit.unit_number.toLocaleLowerCase("pt-BR").includes(query),
-      )
-      .slice(0, 12);
+    return units.filter((unit) =>
+      unit.unit_number.toLocaleLowerCase("pt-BR").includes(query),
+    );
   }, [unitSearchQuery, units]);
+  const unitSearchResults = useMemo(
+    () =>
+      matchingSearchUnits.slice(
+        (unitSearchPage - 1) * UNIT_SEARCH_PAGE_SIZE,
+        unitSearchPage * UNIT_SEARCH_PAGE_SIZE,
+      ),
+    [matchingSearchUnits, unitSearchPage],
+  );
+  const safePendingPage = Math.min(
+    pendingPage,
+    Math.max(1, Math.ceil(pendingPackages.length / RECORD_PAGE_SIZE)),
+  );
   const visiblePackages =
     activeView === "pending"
-      ? pendingPackages
-      : packages;
+      ? pendingPackages.slice(
+          (safePendingPage - 1) * RECORD_PAGE_SIZE,
+          safePendingPage * RECORD_PAGE_SIZE,
+        )
+      : ledgerRecords;
   const bulkCounts = useMemo(
     () => ({
       done: bulkItems.filter((item) => item.status === "done").length,
@@ -739,6 +811,27 @@ export function PorterReception() {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  // O Chrome só dispara este evento quando considera o app instalável. Usar o
+  // prompt dele garante um app standalone, e não um atalho com barra de URL.
+  useEffect(() => {
+    function handleBeforeInstall(event: Event) {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    }
+    function handleInstalled() {
+      setInstallPrompt(null);
+      setSuccessMessage(
+        "App instalado. Se o ícone não apareceu na tela inicial, abra a gaveta de apps, procure “PortTag” e toque e segure no ícone para adicionar à tela inicial.",
+      );
+    }
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+    window.addEventListener("appinstalled", handleInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+      window.removeEventListener("appinstalled", handleInstalled);
+    };
+  }, []);
 
   // O worker do Tesseract custa segundos para carregar o WASM. Ele só morre
   // quando o app fecha ou quando dá erro de memória; cada foto reutiliza o
@@ -776,6 +869,7 @@ export function PorterReception() {
       const params = new URLSearchParams(window.location.search);
       const view = getPorterViewFromLocation();
       setActiveView(view);
+      if (view === "pending") setPendingPage(1);
       setCollectionBaseId(params.get("collect") ?? "");
       setCollectionSelectionOverride(null);
       setCollectionName("");
@@ -894,33 +988,21 @@ export function PorterReception() {
       setBlocks(blocksResult.data ?? []);
       setUnits(allowedUnits);
 
-      const [
-        recentPackagesResult,
-        pendingPackagesResult,
-        residentDirectoryResult,
-      ] = await Promise.all([
-        supabase
-          .from("packages")
-          .select(packageFields)
-          .eq("condominium_id", porterData.condominium_id)
-          .order("received_at", { ascending: false })
-          .limit(40),
-        supabase
-          .from("packages")
-          .select(packageFields)
-          .eq("condominium_id", porterData.condominium_id)
-          .eq("status", "received")
-          .order("received_at", { ascending: false }),
-        supabase.from("unit_residents").select("unit_id, name, whatsapp"),
-      ]);
+      const [pendingPackagesResult, residentDirectoryResult] =
+        await Promise.all([
+          supabase
+            .from("packages")
+            .select(packageFields)
+            .eq("condominium_id", porterData.condominium_id)
+            .eq("status", "received")
+            .order("received_at", { ascending: false }),
+          supabase.from("unit_residents").select("unit_id, name, whatsapp"),
+        ]);
 
       if (!active) return;
-      const packagesError =
-        recentPackagesResult.error ?? pendingPackagesResult.error;
-      if (packagesError) {
-        setPageError(packagesError.message);
+      if (pendingPackagesResult.error) {
+        setPageError(pendingPackagesResult.error.message);
       } else {
-        setPackages(recentPackagesResult.data ?? []);
         setPendingPackages(pendingPackagesResult.data ?? []);
       }
       if (residentDirectoryResult.error) {
@@ -949,29 +1031,59 @@ export function PorterReception() {
     };
   }, [user]);
 
+  useEffect(() => {
+    if (!account || activeView !== "ledger") return;
+    let active = true;
+    void (async () => {
+      setRecordsLoading(true);
+      try {
+        const result = await fetchPackageRecords({
+          condominiumId: account.condominium_id,
+          sort: ledgerSort,
+          page: ledgerPage,
+        });
+        if (!active) return;
+        setLedgerRecords(result.items as PackageRecord[]);
+        setLedgerTotal(result.total);
+        if (ledgerPage > 1 && result.items.length === 0) setLedgerPage(1);
+      } catch (error) {
+        if (!active) return;
+        setPageError(
+          error instanceof Error
+            ? `Não foi possível carregar o caderno. ${error.message}`
+            : "Não foi possível carregar o caderno.",
+        );
+      } finally {
+        if (active) setRecordsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [account, activeView, ledgerPage, ledgerSort]);
+
   async function reloadPackages() {
     if (!account) return;
-    const [recentPackagesResult, pendingPackagesResult] = await Promise.all([
-      supabase
-        .from("packages")
-        .select(packageFields)
-        .eq("condominium_id", account.condominium_id)
-        .order("received_at", { ascending: false })
-        .limit(40),
-      supabase
-        .from("packages")
-        .select(packageFields)
-        .eq("condominium_id", account.condominium_id)
-        .eq("status", "received")
-        .order("received_at", { ascending: false }),
-    ]);
-    const error = recentPackagesResult.error ?? pendingPackagesResult.error;
-    if (error) {
-      setPageError(error.message);
+    const pendingPackagesResult = await supabase
+      .from("packages")
+      .select(packageFields)
+      .eq("condominium_id", account.condominium_id)
+      .eq("status", "received")
+      .order("received_at", { ascending: false });
+    if (pendingPackagesResult.error) {
+      setPageError(pendingPackagesResult.error.message);
       return;
     }
-    setPackages(recentPackagesResult.data ?? []);
     setPendingPackages(pendingPackagesResult.data ?? []);
+    if (activeView === "ledger") {
+      const result = await fetchPackageRecords({
+        condominiumId: account.condominium_id,
+        sort: ledgerSort,
+        page: ledgerPage,
+      });
+      setLedgerRecords(result.items as PackageRecord[]);
+      setLedgerTotal(result.total);
+    }
   }
 
   function handleUnitSearchChange(value: string) {
@@ -980,6 +1092,10 @@ export function PorterReception() {
     setSearchedUnitId("");
     setUnitResidents([]);
     setUnitPackages([]);
+    setUnitPending([]);
+    setUnitTotal(0);
+    setUnitPage(1);
+    setUnitSearchPage(1);
     setUnitDetailsError("");
     setIsLoadingUnitDetails(false);
   }
@@ -1006,6 +1122,7 @@ export function PorterReception() {
       if (view !== "home") hasInternalHistory.current = true;
     }
     setActiveView(view);
+    if (view === "pending") setPendingPage(1);
   }
 
   function returnToHome() {
@@ -1033,6 +1150,7 @@ export function PorterReception() {
       url,
     );
     setActiveView("pending");
+    setPendingPage(1);
     setCollectionBaseId(packageRecord.id);
     setCollectionSelectionOverride(ids);
     setCollectionName(packageRecord.resident_name ?? "");
@@ -1045,29 +1163,40 @@ export function PorterReception() {
 
   async function showUnitDetails(unit: Unit) {
     const requestId = ++unitDetailsRequest.current;
+    if (!account) return;
     setUnitSearchQuery(unit.unit_number);
     setSearchedUnitId(unit.id);
     setUnitResidents([]);
     setUnitPackages([]);
+    setUnitPending([]);
+    setUnitTotal(0);
+    setUnitPage(1);
     setUnitDetailsError("");
     setIsLoadingUnitDetails(true);
 
     try {
-      const [residentsResult, packagesResult] = await Promise.all([
-        supabase
-          .from("unit_residents")
-          .select("id, name, whatsapp")
-          .eq("unit_id", unit.id)
-          .order("created_at"),
-        supabase
-          .from("packages")
-          .select(packageFields)
-          .eq("unit_id", unit.id)
-          .order("received_at", { ascending: false }),
-      ]);
+      const [residentsResult, packagesResult, pendingResult] =
+        await Promise.all([
+          supabase
+            .from("unit_residents")
+            .select("id, name, whatsapp")
+            .eq("unit_id", unit.id)
+            .order("created_at"),
+          fetchPackageRecords({
+            condominiumId: account.condominium_id,
+            unitId: unit.id,
+            page: 1,
+          }),
+          supabase
+            .from("packages")
+            .select(packageFields)
+            .eq("unit_id", unit.id)
+            .eq("status", "received")
+            .order("received_at", { ascending: false }),
+        ]);
 
       if (requestId !== unitDetailsRequest.current) return;
-      const loadError = residentsResult.error ?? packagesResult.error;
+      const loadError = residentsResult.error ?? pendingResult.error;
       if (loadError) {
         setUnitDetailsError(
           `Não foi possível carregar os dados do apartamento. ${loadError.message}`,
@@ -1076,7 +1205,9 @@ export function PorterReception() {
       }
 
       setUnitResidents(residentsResult.data ?? []);
-      setUnitPackages(packagesResult.data ?? []);
+      setUnitPackages(packagesResult.items as PackageRecord[]);
+      setUnitTotal(packagesResult.total);
+      setUnitPending(pendingResult.data ?? []);
     } catch (error) {
       if (requestId !== unitDetailsRequest.current) return;
       setUnitDetailsError(
@@ -1088,6 +1219,48 @@ export function PorterReception() {
       if (requestId === unitDetailsRequest.current) {
         setIsLoadingUnitDetails(false);
       }
+    }
+  }
+
+  useEffect(() => {
+    if (!account || !searchedUnitId || unitPage < 2) return;
+    let active = true;
+    void (async () => {
+      setIsLoadingUnitDetails(true);
+      try {
+        const result = await fetchPackageRecords({
+          condominiumId: account.condominium_id,
+          unitId: searchedUnitId,
+          page: unitPage,
+        });
+        if (!active) return;
+        setUnitPackages(result.items as PackageRecord[]);
+        setUnitTotal(result.total);
+      } catch (error) {
+        if (!active) return;
+        setUnitDetailsError(
+          error instanceof Error ? error.message : "Não foi possível carregar.",
+        );
+      } finally {
+        if (active) setIsLoadingUnitDetails(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [account, searchedUnitId, unitPage]);
+
+  async function loadRecordSignature(packageId: string) {
+    if (Object.prototype.hasOwnProperty.call(signatureCache, packageId)) return;
+    try {
+      const signature = await fetchPackageSignature(packageId);
+      setSignatureCache((current) => ({ ...current, [packageId]: signature }));
+    } catch (error) {
+      setPageError(
+        error instanceof Error
+          ? `Não foi possível carregar a assinatura. ${error.message}`
+          : "Não foi possível carregar a assinatura.",
+      );
     }
   }
 
@@ -1184,7 +1357,7 @@ export function PorterReception() {
     event.target.value = "";
     resetReceptionFields();
     setFile(null);
-    setPreviewUrl("");
+    clearPreviewUrl();
     setDeliveryPerson(lastDeliveryPerson);
 
     if (!image) return;
@@ -1198,6 +1371,7 @@ export function PorterReception() {
     }
     if (!account || !condominium) return;
 
+    const requestId = ++readRequestId.current;
     setIsReading(true);
     setOcrMessage("Preparando a foto para leitura...");
     try {
@@ -1206,8 +1380,11 @@ export function PorterReception() {
         units,
         blocks,
         residents: authorizedResidents,
-        onProgress: (message) => setOcrMessage(message),
+        onProgress: (message) => {
+          if (requestId === readRequestId.current) setOcrMessage(message);
+        },
       });
+      if (requestId !== readRequestId.current) return;
       applyDraftToForm(draft, URL.createObjectURL(draft.file));
       if (isStorageCapacityError(draft.labelRead?.error)) {
         setPageError(
@@ -1215,6 +1392,7 @@ export function PorterReception() {
         );
       }
     } catch (error) {
+      if (requestId !== readRequestId.current) return;
       if (isStorageCapacityError(error)) {
         setPageError(
           "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.",
@@ -1230,7 +1408,7 @@ export function PorterReception() {
           : "Não foi possível processar a foto. Tente novamente.",
       );
     } finally {
-      setIsReading(false);
+      if (requestId === readRequestId.current) setIsReading(false);
     }
   }
 
@@ -1245,6 +1423,10 @@ export function PorterReception() {
       setPageError(
         "A etiqueta indica outro endereço. Confira fisicamente a etiqueta e marque a confirmação antes de registrar.",
       );
+      return;
+    }
+    if (isDamaged && !damageFile) {
+      setPageError("Tire a foto do volume avariado antes de confirmar.");
       return;
     }
 
@@ -1292,6 +1474,8 @@ export function PorterReception() {
         porterName: account.name,
         whatsapp: savedWhatsapp,
         allowDuplicate: allowDuplicate.current,
+        isDamaged,
+        damageFile,
       });
 
       rememberDeliveryPerson(deliveryPerson.trim());
@@ -1301,8 +1485,8 @@ export function PorterReception() {
 
       const trimmedDeliveryPerson = deliveryPerson.trim();
       resetReceptionFields();
+      clearPreviewUrl();
       setFile(null);
-      setPreviewUrl("");
       setDeliveryPerson(trimmedDeliveryPerson || lastDeliveryPerson);
       await reloadPackages();
       if (shouldNotify && result.id) await notifyPackage(result.id);
@@ -1441,6 +1625,8 @@ export function PorterReception() {
         porterName: account.name,
         whatsapp,
         allowDuplicate: item.allowDuplicate,
+        isDamaged: false,
+        damageFile: null,
       });
       updateBulkItem(item.id, {
         status: "done",
@@ -1760,9 +1946,58 @@ export function PorterReception() {
     }
   }
 
-  function resetPhoto() {
-    setFile(null);
+  async function handleInstallApp() {
+    if (!installPrompt) return;
+    const prompt = installPrompt;
+    setInstallPrompt(null);
+    try {
+      await prompt.prompt();
+      void prompt.userChoice.catch(() => undefined);
+    } catch {
+      setPageError(
+        "Não foi possível abrir a instalação. Use o menu do Chrome → Instalar app.",
+      );
+    }
+  }
+
+  function clearDamagePhoto() {
+    if (damagePreviewUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(damagePreviewUrl);
+    }
+    setDamagePreviewUrl("");
+    setDamageFile(null);
+  }
+
+  function handleDamagePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const image = event.target.files?.[0];
+    event.target.value = "";
+    if (!image) return;
+    if (!acceptedImageTypes.has(image.type)) {
+      setPageError("Use uma foto JPG, PNG ou WebP.");
+      return;
+    }
+    if (image.size > maximumImageSize) {
+      setPageError("A foto precisa ter no máximo 10 MB.");
+      return;
+    }
+    clearDamagePhoto();
+    setDamageFile(image);
+    setDamagePreviewUrl(URL.createObjectURL(image));
+    setPageError("");
+  }
+
+  function clearPreviewUrl() {
+    // As prévias são blob URLs; revogar evita acumular memória no celular ao
+    // cancelar, trocar de foto ou registrar a encomenda.
+    if (previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setPreviewUrl("");
+    clearDamagePhoto();
+  }
+
+  function resetPhoto() {
+    clearPreviewUrl();
+    setFile(null);
+    setIsDamaged(false);
     setUnitCandidates([]);
     setUnitId("");
     setCompany("");
@@ -1780,7 +2015,18 @@ export function PorterReception() {
     setNotificationLink("");
     setNotifyOnReceive(false);
     setLastLabelRead(null);
+    setPageError("");
+    setSuccessMessage("");
     allowDuplicate.current = false;
+  }
+
+  /** Volta ao início sem registrar nada, mesmo se a leitura ainda estiver rodando. */
+  function cancelReception() {
+    readRequestId.current += 1;
+    resetPhoto();
+    setIsReading(false);
+    setIsSaving(false);
+    navigateToView("home", true);
   }
 
   if (loading) {
@@ -1808,13 +2054,25 @@ export function PorterReception() {
           <span>{condominium.name}</span>
           <h1>Olá, {account.name}</h1>
         </div>
-        <button
-          className="porter-logout"
-          aria-label="Sair"
-          onClick={() => void handleSignOut()}
-        >
-          <LogOut size={20} />
-        </button>
+        <div className="porter-header-actions">
+          {installPrompt && (
+            <button
+              className="porter-install-button"
+              type="button"
+              onClick={() => void handleInstallApp()}
+            >
+              <Download size={18} aria-hidden="true" />
+              <span>Instalar app</span>
+            </button>
+          )}
+          <button
+            className="porter-logout"
+            aria-label="Sair"
+            onClick={() => void handleSignOut()}
+          >
+            <LogOut size={20} />
+          </button>
+        </div>
       </header>
 
       <div className="porter-content">
@@ -1883,14 +2141,24 @@ export function PorterReception() {
                 <>
                   <div className="porter-photo-preview">
                     <img src={previewUrl} alt="Foto da etiqueta da encomenda" />
-                    <button
-                      type="button"
-                      className="porter-secondary-button"
-                      onClick={resetPhoto}
-                      disabled={isReading || isSaving}
-                    >
-                      Tirar outra foto
-                    </button>
+                    <div className="porter-photo-actions">
+                      <button
+                        type="button"
+                        className="porter-secondary-button"
+                        onClick={resetPhoto}
+                        disabled={isReading || isSaving}
+                      >
+                        Tirar outra foto
+                      </button>
+                      <button
+                        type="button"
+                        className="porter-cancel-button"
+                        onClick={cancelReception}
+                        disabled={isSaving}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
                   </div>
                   <p className="porter-ocr-status" role="status">
                     {isReading ? "Analisando a foto..." : ocrMessage}
@@ -1906,6 +2174,9 @@ export function PorterReception() {
                           )
                           .join(" · ")}
                       </p>
+                      <pre className="porter-diagnostics-text">
+                        {lastLabelRead.text}
+                      </pre>
                       <button
                         className="text-button"
                         type="button"
@@ -2125,17 +2396,97 @@ export function PorterReception() {
                         </div>
                       )}
 
-                      <button
-                        className="porter-primary-button"
-                        disabled={
-                          isSaving ||
-                          !unitId ||
-                          (addressVerification?.status === "mismatch" &&
-                            !mismatchAcknowledged)
-                        }
-                      >
-                        {isSaving ? "Salvando..." : "Confirmar recebimento"}
-                      </button>
+                      <div className="porter-damage-field">
+                        <label className="porter-damage-toggle">
+                          <input
+                            type="checkbox"
+                            checked={isDamaged}
+                            disabled={isSaving}
+                            onChange={(event) => {
+                              setIsDamaged(event.target.checked);
+                              if (!event.target.checked) clearDamagePhoto();
+                            }}
+                          />
+                          <AlertTriangle size={18} aria-hidden="true" />
+                          <span>Pacote chegou avariado</span>
+                        </label>
+                        <p className="field-hint">
+                          A foto da etiqueta não é salva. Se houver avaria, tire
+                          uma foto do volume inteiro — ela fica guardada por 20
+                          dias e depois é excluída.
+                        </p>
+                        {isDamaged && (
+                          <div className="porter-damage-photo">
+                            <input
+                              ref={damageInput}
+                              className="porter-hidden-input"
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              onChange={handleDamagePhotoChange}
+                            />
+                            {!damageFile ? (
+                              <button
+                                className="porter-secondary-button"
+                                type="button"
+                                onClick={() => damageInput.current?.click()}
+                                disabled={isSaving}
+                              >
+                                <Camera size={18} aria-hidden="true" />
+                                Fotografar avaria
+                              </button>
+                            ) : (
+                              <div className="porter-photo-preview">
+                                <img
+                                  src={damagePreviewUrl}
+                                  alt="Foto do volume avariado"
+                                />
+                                <div className="porter-photo-actions">
+                                  <button
+                                    className="porter-secondary-button"
+                                    type="button"
+                                    onClick={() => damageInput.current?.click()}
+                                    disabled={isSaving}
+                                  >
+                                    Tirar outra foto
+                                  </button>
+                                  <button
+                                    className="porter-cancel-button"
+                                    type="button"
+                                    onClick={clearDamagePhoto}
+                                    disabled={isSaving}
+                                  >
+                                    Remover
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="porter-form-actions">
+                        <button
+                          className="porter-primary-button"
+                          disabled={
+                            isSaving ||
+                            !unitId ||
+                            (isDamaged && !damageFile) ||
+                            (addressVerification?.status === "mismatch" &&
+                              !mismatchAcknowledged)
+                          }
+                        >
+                          {isSaving ? "Salvando..." : "Confirmar recebimento"}
+                        </button>
+                        <button
+                          className="porter-cancel-button"
+                          type="button"
+                          onClick={cancelReception}
+                          disabled={isSaving}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
                     </form>
                   )}
                 </>
@@ -2458,6 +2809,16 @@ export function PorterReception() {
                       Nenhum apartamento autorizado encontrado com esse número.
                     </p>
                   )}
+                  {matchingSearchUnits.length > UNIT_SEARCH_PAGE_SIZE && (
+                    <Pagination
+                      page={unitSearchPage}
+                      total={matchingSearchUnits.length}
+                      pageSize={UNIT_SEARCH_PAGE_SIZE}
+                      onChange={setUnitSearchPage}
+                      label="Páginas de apartamentos"
+                      disabled={isLoadingUnitDetails}
+                    />
+                  )}
 
                   {selectedSearchUnit && (
                     <div className="porter-unit-details" aria-live="polite">
@@ -2533,55 +2894,88 @@ export function PorterReception() {
                           </section>
 
                           <section className="porter-unit-data-section">
-                            <h4>Encomendas e retiradas</h4>
+                            <h4>
+                              Encomendas e retiradas
+                              {unitTotal > 0 && (
+                                <small> · {unitTotal.toLocaleString("pt-BR")} no total</small>
+                              )}
+                            </h4>
                             {unitPackages.length === 0 ? (
                               <p className="porter-empty">
                                 Nenhuma encomenda registrada neste apartamento.
                               </p>
                             ) : (
-                              <ul className="porter-unit-package-list">
-                                {unitPackages.map((item) => (
-                                  <li key={item.id}>
-                                    <strong>
-                                      {item.status === "received"
-                                        ? "Na portaria"
-                                        : "Retirada"}
-                                    </strong>
-                                    <span>Recebida {formatDate(item.received_at)}</span>
-                                    {item.resident_name && (
-                                      <span>Morador: {item.resident_name}</span>
-                                    )}
-                                    <span>
-                                      Morador do apartamento:{" "}
-                                      {item.recipient_is_resident
-                                        ? "confirmado"
-                                        : "não confirmado"}
-                                    </span>
-                                    {item.sender && <span>Empresa: {item.sender}</span>}
-                                    {item.delivery_person && (
-                                      <span>Entregador: {item.delivery_person}</span>
-                                    )}
-                                    {item.tracking_code && (
-                                      <span>Rastreio: {item.tracking_code}</span>
-                                    )}
-                                    {item.collected_at && (
+                              <>
+                                <ul className="porter-unit-package-list">
+                                  {unitPackages.map((item) => (
+                                    <li key={item.id}>
+                                      <strong>
+                                        {item.status === "received"
+                                          ? "Na portaria"
+                                          : "Retirada"}
+                                      </strong>
+                                      <span>Recebida {formatDate(item.received_at)}</span>
+                                      {item.resident_name && (
+                                        <span>Morador: {item.resident_name}</span>
+                                      )}
                                       <span>
-                                        Retirada {formatDate(item.collected_at)}
-                                        {item.collected_by_name
-                                          ? ` por ${item.collected_by_name}`
-                                          : ""}
+                                        Morador do apartamento:{" "}
+                                        {item.recipient_is_resident
+                                          ? "confirmado"
+                                          : "não confirmado"}
                                       </span>
-                                    )}
-                                    {item.collected_signature && (
-                                      <img
-                                        className="porter-unit-signature"
-                                        src={item.collected_signature}
-                                        alt={`Assinatura da retirada de ${item.unit_number}`}
-                                      />
-                                    )}
-                                  </li>
-                                ))}
-                              </ul>
+                                      {item.sender && <span>Empresa: {item.sender}</span>}
+                                      {item.delivery_person && (
+                                        <span>Entregador: {item.delivery_person}</span>
+                                      )}
+                                      {item.tracking_code && (
+                                        <span>Rastreio: {item.tracking_code}</span>
+                                      )}
+                                      {item.collected_at && (
+                                        <span>
+                                          Retirada {formatDate(item.collected_at)}
+                                          {item.collected_by_name
+                                            ? ` por ${item.collected_by_name}`
+                                            : ""}
+                                        </span>
+                                      )}
+                                      {item.status === "collected" &&
+                                        (Object.prototype.hasOwnProperty.call(
+                                          signatureCache,
+                                          item.id,
+                                        ) ? (
+                                          signatureCache[item.id] ? (
+                                            <img
+                                              className="porter-unit-signature"
+                                              src={signatureCache[item.id] as string}
+                                              alt={`Assinatura da retirada de ${item.unit_number}`}
+                                            />
+                                          ) : (
+                                            <small className="porter-notify-status">
+                                              Assinatura não disponível.
+                                            </small>
+                                          )
+                                        ) : (
+                                          <button
+                                            className="porter-secondary-button"
+                                            type="button"
+                                            onClick={() => void loadRecordSignature(item.id)}
+                                          >
+                                            Ver assinatura
+                                          </button>
+                                        ))}
+                                    </li>
+                                  ))}
+                                </ul>
+                                <Pagination
+                                  page={unitPage}
+                                  total={unitTotal}
+                                  pageSize={RECORD_PAGE_SIZE}
+                                  onChange={setUnitPage}
+                                  label="Páginas de encomendas do apartamento"
+                                  disabled={isLoadingUnitDetails}
+                                />
+                              </>
                             )}
                           </section>
                         </>
@@ -2627,10 +3021,26 @@ export function PorterReception() {
                 </h2>
                 <p>
                   {activeView === "pending"
-                    ? "Encomendas aguardando retirada."
-                    : "Registros recentes do condomínio."}
+                    ? `${pendingPackages.length.toLocaleString("pt-BR")} encomenda(s) aguardando retirada.`
+                    : `${ledgerTotal.toLocaleString("pt-BR")} registros no condomínio.`}
                 </p>
               </div>
+              {activeView === "ledger" && (
+                <label className="porter-ledger-sort">
+                  Ordenar por
+                  <select
+                    value={ledgerSort}
+                    onChange={(event) => {
+                      setLedgerSort(event.target.value as PackageSort);
+                      setLedgerPage(1);
+                    }}
+                  >
+                    <option value="recent">Mais recente (dia)</option>
+                    <option value="tracking">Rastreio / entregador / loja</option>
+                    <option value="sender">Entregador ou loja</option>
+                  </select>
+                </label>
+              )}
               <button
                 className="porter-back-button"
                 type="button"
@@ -2769,7 +3179,9 @@ export function PorterReception() {
               </form>
             )}
 
-            {visiblePackages.length === 0 ? (
+            {recordsLoading && activeView === "ledger" ? (
+              <p className="porter-empty">Carregando registros...</p>
+            ) : visiblePackages.length === 0 ? (
               <p className="porter-empty">
                 {activeView === "pending"
                   ? "Nenhuma encomenda aguardando retirada."
@@ -2784,6 +3196,12 @@ export function PorterReception() {
                         {item.block_name ? `${item.block_name} · ` : ""}
                         {item.unit_number}
                       </strong>
+                      {item.is_damaged && (
+                        <span className="porter-damaged-badge">
+                          <AlertTriangle size={14} aria-hidden="true" />
+                          Avariado
+                        </span>
+                      )}
                       <span>{item.resident_name || "Morador não cadastrado"}</span>
                       <small>
                         Morador do apartamento:{" "}
@@ -2849,6 +3267,14 @@ export function PorterReception() {
                 ))}
               </ul>
             )}
+            <Pagination
+              page={activeView === "pending" ? safePendingPage : ledgerPage}
+              total={activeView === "pending" ? pendingPackages.length : ledgerTotal}
+              pageSize={RECORD_PAGE_SIZE}
+              onChange={activeView === "pending" ? setPendingPage : setLedgerPage}
+              label="Páginas de encomendas"
+              disabled={recordsLoading}
+            />
           </section>
         )}
       </div>

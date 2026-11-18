@@ -8,3 +8,7 @@ public/ocr
 .env.example.local
 supabase/functions/.env
 supabase/.temp/
+scripts/label-reports/
+scripts/label-dataset/
+scripts/label-dataset.json
+scripts/label-confirmed.json

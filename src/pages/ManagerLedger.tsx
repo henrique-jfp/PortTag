@@ -1,7 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { LogOut, Search, X } from "lucide-react";
+import { ChevronRight, LogOut, Search, X } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { PackageReceipt } from "../components/PackageReceipt";
+import { Pagination } from "../components/Pagination";
+import {
+  DRAWER_PAGE_SIZE,
+  RECORD_PAGE_SIZE,
+  fetchDailyCounts,
+  fetchDrawers,
+  fetchPackageRecords,
+  fetchPackageSignature,
+  type DailyCount,
+  type DrawerRecord,
+  type PackageFilters,
+  type PackageRecordRow,
+  type PackageSort,
+} from "../lib/packageQueries";
 import { supabase } from "../lib/supabase";
 
 type Condominium = {
@@ -9,26 +23,9 @@ type Condominium = {
   name: string;
 };
 
-type PackageRecord = {
+type Block = {
   id: string;
-  condominium_id: string;
-  unit_number: string;
-  block_name: string | null;
-  resident_name: string | null;
-  recipient_is_resident: boolean;
-  sender: string | null;
-  delivery_person: string | null;
-  tracking_code: string | null;
-  received_by: string;
-  received_at: string;
-  status: "received" | "collected";
-  collected_at: string | null;
-  collected_by_name: string | null;
-  collected_confirmed_by: string | null;
-  receipt_path: string | null;
-  photo_expires_at: string;
-  photo_deleted_at: string | null;
-  last_notified_at: string | null;
+  name: string;
 };
 
 type Unit = {
@@ -36,24 +33,32 @@ type Unit = {
   block_id: string | null;
 };
 
-type Block = {
-  id: string;
-  name: string;
+type LedgerFilters = {
+  selectedDate: string;
+  dateFrom: string;
+  dateTo: string;
+  unit: string;
+  tracking: string;
+  company: string;
+  porter: string;
+  status: string;
+};
+
+const emptyFilters: LedgerFilters = {
+  selectedDate: "",
+  dateFrom: "",
+  dateTo: "",
+  unit: "",
+  tracking: "",
+  company: "",
+  porter: "",
+  status: "",
 };
 
 const currentYear = new Date().getFullYear();
 
-function dateKey(value: string) {
-  const date = new Date(value);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString("pt-BR") : "—";
-}
-
-function normalized(value: string | null | undefined) {
-  return (value ?? "").trim().toLocaleLowerCase("pt-BR");
 }
 
 function MonthCalendar({
@@ -113,31 +118,39 @@ function MonthCalendar({
   );
 }
 
+function drawerLabel(drawer: DrawerRecord) {
+  return drawer.block_name
+    ? `${drawer.block_name} · Apartamento ${drawer.unit_number}`
+    : `Apartamento ${drawer.unit_number}`;
+}
+
 export function ManagerLedger() {
   const { user, signOut } = useAuth();
   const [loading, setLoading] = useState(true);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
   const [condominiumId, setCondominiumId] = useState("");
-  const [packages, setPackages] = useState<PackageRecord[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   const [porterNames, setPorterNames] = useState<Map<string, string>>(new Map());
-  const [selectedDate, setSelectedDate] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [unitFilter, setUnitFilter] = useState("");
-  const [trackingFilter, setTrackingFilter] = useState("");
-  const [companyFilter, setCompanyFilter] = useState("");
-  const [porterFilter, setPorterFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [pageError, setPageError] = useState("");
-  // A assinatura é base64 de imagem: baixar a do ano inteiro travava o
-  // caderno. Cada id é buscado uma vez, só quando o síndico pede.
+  const [filters, setFilters] = useState<LedgerFilters>(emptyFilters);
+  const [dailyCounts, setDailyCounts] = useState<DailyCount[]>([]);
+  const [drawers, setDrawers] = useState<DrawerRecord[]>([]);
+  const [drawerPage, setDrawerPage] = useState(1);
+  const [drawerTotal, setDrawerTotal] = useState(0);
+  const [drawersLoading, setDrawersLoading] = useState(false);
+  const [activeDrawer, setActiveDrawer] = useState<DrawerRecord | null>(null);
+  const [records, setRecords] = useState<PackageRecordRow[]>([]);
+  const [recordPage, setRecordPage] = useState(1);
+  const [recordTotal, setRecordTotal] = useState(0);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [recordSort, setRecordSort] = useState<PackageSort>("recent");
+  const [selectedRecordId, setSelectedRecordId] = useState("");
   const [signatureCache, setSignatureCache] = useState<
     Record<string, string | null>
   >({});
   const [signatureLoadingId, setSignatureLoadingId] = useState("");
+  const [pageError, setPageError] = useState("");
   const [signatureError, setSignatureError] = useState("");
 
   useEffect(() => {
@@ -170,9 +183,8 @@ export function ManagerLedger() {
           .eq("status", "active")
           .order("name");
         if (!active) return;
-        if (error) {
-          setPageError(error.message);
-        } else {
+        if (error) setPageError(error.message);
+        else {
           setCondominiums(data ?? []);
           setCondominiumId(data?.[0]?.id ?? "");
         }
@@ -199,9 +211,8 @@ export function ManagerLedger() {
             .eq("status", "active")
             .order("name");
           if (!active) return;
-          if (error) {
-            setPageError(error.message);
-          } else {
+          if (error) setPageError(error.message);
+          else {
             setCondominiums(data ?? []);
             setCondominiumId(data?.[0]?.id ?? "");
           }
@@ -221,22 +232,12 @@ export function ManagerLedger() {
     };
   }, [user]);
 
+  // Listas de referência são pequenas e mudam só quando troca o condomínio.
   useEffect(() => {
     let active = true;
+    if (!condominiumId) return;
 
-    async function loadLedger() {
-      if (!condominiumId) {
-        setPackages([]);
-        setBlocks([]);
-        setUnits([]);
-        setPorterNames(new Map());
-        return;
-      }
-
-      setLoading(true);
-      setPageError("");
-      const yearStart = new Date(currentYear, 0, 1).toISOString();
-      const nextYearStart = new Date(currentYear + 1, 0, 1).toISOString();
+    void (async () => {
       const [blocksResult, unitsResult, porterResult] = await Promise.all([
         supabase
           .from("blocks")
@@ -255,38 +256,11 @@ export function ManagerLedger() {
           .eq("condominium_id", condominiumId),
       ]);
       if (!active) return;
-
-      const initialError =
-        blocksResult.error ?? unitsResult.error ?? porterResult.error;
-      if (initialError) {
-        setPageError(`Não foi possível carregar o caderno. ${initialError.message}`);
-        setLoading(false);
+      const error = blocksResult.error ?? unitsResult.error ?? porterResult.error;
+      if (error) {
+        setPageError(error.message);
         return;
       }
-
-      const allPackages: PackageRecord[] = [];
-      const pageSize = 1000;
-      for (let offset = 0; ; offset += pageSize) {
-        const { data, error } = await supabase
-          .from("packages")
-          .select(
-            "id, condominium_id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_by, received_at, status, collected_at, collected_by_name, collected_confirmed_by, receipt_path, photo_expires_at, photo_deleted_at, last_notified_at",
-          )
-          .eq("condominium_id", condominiumId)
-          .gte("received_at", yearStart)
-          .lt("received_at", nextYearStart)
-          .order("received_at", { ascending: false })
-          .range(offset, offset + pageSize - 1);
-        if (!active) return;
-        if (error) {
-          setPageError(`Não foi possível carregar o caderno. ${error.message}`);
-          setLoading(false);
-          return;
-        }
-        allPackages.push(...(data ?? []));
-        if ((data ?? []).length < pageSize) break;
-      }
-
       setBlocks(blocksResult.data ?? []);
       setUnits(unitsResult.data ?? []);
       setPorterNames(
@@ -297,14 +271,9 @@ export function ManagerLedger() {
           ]),
         ),
       );
-      setPackages(allPackages);
-      setLoading(false);
-    }
-
-    void loadLedger().catch((error: unknown) => {
+    })().catch((error: unknown) => {
       if (!active) return;
       setPageError(error instanceof Error ? error.message : "Falha inesperada.");
-      setLoading(false);
     });
 
     return () => {
@@ -312,106 +281,141 @@ export function ManagerLedger() {
     };
   }, [condominiumId]);
 
-  const countsByDay = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of packages) {
-      const key = dateKey(item.received_at);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return counts;
-  }, [packages]);
+  const apiFilters = useMemo<PackageFilters>(
+    () => ({
+      dateFrom: filters.selectedDate || filters.dateFrom,
+      dateTo: filters.selectedDate || filters.dateTo,
+      unit: filters.unit,
+      tracking: filters.tracking,
+      company: filters.company,
+      porter: filters.porter,
+      status: filters.status,
+    }),
+    [filters],
+  );
 
-  const filteredPackages = useMemo(() => {
-    const unitQuery = normalized(unitFilter);
-    const trackingQuery = normalized(trackingFilter);
-    const companyQuery = normalized(companyFilter);
-    const porterQuery = normalized(porterFilter);
+  useEffect(() => {
+    let active = true;
+    if (!condominiumId) return;
 
-    return packages.filter((item) => {
-      const day = dateKey(item.received_at);
-      if (selectedDate && day !== selectedDate) return false;
-      if (dateFrom && day < dateFrom) return false;
-      if (dateTo && day > dateTo) return false;
-      if (
-        unitQuery &&
-        !normalized(item.unit_number).includes(unitQuery) &&
-        !normalized(item.block_name).includes(unitQuery)
-      ) {
-        return false;
+    void (async () => {
+      setDrawersLoading(true);
+      setPageError("");
+      try {
+        const [counts, result] = await Promise.all([
+          fetchDailyCounts(condominiumId, currentYear),
+          fetchDrawers(condominiumId, apiFilters, drawerPage),
+        ]);
+        if (!active) return;
+        setDailyCounts(counts);
+        setDrawers(result.items);
+        setDrawerTotal(result.total);
+        if (drawerPage > 1 && result.items.length === 0) setDrawerPage(1);
+      } catch (error) {
+        if (!active) return;
+        setPageError(
+          error instanceof Error
+            ? `Não foi possível carregar o caderno. ${error.message}`
+            : "Não foi possível carregar o caderno.",
+        );
+      } finally {
+        if (active) setDrawersLoading(false);
       }
-      if (trackingQuery && !normalized(item.tracking_code).includes(trackingQuery)) {
-        return false;
-      }
-      if (
-        companyQuery &&
-        !normalized(item.sender).includes(companyQuery) &&
-        !normalized(item.delivery_person).includes(companyQuery)
-      ) {
-        return false;
-      }
-      if (
-        porterQuery &&
-        !normalized(porterNames.get(item.received_by)).includes(porterQuery)
-      ) {
-        return false;
-      }
-      if (statusFilter && item.status !== statusFilter) return false;
-      return true;
-    });
-  }, [
-    companyFilter,
-    dateFrom,
-    dateTo,
-    packages,
-    porterFilter,
-    porterNames,
-    selectedDate,
-    statusFilter,
-    trackingFilter,
-    unitFilter,
-  ]);
+    })();
 
-  const pendingCount = packages.filter((item) => item.status === "received").length;
-  const collectedCount = packages.filter((item) => item.status === "collected").length;
+    return () => {
+      active = false;
+    };
+  }, [condominiumId, apiFilters, drawerPage]);
 
-  function clearFilters() {
-    setSelectedDate("");
-    setDateFrom("");
-    setDateTo("");
-    setUnitFilter("");
-    setTrackingFilter("");
-    setCompanyFilter("");
-    setPorterFilter("");
-    setStatusFilter("");
+  useEffect(() => {
+    let active = true;
+    if (!condominiumId || !activeDrawer?.unit_id) return;
+
+    void (async () => {
+      setRecordsLoading(true);
+      try {
+        const result = await fetchPackageRecords({
+          condominiumId,
+          unitId: activeDrawer.unit_id,
+          filters: apiFilters,
+          sort: recordSort,
+          page: recordPage,
+        });
+        if (!active) return;
+        setRecords(result.items);
+        setRecordTotal(result.total);
+        if (recordPage > 1 && result.items.length === 0) setRecordPage(1);
+      } catch (error) {
+        if (!active) return;
+        setPageError(
+          error instanceof Error
+            ? `Não foi possível carregar os recebimentos. ${error.message}`
+            : "Não foi possível carregar os recebimentos.",
+        );
+      } finally {
+        if (active) setRecordsLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [condominiumId, activeDrawer, apiFilters, recordSort, recordPage]);
+
+  const countsByDay = useMemo(
+    () => new Map(dailyCounts.map((count) => [count.day, count.total])),
+    [dailyCounts],
+  );
+  const yearTotals = useMemo(
+    () =>
+      dailyCounts.reduce(
+        (totals, count) => ({
+          total: totals.total + count.total,
+          pending: totals.pending + count.pending,
+          collected: totals.collected + count.collected,
+        }),
+        { total: 0, pending: 0, collected: 0 },
+      ),
+    [dailyCounts],
+  );
+  const selectedRecord = records.find((record) => record.id === selectedRecordId) ?? null;
+
+  function updateFilter<K extends keyof LedgerFilters>(
+    key: K,
+    value: LedgerFilters[K],
+  ) {
+    setFilters((current) => ({ ...current, [key]: value }));
+    setDrawerPage(1);
+    setActiveDrawer(null);
+    setSelectedRecordId("");
+    setRecordPage(1);
   }
 
-  async function handleSignOut() {
-    try {
-      await signOut();
-    } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Não foi possível sair.");
-    }
+  function clearFilters() {
+    setFilters(emptyFilters);
+    setDrawerPage(1);
+    setActiveDrawer(null);
+    setSelectedRecordId("");
+    setRecordPage(1);
+  }
+
+  function openDrawer(drawer: DrawerRecord) {
+    setActiveDrawer(drawer);
+    setRecordSort("recent");
+    setRecordPage(1);
+    setSelectedRecordId("");
+    setRecords([]);
+    setRecordTotal(0);
   }
 
   async function loadSignature(packageId: string) {
     if (Object.prototype.hasOwnProperty.call(signatureCache, packageId)) return;
-
     setSignatureLoadingId(packageId);
     setSignatureError("");
     try {
-      const { data, error } = await supabase
-        .from("packages")
-        .select("collected_signature")
-        .eq("id", packageId)
-        .maybeSingle();
-      if (error) {
-        setSignatureError(`Não foi possível carregar a assinatura. ${error.message}`);
-        return;
-      }
-      setSignatureCache((current) => ({
-        ...current,
-        [packageId]: data?.collected_signature ?? null,
-      }));
+      const signature = await fetchPackageSignature(packageId);
+      setSignatureCache((current) => ({ ...current, [packageId]: signature }));
     } catch (error) {
       setSignatureError(
         error instanceof Error
@@ -420,6 +424,19 @@ export function ManagerLedger() {
       );
     } finally {
       setSignatureLoadingId("");
+    }
+  }
+
+  function selectRecord(record: PackageRecordRow) {
+    setSelectedRecordId(record.id);
+    if (record.status === "collected") void loadSignature(record.id);
+  }
+
+  async function handleSignOut() {
+    try {
+      await signOut();
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Não foi possível sair.");
     }
   }
 
@@ -484,9 +501,9 @@ export function ManagerLedger() {
               </select>
             </label>
             <div className="ledger-stats">
-              <span><strong>{packages.length}</strong> registros em {currentYear}</span>
-              <span><strong>{pendingCount}</strong> aguardando retirada</span>
-              <span><strong>{collectedCount}</strong> retirados</span>
+              <span><strong>{yearTotals.total.toLocaleString("pt-BR")}</strong> registros em {currentYear}</span>
+              <span><strong>{yearTotals.pending.toLocaleString("pt-BR")}</strong> aguardando retirada</span>
+              <span><strong>{yearTotals.collected.toLocaleString("pt-BR")}</strong> retirados</span>
             </div>
           </section>
 
@@ -494,10 +511,10 @@ export function ManagerLedger() {
             <div className="section-heading">
               <div>
                 <h2>Calendário de {currentYear}</h2>
-                <p>Toque em um dia para ver os recebimentos daquela data.</p>
+                <p>Toque em um dia para ver as gavetas com registros daquela data.</p>
               </div>
-              {selectedDate && (
-                <button className="text-button" onClick={() => setSelectedDate("")}>
+              {filters.selectedDate && (
+                <button className="text-button" onClick={() => updateFilter("selectedDate", "")}>
                   Limpar dia
                 </button>
               )}
@@ -509,8 +526,8 @@ export function ManagerLedger() {
                   year={currentYear}
                   month={month}
                   counts={countsByDay}
-                  selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
+                  selectedDate={filters.selectedDate}
+                  onSelectDate={(value) => updateFilter("selectedDate", value)}
                 />
               ))}
             </div>
@@ -529,19 +546,19 @@ export function ManagerLedger() {
             <div className="ledger-filters">
               <label className="form-field">
                 Data inicial
-                <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+                <input type="date" value={filters.dateFrom} onChange={(event) => updateFilter("dateFrom", event.target.value)} />
               </label>
               <label className="form-field">
                 Data final
-                <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+                <input type="date" value={filters.dateTo} onChange={(event) => updateFilter("dateTo", event.target.value)} />
               </label>
               <label className="form-field">
                 Apartamento
                 <input
                   list="ledger-units"
                   placeholder="Ex.: 901"
-                  value={unitFilter}
-                  onChange={(event) => setUnitFilter(event.target.value)}
+                  value={filters.unit}
+                  onChange={(event) => updateFilter("unit", event.target.value)}
                 />
                 <datalist id="ledger-units">
                   {units.map((unit) => (
@@ -557,29 +574,29 @@ export function ManagerLedger() {
               <label className="form-field">
                 Código de rastreio
                 <input
-                  value={trackingFilter}
-                  onChange={(event) => setTrackingFilter(event.target.value)}
+                  value={filters.tracking}
+                  onChange={(event) => updateFilter("tracking", event.target.value)}
                 />
               </label>
               <label className="form-field">
                 Empresa ou entregador
                 <input
-                  value={companyFilter}
-                  onChange={(event) => setCompanyFilter(event.target.value)}
+                  value={filters.company}
+                  onChange={(event) => updateFilter("company", event.target.value)}
                 />
               </label>
               <label className="form-field">
                 Porteiro
                 <input
-                  value={porterFilter}
-                  onChange={(event) => setPorterFilter(event.target.value)}
+                  value={filters.porter}
+                  onChange={(event) => updateFilter("porter", event.target.value)}
                 />
               </label>
               <label className="form-field">
                 Situação
                 <select
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
+                  value={filters.status}
+                  onChange={(event) => updateFilter("status", event.target.value)}
                 >
                   <option value="">Todas</option>
                   <option value="received">Aguardando retirada</option>
@@ -587,89 +604,219 @@ export function ManagerLedger() {
                 </select>
               </label>
             </div>
-            {selectedDate && (
+            {filters.selectedDate && (
               <p className="field-hint">
-                Dia selecionado: {new Date(`${selectedDate}T12:00:00`).toLocaleDateString("pt-BR")}
+                Dia selecionado: {new Date(`${filters.selectedDate}T12:00:00`).toLocaleDateString("pt-BR")}
               </p>
             )}
           </section>
 
-          <section className="admin-section">
+          <section className="admin-section ledger-drawers-section">
             <div className="section-heading">
               <div>
-                <h2>Registros</h2>
-                <p>{filteredPackages.length} resultado(s)</p>
+                <h2>Gavetas de apartamentos</h2>
+                <p>
+                  {drawerTotal.toLocaleString("pt-BR")} apartamento(s) com
+                  registros no recorte. Abra uma gaveta para ver os recebimentos
+                  do mais recente ao mais antigo.
+                </p>
               </div>
             </div>
-            {loading ? (
-              <p className="empty-state">Carregando registros...</p>
-            ) : filteredPackages.length === 0 ? (
-              <p className="empty-state">Nenhum registro corresponde aos filtros.</p>
-            ) : (
-              <div className="ledger-record-list">
-                {filteredPackages.map((item) => (
-                  <article className="ledger-record" key={item.id}>
-                    <div className="ledger-record-title">
-                      <strong>
-                        {item.block_name ? `${item.block_name} · ` : ""}
-                        {item.unit_number}
-                      </strong>
-                      <span className={item.status === "collected" ? "ledger-status-done" : "ledger-status-pending"}>
-                        {item.status === "collected" ? "Retirada confirmada" : "Aguardando retirada"}
-                      </span>
-                    </div>
-                    <dl>
-                      <div><dt>Destinatário</dt><dd>{item.resident_name || "Não identificado"}</dd></div>
-                      <div><dt>Morador do apartamento</dt><dd>{item.recipient_is_resident ? "Confirmado" : "Não confirmado"}</dd></div>
-                      <div><dt>Recebida</dt><dd>{formatDate(item.received_at)}</dd></div>
-                      <div><dt>Porteiro</dt><dd>{porterNames.get(item.received_by) || "Não identificado"}</dd></div>
-                      <div><dt>Entregador</dt><dd>{item.delivery_person || "—"}</dd></div>
-                      <div><dt>Empresa</dt><dd>{item.sender || "—"}</dd></div>
-                      <div><dt>Rastreio</dt><dd>{item.tracking_code || "Não informado"}</dd></div>
-                      <div><dt>Retirada</dt><dd>{formatDate(item.collected_at)}</dd></div>
-                      <div><dt>Retirado por</dt><dd>{item.collected_by_name || "—"}</dd></div>
-                      <div><dt>Confirmado pelo porteiro</dt><dd>{item.collected_confirmed_by ? porterNames.get(item.collected_confirmed_by) || "Porteiro" : "—"}</dd></div>
-                      <div><dt>Aviso ao morador</dt><dd>{item.last_notified_at ? formatDate(item.last_notified_at) : "Não avisado"}</dd></div>
-                    </dl>
-                    <PackageReceipt
-                      path={item.receipt_path}
-                      deletedAt={item.photo_deleted_at}
-                    />
-                    {item.status === "collected" && (
-                      <div className="ledger-signature">
-                        {Object.prototype.hasOwnProperty.call(
-                          signatureCache,
-                          item.id,
-                        ) ? (
-                          signatureCache[item.id] ? (
-                            <>
-                              <span>Assinatura do morador</span>
-                              <img
-                                src={signatureCache[item.id] as string}
-                                alt={`Assinatura de ${item.collected_by_name || "quem retirou a encomenda"}`}
-                              />
-                            </>
-                          ) : (
-                            <span>Assinatura não disponível.</span>
-                          )
-                        ) : (
-                          <button
-                            className="text-button"
-                            type="button"
-                            disabled={signatureLoadingId === item.id}
-                            onClick={() => void loadSignature(item.id)}
-                          >
-                            {signatureLoadingId === item.id
-                              ? "Carregando assinatura..."
-                              : "Ver assinatura"}
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </article>
-                ))}
+
+            <div className="ledger-drawer-layout">
+              <div className="ledger-drawer-column">
+                {drawersLoading ? (
+                  <p className="empty-state">Carregando gavetas...</p>
+                ) : drawers.length === 0 ? (
+                  <p className="empty-state">Nenhuma gaveta corresponde aos filtros.</p>
+                ) : (
+                  <ul className="drawer-grid">
+                    {drawers.map((drawer) => (
+                      <li key={`${drawer.unit_id ?? "sem-id"}-${drawer.unit_number}`}>
+                        <button
+                          type="button"
+                          className={[
+                            "drawer-card",
+                            activeDrawer?.unit_id === drawer.unit_id &&
+                            activeDrawer?.unit_number === drawer.unit_number
+                              ? "drawer-card-active"
+                              : "",
+                          ].filter(Boolean).join(" ")}
+                          onClick={() => openDrawer(drawer)}
+                        >
+                          <strong>{drawerLabel(drawer)}</strong>
+                          <span>
+                            {drawer.package_count.toLocaleString("pt-BR")}{" "}
+                            {drawer.package_count === 1 ? "recebimento" : "recebimentos"}
+                          </span>
+                          <small>Último em {formatDate(drawer.last_received_at)}</small>
+                          {drawer.pending_count > 0 && (
+                            <small className="drawer-pending">
+                              {drawer.pending_count} aguardando retirada
+                            </small>
+                          )}
+                          <ChevronRight size={18} aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <Pagination
+                  page={drawerPage}
+                  total={drawerTotal}
+                  pageSize={DRAWER_PAGE_SIZE}
+                  onChange={setDrawerPage}
+                  label="Páginas de gavetas"
+                  disabled={drawersLoading}
+                />
               </div>
-            )}
+
+              <div className="ledger-drawer-column ledger-drawer-records">
+                {!activeDrawer ? (
+                  <p className="empty-state">Selecione uma gaveta para consultar os recebimentos.</p>
+                ) : (
+                  <>
+                    <div className="drawer-detail-heading">
+                      <div>
+                        <h3>{drawerLabel(activeDrawer)}</h3>
+                        <p>{recordTotal.toLocaleString("pt-BR")} recebimento(s) no recorte</p>
+                      </div>
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => {
+                          setActiveDrawer(null);
+                          setSelectedRecordId("");
+                        }}
+                      >
+                        Fechar gaveta
+                      </button>
+                    </div>
+                    <label className="form-field drawer-sort">
+                      Ordenar por
+                      <select
+                        value={recordSort}
+                        onChange={(event) => {
+                          setRecordSort(event.target.value as PackageSort);
+                          setRecordPage(1);
+                          setSelectedRecordId("");
+                        }}
+                      >
+                        <option value="recent">Mais recente (dia)</option>
+                        <option value="tracking">Rastreio / entregador / loja</option>
+                        <option value="sender">Entregador ou loja</option>
+                      </select>
+                    </label>
+
+                    {recordsLoading ? (
+                      <p className="empty-state">Carregando recebimentos...</p>
+                    ) : records.length === 0 ? (
+                      <p className="empty-state">Nenhum recebimento nesta gaveta.</p>
+                    ) : (
+                      <ul className="drawer-record-list">
+                        {records.map((record) => (
+                          <li key={record.id}>
+                            <button
+                              type="button"
+                              className={[
+                                "drawer-record-row",
+                                selectedRecordId === record.id ? "drawer-record-selected" : "",
+                              ].filter(Boolean).join(" ")}
+                              aria-expanded={selectedRecordId === record.id}
+                              onClick={() => selectRecord(record)}
+                            >
+                              <span className="drawer-record-day">
+                                {new Date(record.received_at).toLocaleDateString("pt-BR")}
+                              </span>
+                              <strong>
+                                {record.tracking_code ||
+                                  record.sender ||
+                                  record.delivery_person ||
+                                  "Sem identificação"}
+                              </strong>
+                              <span className={
+                                record.status === "collected"
+                                  ? "ledger-status-done"
+                                  : "ledger-status-pending"
+                              }>
+                                {record.status === "collected" ? "Retirado" : "Na portaria"}
+                              </span>
+                              {record.is_damaged && (
+                                <span className="ledger-status-pending">Avariado</span>
+                              )}
+                              <ChevronRight size={16} aria-hidden="true" />
+                            </button>
+
+                            {selectedRecordId === record.id && selectedRecord && (
+                              <div className="drawer-record-detail">
+                                <dl>
+                                  <div><dt>Destinatário</dt><dd>{selectedRecord.resident_name || "Não identificado"}</dd></div>
+                                  <div><dt>Morador do apartamento</dt><dd>{selectedRecord.recipient_is_resident ? "Confirmado" : "Não confirmado"}</dd></div>
+                                  <div><dt>Recebida</dt><dd>{formatDate(selectedRecord.received_at)}</dd></div>
+                                  <div><dt>Porteiro</dt><dd>{porterNames.get(selectedRecord.received_by) || "Não identificado"}</dd></div>
+                                  <div><dt>Entregador</dt><dd>{selectedRecord.delivery_person || "—"}</dd></div>
+                                  <div><dt>Empresa</dt><dd>{selectedRecord.sender || "—"}</dd></div>
+                                  <div><dt>Estado na chegada</dt><dd>{selectedRecord.is_damaged ? "Avariado" : "Sem avaria"}</dd></div>
+                                  <div><dt>Rastreio</dt><dd>{selectedRecord.tracking_code || "Não informado"}</dd></div>
+                                  <div><dt>Retirada</dt><dd>{formatDate(selectedRecord.collected_at)}</dd></div>
+                                  <div><dt>Retirado por</dt><dd>{selectedRecord.collected_by_name || "—"}</dd></div>
+                                  <div><dt>Confirmado pelo porteiro</dt><dd>{selectedRecord.collected_confirmed_by ? porterNames.get(selectedRecord.collected_confirmed_by) || "Porteiro" : "—"}</dd></div>
+                                  <div><dt>Aviso ao morador</dt><dd>{selectedRecord.last_notified_at ? formatDate(selectedRecord.last_notified_at) : "Não avisado"}</dd></div>
+                                </dl>
+                                <PackageReceipt
+                                  path={selectedRecord.receipt_path}
+                                  deletedAt={selectedRecord.photo_deleted_at}
+                                  isDamaged={selectedRecord.is_damaged}
+                                />
+                                {selectedRecord.status === "collected" && (
+                                  <div className="ledger-signature">
+                                    {Object.prototype.hasOwnProperty.call(
+                                      signatureCache,
+                                      selectedRecord.id,
+                                    ) ? (
+                                      signatureCache[selectedRecord.id] ? (
+                                        <>
+                                          <span>Assinatura do morador</span>
+                                          <img
+                                            src={signatureCache[selectedRecord.id] as string}
+                                            alt={`Assinatura de ${selectedRecord.collected_by_name || "quem retirou a encomenda"}`}
+                                          />
+                                        </>
+                                      ) : (
+                                        <span>Assinatura não disponível.</span>
+                                      )
+                                    ) : (
+                                      <button
+                                        className="text-button"
+                                        type="button"
+                                        disabled={signatureLoadingId === selectedRecord.id}
+                                        onClick={() => void loadSignature(selectedRecord.id)}
+                                      >
+                                        {signatureLoadingId === selectedRecord.id
+                                          ? "Carregando assinatura..."
+                                          : "Ver assinatura"}
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <Pagination
+                      page={recordPage}
+                      total={recordTotal}
+                      pageSize={RECORD_PAGE_SIZE}
+                      onChange={setRecordPage}
+                      label="Páginas de recebimentos da gaveta"
+                      disabled={recordsLoading}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
           </section>
         </>
       )}

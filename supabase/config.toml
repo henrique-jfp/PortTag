@@ -4,5 +4,8 @@ verify_jwt = false
 [functions.manage-porter]
 verify_jwt = true
 
+[functions.manage-manager]
+verify_jwt = true
+
 [functions.extract-package-label]
 verify_jwt = true
