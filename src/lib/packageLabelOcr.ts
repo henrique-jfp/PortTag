@@ -490,9 +490,24 @@ function binarizeCanvas(source: HTMLCanvasElement, mode: BinarizationMode) {
   return canvas;
 }
 
-async function loadImageSource(file: File) {
+async function loadImageSource(file: File, maxWidth?: number) {
   if (typeof createImageBitmap === "function") {
-    const bitmap = await createImageBitmap(file);
+    let bitmap: ImageBitmap;
+    try {
+      // Decodificar já reduzido evita manter o bitmap inteiro do celular
+      // (4000x3000 ≈ 48 MB) na memória só para desenhar num canvas de 1280 px.
+      // Quando só resizeWidth é passado, a altura acompanha a proporção.
+      bitmap =
+        maxWidth && maxWidth > 0
+          ? await createImageBitmap(file, {
+              resizeWidth: maxWidth,
+              resizeQuality: "high",
+            })
+          : await createImageBitmap(file);
+    } catch {
+      // WebView antigo sem opções de redimensionamento: decodifica inteiro.
+      bitmap = await createImageBitmap(file);
+    }
     return {
       element: bitmap as CanvasImageSource,
       width: bitmap.width,
@@ -633,7 +648,12 @@ export async function compressPackagePhoto(
 ): Promise<CompressedPackagePhoto> {
   const longEdge = options.longEdge ?? aiImageLongEdge;
   const quality = options.quality ?? aiImageQuality;
-  const source = await loadImageSource(file);
+  // Fotos pequenas não cabem mais de 1 MB e decodificar inteira é mais barato
+  // do que redimensionar — evita ampliar uma imagem já menor que o alvo.
+  const source = await loadImageSource(
+    file,
+    file.size > 800_000 ? longEdge : undefined,
+  );
   try {
     const scale = Math.min(
       1,

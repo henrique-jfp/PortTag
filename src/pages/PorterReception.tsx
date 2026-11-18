@@ -497,24 +497,20 @@ async function readLabelFromPhoto(
   options?: { compressed?: Awaited<ReturnType<typeof compressPackagePhoto>> },
 ): Promise<PackageDraft> {
   ctx.onProgress?.("Preparando a foto para leitura...");
-  let preparedImage: PreparedPackageImage | null = null;
-  let compressed: Awaited<ReturnType<typeof compressPackagePhoto>>;
-  if (options?.compressed) {
-    // O chamador já comprimiu para salvar o rascunho antes da leitura.
-    compressed = options.compressed;
-    preparedImage = await preparePackageImage(image);
-  } else {
-    // As duas etapas decodificam a mesma foto; rodando em paralelo poupamos
-    // 100-350 ms no celular sem mudar um único pixel das imagens usadas.
-    [compressed, preparedImage] = await Promise.all([
-      compressPackagePhoto(image),
-      preparePackageImage(image),
-    ]);
-  }
-  const prepared = preparedImage;
-  if (!prepared) {
-    throw new Error("Não foi possível preparar a imagem para leitura.");
-  }
+  const preparedRef: { current: PreparedPackageImage | null } = {
+    current: null,
+  };
+  // O chamador pode ter comprimido antes para salvar o rascunho no aparelho.
+  const compressed = options?.compressed ?? (await compressPackagePhoto(image));
+
+  // A foto original só precisa ser decodificada de novo para o código de barras
+  // ou para o OCR local. Quando a nuvem devolve rastreio e transportadora, esse
+  // segundo bitmap (dezenas de MB) nunca era usado — e derrubava o WebView.
+  const preparedFor = async () => {
+    preparedRef.current ??= await preparePackageImage(image);
+    return preparedRef.current;
+  };
+
   try {
 
     const aiResult = await settled(
@@ -540,7 +536,9 @@ async function readLabelFromPhoto(
     const needsBarcode =
       !aiResult.ok || !aiResult.value.trackingCode || !aiResult.value.carrier;
     const barcodeValues = needsBarcode
-      ? await readPackageCodes(prepared.preview).catch(() => [] as string[])
+      ? await readPackageCodes((await preparedFor()).preview).catch(
+          () => [] as string[],
+        )
       : [];
 
     if (aiResult.ok) {
@@ -558,7 +556,7 @@ async function readLabelFromPhoto(
     );
 
     const label = await readPackageLabel(
-      prepared,
+      await preparedFor(),
       {
         expectedCep: ctx.condominium.cep ?? "",
         barcodeValues,
@@ -567,7 +565,7 @@ async function readLabelFromPhoto(
     );
     return draftFromLocalOcr(label, ctx, compressed.file, image);
   } finally {
-    preparedImage?.dispose();
+    preparedRef.current?.dispose();
     // O WASM do Tesseract é grande. Não mantê-lo vivo entre fotos evita que
     // o WebView seja morto pelo sistema depois de algumas leituras.
     void releasePackageOcr().catch(() => {});
