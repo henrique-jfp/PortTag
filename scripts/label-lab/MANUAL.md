@@ -149,7 +149,13 @@ git add -A
 git commit -m "Reconhece novo modelo de etiqueta: TRANSPORTADORA"
 git push origin main
 npx supabase functions deploy extract-package-label --remote=ygtmyjrivavasjfwvioz --yes
+npx supabase functions deploy label-lab --remote=ygtmyjrivavasjfwvioz --yes
 ```
+
+> `label-lab` importa o mesmo `parser.ts`/`carrier.ts` da função de produção, mas
+> é um bundle separado. Se mudou uma regra e esqueceu de redeployar as duas, o
+> aplicativo já usa a regra nova e o relatório continua mostrando o resultado
+> antigo — exatamente o contrário do que o laboratório deve fazer.
 
 E, se houve mudança de frontend:
 

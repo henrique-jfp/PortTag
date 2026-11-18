@@ -229,6 +229,7 @@ Configure os segredos no projeto do Supabase (o `project-ref` é
 supabase link --project-ref ygtmyjrivavasjfwvioz
 supabase secrets set GROQ_API_KEY="$groq"
 supabase functions deploy extract-package-label
+supabase functions deploy label-lab
 ```
 
 Para `VISION_SERVICE_ACCOUNT_JSON`, **não** passe o JSON pela linha de comando:
@@ -247,8 +248,10 @@ Invoke-RestMethod -Method Post `
   -ContentType 'application/json' -Body $body
 ```
 
-Depois de trocar qualquer segredo, **republique a função** (`supabase functions
-deploy extract-package-label`). Se o app cair em "Leitura no aparelho (modo
+Depois de trocar qualquer segredo, **republique as funções** (`supabase functions
+deploy extract-package-label` e `supabase functions deploy label-lab`). As duas
+usam o mesmo `parser.ts`/`carrier.ts`, mas são bundles separados; redeployar só
+uma deixa o laboratório desatualizado. Se o app cair em "Leitura no aparelho (modo
 offline)", confira em **Diagnóstico da leitura**; o log da função registra
 `credencial da Vision ausente` quando o segredo não chegou íntegro.
 
