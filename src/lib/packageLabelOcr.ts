@@ -944,6 +944,11 @@ export async function extractPackageLabelWithAi<
   }
 }
 
+// Um único leitor para a sessão inteira. Criar um a cada rotação (4 por foto)
+// retém buffers do tamanho da imagem e derruba o WebView depois de poucas fotos.
+let sharedBarcodeReader: import("@zxing/browser").BrowserMultiFormatReader | null =
+  null;
+
 async function decodeBarcodes(canvas: HTMLCanvasElement) {
   const nativeFormats = [
     "qr_code",
@@ -979,7 +984,8 @@ async function decodeBarcodes(canvas: HTMLCanvasElement) {
   const { BarcodeFormat, BrowserMultiFormatReader } = await import(
     "@zxing/browser"
   );
-  const reader = new BrowserMultiFormatReader();
+  const reader = sharedBarcodeReader ?? new BrowserMultiFormatReader();
+  sharedBarcodeReader = reader;
   reader.possibleFormats = [
     BarcodeFormat.QR_CODE,
     BarcodeFormat.DATA_MATRIX,
@@ -1013,11 +1019,16 @@ export async function readPackageCodes(canvas: HTMLCanvasElement) {
   if (direct.length) return direct;
 
   for (const degrees of [90, 270, 180]) {
+    const rotated = rotateCanvas(canvas, degrees);
     try {
-      const rotated = await decodeBarcodes(rotateCanvas(canvas, degrees));
-      if (rotated.length) return rotated;
+      const codes = await decodeBarcodes(rotated);
+      if (codes.length) return codes;
     } catch {
       // Rotação sem leitura: segue para a próxima.
+    } finally {
+      // Força a liberação do buffer do canvas antes da próxima rotação.
+      rotated.width = 0;
+      rotated.height = 0;
     }
   }
 

@@ -149,7 +149,7 @@ function getPorterViewFromLocation(): PorterView {
 }
 
 const DEVICE_RESOURCE_MESSAGE =
-  "O aparelho não tinha recursos suficientes para processar a etiqueta. Feche outros aplicativos e tente novamente.";
+  "O navegador ficou sem memória para processar a etiqueta. Feche outros aplicativos e tente novamente.";
 
 function isDeviceResourceError(error: unknown) {
   const message =
@@ -501,25 +501,31 @@ async function readLabelFromPhoto(
   }
   try {
 
-    const [aiResult, barcodeValues] = await Promise.all([
-      settled(
-        extractPackageLabelWithAi({
-          client: supabase,
-          condominiumId: ctx.condominium.id,
-          imageBase64: compressed.base64,
-          mimeType: compressed.mimeType,
-          expectedAddress: {
-            cep: ctx.condominium.cep,
-            street: ctx.condominium.street,
-            address_number: ctx.condominium.address_number,
-          },
-          units: ctx.units,
-          blocks: ctx.blocks,
-          residents: ctx.residents,
-        }),
-      ),
-      readPackageCodes(prepared.preview).catch(() => [] as string[]),
-    ]);
+    const aiResult = await settled(
+      extractPackageLabelWithAi({
+        client: supabase,
+        condominiumId: ctx.condominium.id,
+        imageBase64: compressed.base64,
+        mimeType: compressed.mimeType,
+        expectedAddress: {
+          cep: ctx.condominium.cep,
+          street: ctx.condominium.street,
+          address_number: ctx.condominium.address_number,
+        },
+        units: ctx.units,
+        blocks: ctx.blocks,
+        residents: ctx.residents,
+      }),
+    );
+
+    // O leitor de barras aloca buffers do tamanho da foto. Se a Vision já
+    // trouxe rastreio e transportadora, as quatro tentativas locais não
+    // acrescentam nada e só consomem memória do WebView.
+    const needsBarcode =
+      !aiResult.ok || !aiResult.value.trackingCode || !aiResult.value.carrier;
+    const barcodeValues = needsBarcode
+      ? await readPackageCodes(prepared.preview).catch(() => [] as string[])
+      : [];
 
     if (aiResult.ok) {
       return draftFromAi(aiResult.value, barcodeValues, compressed.file, image);
@@ -546,6 +552,9 @@ async function readLabelFromPhoto(
     return draftFromLocalOcr(label, ctx, compressed.file, image);
   } finally {
     preparedImage?.dispose();
+    // O WASM do Tesseract é grande. Não mantê-lo vivo entre fotos evita que
+    // o WebView seja morto pelo sistema depois de algumas leituras.
+    void releasePackageOcr().catch(() => {});
   }
 }
 
