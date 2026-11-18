@@ -24,6 +24,7 @@ import {
   extractTrackingCode,
   findResidentUnitCandidates,
   findUnitCandidates,
+  matchKnownBarcode,
   preparePackageImage,
   readPackageCodes,
   readPackageLabel,
@@ -234,9 +235,13 @@ function draftFromAi(
   source: File,
 ): PackageDraft {
   const detectedRecipient = ai.recipientName.trim();
+  const barcodeMatch = matchKnownBarcode(barcodeValues);
   const localCode = barcodeValues.map(extractTrackingCode).find(Boolean) ?? "";
-  const code = ai.trackingCode || localCode;
+  // Código de barras lido na foto original vence a IA quando bate com um
+  // formato conhecido; sem correspondência, mantém a ordem anterior.
+  const code = barcodeMatch?.code || ai.trackingCode || localCode;
   const carrier =
+    barcodeMatch?.carrier ||
     ai.carrier ||
     detectDeliveryCompany(`${barcodeValues.join("\n")}\n${code}`);
 
@@ -244,8 +249,13 @@ function draftFromAi(
     `origem: nuvem (${ai.durationMs} ms)`,
     `destinatario: ${ai.recipientName || "-"}`,
     `unidade: ${ai.unitNumber || "-"}${ai.blockName ? ` / ${ai.blockName}` : ""}`,
-    `transportadora: ${ai.carrier || "-"}`,
-    `rastreio: ${ai.trackingCode || "-"}`,
+    `transportadora: ${carrier || "-"}`,
+    `rastreio: ${code || "-"}${barcodeMatch ? " (código de barras)" : ""}`,
+    `codigo barras: ${
+      barcodeMatch
+        ? `${barcodeMatch.code} / ${barcodeMatch.carrier}`
+        : barcodeValues.join(" | ") || "-"
+    }`,
     `cep destino: ${ai.destinationCep || "-"}`,
     `endereco destino: ${
       [ai.destinationStreet, ai.destinationNumber].filter(Boolean).join(", ") || "-"
@@ -259,6 +269,7 @@ function draftFromAi(
     ai.unitCandidates.length === 1 ? "apartamento" : "",
     carrier ? "empresa" : "",
     code ? "rastreio" : "",
+    barcodeMatch ? "código de barras" : "",
     ai.addressStatus === "verified" ? "endereço" : "",
   ].filter(Boolean);
 
@@ -338,12 +349,14 @@ function draftFromLocalOcr(
   const candidates = residentCandidates.length
     ? residentCandidates
     : numberCandidates;
+  const barcodeMatch = matchKnownBarcode(label.barcodeValues);
   const code =
+    barcodeMatch?.code ||
     label.barcodeValues.map(extractTrackingCode).find(Boolean) ||
     extractTrackingCode(recognizedText);
-  const detectedCompany = detectDeliveryCompany(
-    `${barcodeText}\n${recognizedText}\n${code}`,
-  );
+  const detectedCompany =
+    barcodeMatch?.carrier ||
+    detectDeliveryCompany(`${barcodeText}\n${recognizedText}\n${code}`);
 
   let ocrMessage: string;
   if (label.error) {
@@ -364,6 +377,7 @@ function draftFromLocalOcr(
       candidates.length === 1 ? "apartamento" : "",
       detectedCompany ? "empresa" : "",
       code ? "rastreio" : "",
+      barcodeMatch ? "código de barras" : "",
       verification.status === "verified" ? "endereço" : "",
     ].filter(Boolean);
     const characters = recognizedText.replace(/\s/g, "").length;
@@ -388,58 +402,71 @@ function draftFromLocalOcr(
   };
 }
 
+type Settled<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: unknown };
+
+function settled<T>(promise: Promise<T>): Promise<Settled<T>> {
+  return promise.then(
+    (value) => ({ ok: true, value } as const),
+    (error: unknown) => ({ ok: false, error } as const),
+  );
+}
+
 /**
- * Uma foto, uma leitura: Vision primeiro, OCR local como fallback. Não toca no
- * estado do React para que a mesma função sirva à fila de importação.
+ * Uma foto, uma leitura: Vision primeiro, OCR local como fallback. O código de
+ * barras é lido da foto original em paralelo com a IA, porque a compressão
+ * para a nuvem pode apagar linhas finas do código. Não toca no estado do React
+ * para que a mesma função sirva à fila de importação.
  */
 async function readLabelFromPhoto(
   image: File,
   ctx: LabelReadContext,
 ): Promise<PackageDraft> {
-  const compressed = await compressPackagePhoto(image);
   ctx.onProgress?.("Preparando a foto para leitura...");
+  const compressed = await compressPackagePhoto(image);
 
   let preparedImage: PreparedPackageImage | null = null;
   try {
-    preparedImage = await preparePackageImage(compressed.file);
+    const prepared = await preparePackageImage(image);
+    preparedImage = prepared;
 
-    let barcodeValues: string[] = [];
-    try {
-      barcodeValues = await readPackageCodes(preparedImage.preview);
-    } catch {
-      // Código ilegível não impede a leitura do texto.
+    const [aiResult, barcodeValues] = await Promise.all([
+      settled(
+        extractPackageLabelWithAi({
+          client: supabase,
+          condominiumId: ctx.condominium.id,
+          imageBase64: compressed.base64,
+          mimeType: compressed.mimeType,
+          expectedAddress: {
+            cep: ctx.condominium.cep,
+            street: ctx.condominium.street,
+            address_number: ctx.condominium.address_number,
+          },
+          units: ctx.units,
+          blocks: ctx.blocks,
+          residents: ctx.residents,
+        }),
+      ),
+      readPackageCodes(prepared.preview).catch(() => [] as string[]),
+    ]);
+
+    if (aiResult.ok) {
+      return draftFromAi(aiResult.value, barcodeValues, compressed.file, image);
     }
 
-    try {
-      const ai = await extractPackageLabelWithAi({
-        client: supabase,
-        condominiumId: ctx.condominium.id,
-        imageBase64: compressed.base64,
-        mimeType: compressed.mimeType,
-        expectedAddress: {
-          cep: ctx.condominium.cep,
-          street: ctx.condominium.street,
-          address_number: ctx.condominium.address_number,
-        },
-        units: ctx.units,
-        blocks: ctx.blocks,
-        residents: ctx.residents,
-      });
-      return draftFromAi(ai, barcodeValues, compressed.file, image);
-    } catch (aiError) {
-      const detail =
-        aiError instanceof Error
-          ? aiError.message.replace(/\s+/g, " ").trim()
-          : "";
-      ctx.onProgress?.(
-        `Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)${
-          detail ? `: ${detail.slice(0, 120)}` : ""
-        }...`,
-      );
-    }
+    const detail =
+      aiResult.error instanceof Error
+        ? aiResult.error.message.replace(/\s+/g, " ").trim()
+        : "";
+    ctx.onProgress?.(
+      `Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)${
+        detail ? `: ${detail.slice(0, 120)}` : ""
+      }...`,
+    );
 
     const label = await readPackageLabel(
-      preparedImage,
+      prepared,
       { expectedCep: ctx.condominium.cep ?? "" },
       (status) => ctx.onProgress?.(status),
     );

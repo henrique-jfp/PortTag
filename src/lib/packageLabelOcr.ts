@@ -214,6 +214,38 @@ export function extractTrackingCode(value: string) {
   return "";
 }
 
+export type KnownBarcodeMatch = {
+  code: string;
+  carrier: string;
+};
+
+/**
+ * Códigos lidos do código de barras não passam por OCR: quando o valor inteiro
+ * bate com um formato conhecido, são mais confiáveis que a IA. A comparação é
+ * exata de propósito, para não confundir com chave de NF-e ou payload de QR
+ * que contenha um código de 11 dígitos no meio.
+ */
+const knownBarcodeFormats: Array<{ pattern: RegExp; carrier: string }> = [
+  { pattern: /^[A-Z]{2}\d{9}BR$/, carrier: "Correios" },
+  { pattern: /^TBR\d{9,12}$/, carrier: "Amazon" },
+  { pattern: /^AMZC\d{9}[A-Z]{2}$/, carrier: "Amazon" },
+  { pattern: /^BR\d{12}[A-Z0-9]$/, carrier: "Shopee" },
+  { pattern: /^AJ\d{15}$/, carrier: "Anjun" },
+  { pattern: /^(?:999|888)\d{12}$/, carrier: "J&T Express" },
+  { pattern: /^\d{13,14}$/, carrier: "iMile" },
+  { pattern: /^\d{11}$/, carrier: "Mercado Livre" },
+];
+
+export function matchKnownBarcode(values: string[]): KnownBarcodeMatch | null {
+  for (const value of values) {
+    const code = value.replace(/[\s-]/g, "").toUpperCase();
+    if (!code) continue;
+    const format = knownBarcodeFormats.find(({ pattern }) => pattern.test(code));
+    if (format) return { code, carrier: format.carrier };
+  }
+  return null;
+}
+
 export function detectDeliveryCompany(value: string) {
   const normalized = normalizeText(value);
   const trackingCode = extractTrackingCode(value);

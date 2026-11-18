@@ -116,6 +116,8 @@ O app do Porteiro é mobile-first: tira a foto com a câmera do celular e compri
 a imagem antes do processamento. A leitura da etiqueta é tentada primeiro na
 nuvem, com Gemini Vision, e sugere destinatário, unidade, empresa e rastreio;
 se a nuvem falhar ou não estiver configurada, o app usa OCR local como fallback.
+O código de barras é lido da foto original em paralelo com a IA e, quando bate
+com um formato conhecido, prevalece sobre rastreio e empresa sugeridos pela IA.
 Confirme o apartamento e informe o nome do entregador; empresa e código de
 rastreio são opcionais se não forem detectados. Ao confirmar que recebeu o volume
 do entregador, o porteiro pode marcar o aviso ao morador: a mensagem é preparada
