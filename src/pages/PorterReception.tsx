@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { CameraCapture } from "../components/CameraCapture";
 import { Pagination } from "../components/Pagination";
 import {
   RECORD_PAGE_SIZE,
@@ -38,7 +39,6 @@ import {
   readPackageCodes,
   readPackageLabel,
   releasePackageOcr,
-  warmPackageOcr,
   type AiLabelExtraction,
   type LabelReadResult,
   type PreparedPackageImage,
@@ -149,7 +149,10 @@ function getPorterViewFromLocation(): PorterView {
   return view === "ledger" || view === "pending" ? view : "home";
 }
 
-function isStorageCapacityError(error: unknown) {
+const DEVICE_RESOURCE_MESSAGE =
+  "O aparelho não tinha recursos suficientes para processar a etiqueta. Feche outros aplicativos e tente novamente.";
+
+function isDeviceResourceError(error: unknown) {
   const message =
     error instanceof Error
       ? `${error.name} ${error.message}`
@@ -158,16 +161,17 @@ function isStorageCapacityError(error: unknown) {
             "message" in error ? String(error.message) : ""
           }`
         : String(error ?? "");
-  // A câmera do Android e o Tesseract usam palavras diferentes em pt-BR.
-  // Incluir "espaço" evita mostrar o erro cru do sistema na tela.
-  return /quota|storage|armazenamento|insufficient space|no space|not enough (storage|space)|falta de espaço|sem espaço|espaço insuficiente|espaço disponível/i.test(
+  // Tesseract erra com "memory/alloc"; a câmera do Android fala em
+  // "espaço/storage". Nenhum dos dois quer dizer que o celular está sem
+  // espaço de armazenamento — mostrar essa mensagem engana o porteiro.
+  return /quota|out of memory|memory|mem[oó]ria|alloc|storage|armazenamento|insufficient space|no space|not enough (storage|space)|falta de espaço|sem espaço|espaço insuficiente|espaço disponível/i.test(
     message,
   );
 }
 
 function friendlyError(error: unknown, fallback: string) {
-  if (isStorageCapacityError(error)) {
-    return "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.";
+  if (isDeviceResourceError(error)) {
+    return DEVICE_RESOURCE_MESSAGE;
   }
   return error instanceof Error && error.message.trim()
     ? `${fallback} ${error.message}`
@@ -414,9 +418,8 @@ function draftFromLocalOcr(
 
   let ocrMessage: string;
   if (label.error) {
-    if (isStorageCapacityError(label.error)) {
-      ocrMessage =
-        "Não foi possível concluir a leitura por falta de espaço no aparelho.";
+    if (isDeviceResourceError(label.error)) {
+      ocrMessage = DEVICE_RESOURCE_MESSAGE;
     } else if (code || detectedCompany || candidates.length) {
       ocrMessage =
         "Leitura no aparelho (modo offline): código da etiqueta lido, mas o texto não foi reconhecido; confira os dados.";
@@ -476,18 +479,28 @@ function settled<T>(promise: Promise<T>): Promise<Settled<T>> {
 async function readLabelFromPhoto(
   image: File,
   ctx: LabelReadContext,
+  options?: { compressed?: Awaited<ReturnType<typeof compressPackagePhoto>> },
 ): Promise<PackageDraft> {
   ctx.onProgress?.("Preparando a foto para leitura...");
   let preparedImage: PreparedPackageImage | null = null;
   let compressed: Awaited<ReturnType<typeof compressPackagePhoto>>;
-  try {
+  if (options?.compressed) {
+    // O chamador já comprimiu para salvar o rascunho antes da leitura.
+    compressed = options.compressed;
+    preparedImage = await preparePackageImage(image);
+  } else {
     // As duas etapas decodificam a mesma foto; rodando em paralelo poupamos
     // 100-350 ms no celular sem mudar um único pixel das imagens usadas.
     [compressed, preparedImage] = await Promise.all([
       compressPackagePhoto(image),
       preparePackageImage(image),
     ]);
-    const prepared = preparedImage;
+  }
+  const prepared = preparedImage;
+  if (!prepared) {
+    throw new Error("Não foi possível preparar a imagem para leitura.");
+  }
+  try {
 
     const [aiResult, barcodeValues] = await Promise.all([
       settled(
@@ -763,6 +776,7 @@ export function PorterReception() {
   );
   const restoredSignature = useRef("");
   const [draftRecovered, setDraftRecovered] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const selectedUnit = useMemo(
     () => units.find((unit) => unit.id === unitId) ?? null,
@@ -872,11 +886,10 @@ export function PorterReception() {
     };
   }, []);
 
-  // O worker do Tesseract custa segundos para carregar o WASM. Ele só morre
-  // quando o app fecha ou quando dá erro de memória; cada foto reutiliza o
-  // mesmo worker.
+  // Não aquecemos o Tesseract ao abrir a tela: carregar o WASM consume memória
+  // e já fez o Android descartar o PWA ao voltar da câmera. O worker só é
+  // criado se a leitura na nuvem falhar.
   useEffect(() => {
-    warmPackageOcr();
     return () => {
       void releasePackageOcr().catch(() => {});
     };
@@ -1243,7 +1256,18 @@ export function PorterReception() {
 
   function openCamera() {
     setPageError("");
+    setCameraOpen(true);
+  }
+
+  function openNativeCamera() {
+    setCameraOpen(false);
+    setPageError("");
     imageInput.current?.click();
+  }
+
+  function handleCameraCapture(photo: File) {
+    setCameraOpen(false);
+    void processPhoto(photo);
   }
 
   async function showUnitDetails(unit: Unit) {
@@ -1535,9 +1559,41 @@ export function PorterReception() {
     }
   }
 
-  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+  function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
     const image = event.target.files?.[0] ?? null;
     event.target.value = "";
+    void processPhoto(image);
+  }
+
+  /**
+   * Grava a foto no rascunho antes de iniciar a leitura. Se o Android matar o
+   * PWA durante o OCR, o porteiro reabre o app e a etiqueta continua ali.
+   */
+  async function saveEarlyPhotoDraft(photo: File) {
+    if (!account) return;
+    const draft = await buildCurrentDraft();
+    if (!draft) return;
+    draft.labelPhoto = await fileToDataUrl(photo);
+    draft.unitId = "";
+    draft.unitCandidates = [];
+    draft.recipientName = "";
+    draft.recipientNameDetected = false;
+    draft.recipientIsResident = false;
+    draft.company = "";
+    draft.trackingCode = "";
+    draft.trackingCodeDetected = false;
+    draft.addressVerification = null;
+    draft.lastLabelRead = null;
+    draft.ocrMessage = "Foto guardada neste aparelho. Lendo a etiqueta...";
+    draft.mismatchAcknowledged = false;
+    draft.duplicateWarning = "";
+    draft.notifyOnReceive = false;
+    draft.isDamaged = false;
+    draft.damagePhoto = "";
+    await saveReceptionDraft(draft);
+  }
+
+  async function processPhoto(image: File | null) {
     resetReceptionFields();
     setFile(null);
     clearPreviewUrl();
@@ -1557,22 +1613,44 @@ export function PorterReception() {
     const requestId = ++readRequestId.current;
     setIsReading(true);
     setOcrMessage("Preparando a foto para leitura...");
+
+    let compressed: Awaited<ReturnType<typeof compressPackagePhoto>>;
     try {
-      const draft = await readLabelFromPhoto(image, {
-        condominium,
-        units,
-        blocks,
-        residents: authorizedResidents,
-        onProgress: (message) => {
-          if (requestId === readRequestId.current) setOcrMessage(message);
+      compressed = await compressPackagePhoto(image);
+    } catch (error) {
+      if (requestId === readRequestId.current) {
+        setIsReading(false);
+        setPageError(
+          friendlyError(
+            error,
+            "Não foi possível preparar a foto. Tente novamente.",
+          ),
+        );
+      }
+      return;
+    }
+    if (requestId !== readRequestId.current) return;
+
+    void saveEarlyPhotoDraft(compressed.file).catch(() => {});
+
+    try {
+      const draft = await readLabelFromPhoto(
+        image,
+        {
+          condominium,
+          units,
+          blocks,
+          residents: authorizedResidents,
+          onProgress: (message) => {
+            if (requestId === readRequestId.current) setOcrMessage(message);
+          },
         },
-      });
+        { compressed },
+      );
       if (requestId !== readRequestId.current) return;
       applyDraftToForm(draft, URL.createObjectURL(draft.file));
-      if (isStorageCapacityError(draft.labelRead?.error)) {
-        setPageError(
-          "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.",
-        );
+      if (isDeviceResourceError(draft.labelRead?.error)) {
+        setPageError(DEVICE_RESOURCE_MESSAGE);
       }
     } catch (error) {
       if (requestId !== readRequestId.current) return;
@@ -1867,11 +1945,11 @@ export function PorterReception() {
       return;
     }
 
-    if (isStorageCapacityError(draft.labelRead?.error)) {
+    if (isDeviceResourceError(draft.labelRead?.error)) {
       updateBulkItem(item.id, {
         status: "error",
         draft,
-        message: "Sem espaço no aparelho para processar a etiqueta.",
+        message: DEVICE_RESOURCE_MESSAGE,
       });
       return;
     }
@@ -3498,6 +3576,13 @@ export function PorterReception() {
           </section>
         )}
       </div>
+      {cameraOpen && (
+        <CameraCapture
+          onCapture={handleCameraCapture}
+          onClose={() => setCameraOpen(false)}
+          onFallback={openNativeCamera}
+        />
+      )}
     </main>
   );
 }

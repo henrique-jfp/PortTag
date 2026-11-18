@@ -1485,6 +1485,71 @@ input {
   cursor: not-allowed;
 }
 
+.porter-camera-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(10, 18, 30, 0.85);
+}
+
+.porter-camera-panel {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 520px);
+  max-height: 100%;
+  padding: 16px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  overflow-y: auto;
+}
+
+.porter-camera-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #172033;
+  font-size: 17px;
+}
+
+.porter-camera-close {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  background: #edf1f7;
+  color: #344054;
+  cursor: pointer;
+}
+
+.porter-camera-video {
+  width: 100%;
+  max-height: 55vh;
+  border-radius: 12px;
+  background: #0b1220;
+  object-fit: contain;
+}
+
+.porter-camera-hint,
+.porter-camera-footnote {
+  margin: 0;
+  color: #697386;
+  font-size: 13px;
+  text-align: center;
+}
+
+.porter-camera-actions {
+  display: grid;
+  gap: 10px;
+}
+
 .porter-search-form {
   display: grid;
   gap: 8px;
