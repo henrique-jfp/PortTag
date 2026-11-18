@@ -38,6 +38,7 @@ import {
   readPackageCodes,
   readPackageLabel,
   releasePackageOcr,
+  warmPackageOcr,
   type AiLabelExtraction,
   type LabelReadResult,
   type PreparedPackageImage,
@@ -54,6 +55,16 @@ import {
   type PackageNotification,
 } from "../lib/packageNotifications";
 import { supabase } from "../lib/supabase";
+import {
+  clearReceptionDraft,
+  dataUrlToFile,
+  fileToDataUrl,
+  loadReceptionDraft,
+  saveReceptionDraft,
+  type DraftUnit,
+  type DraftView,
+  type ReceptionDraft,
+} from "../lib/receptionDraft";
 
 /** Evento não padronizado emitido pelo Chrome quando o app pode ser instalado. */
 type InstallPromptEvent = Event & {
@@ -142,10 +153,25 @@ function isStorageCapacityError(error: unknown) {
   const message =
     error instanceof Error
       ? `${error.name} ${error.message}`
-      : String(error ?? "");
-  return /quota|storage|armazenamento|insufficient space|no space/i.test(
+      : typeof error === "object" && error !== null
+        ? `${"name" in error ? String(error.name) : ""} ${
+            "message" in error ? String(error.message) : ""
+          }`
+        : String(error ?? "");
+  // A câmera do Android e o Tesseract usam palavras diferentes em pt-BR.
+  // Incluir "espaço" evita mostrar o erro cru do sistema na tela.
+  return /quota|storage|armazenamento|insufficient space|no space|not enough (storage|space)|falta de espaço|sem espaço|espaço insuficiente|espaço disponível/i.test(
     message,
   );
+}
+
+function friendlyError(error: unknown, fallback: string) {
+  if (isStorageCapacityError(error)) {
+    return "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.";
+  }
+  return error instanceof Error && error.message.trim()
+    ? `${fallback} ${error.message}`
+    : fallback;
 }
 
 function deliveryPersonStorageKey(condominiumId: string) {
@@ -452,12 +478,16 @@ async function readLabelFromPhoto(
   ctx: LabelReadContext,
 ): Promise<PackageDraft> {
   ctx.onProgress?.("Preparando a foto para leitura...");
-  const compressed = await compressPackagePhoto(image);
-
   let preparedImage: PreparedPackageImage | null = null;
+  let compressed: Awaited<ReturnType<typeof compressPackagePhoto>>;
   try {
-    const prepared = await preparePackageImage(image);
-    preparedImage = prepared;
+    // As duas etapas decodificam a mesma foto; rodando em paralelo poupamos
+    // 100-350 ms no celular sem mudar um único pixel das imagens usadas.
+    [compressed, preparedImage] = await Promise.all([
+      compressPackagePhoto(image),
+      preparePackageImage(image),
+    ]);
+    const prepared = preparedImage;
 
     const [aiResult, barcodeValues] = await Promise.all([
       settled(
@@ -495,7 +525,10 @@ async function readLabelFromPhoto(
 
     const label = await readPackageLabel(
       prepared,
-      { expectedCep: ctx.condominium.cep ?? "" },
+      {
+        expectedCep: ctx.condominium.cep ?? "",
+        barcodeValues,
+      },
       (status) => ctx.onProgress?.(status),
     );
     return draftFromLocalOcr(label, ctx, compressed.file, image);
@@ -724,6 +757,12 @@ export function PorterReception() {
   );
   const bulkCancelled = useRef(false);
   const unitDetailsRequest = useRef(0);
+  const draftReady = useRef(false);
+  const buildDraftRef = useRef<() => Promise<ReceptionDraft | null>>(
+    () => Promise.resolve(null),
+  );
+  const restoredSignature = useRef("");
+  const [draftRecovered, setDraftRecovered] = useState(false);
 
   const selectedUnit = useMemo(
     () => units.find((unit) => unit.id === unitId) ?? null,
@@ -837,6 +876,7 @@ export function PorterReception() {
   // quando o app fecha ou quando dá erro de memória; cada foto reutiliza o
   // mesmo worker.
   useEffect(() => {
+    warmPackageOcr();
     return () => {
       void releasePackageOcr().catch(() => {});
     };
@@ -1017,6 +1057,12 @@ export function PorterReception() {
           ),
         );
       }
+
+      if (!draftReady.current) {
+        const draft = await loadReceptionDraft(porterData.condominium_id);
+        if (draft) await restoreDraft(draft);
+        else draftReady.current = true;
+      }
       setLoading(false);
     }
 
@@ -1030,6 +1076,45 @@ export function PorterReception() {
       active = false;
     };
   }, [user]);
+
+  // Salva o rascunho no aparelho para que trocar de app ou perder a conexão
+  // não desfaca o que o porteiro já preencheu. A gravação é debounced e
+  // silenciosa: se o storage falhar, o fluxo continua normalmente.
+  useEffect(() => {
+    if (!draftReady.current) return;
+    const timer = window.setTimeout(() => {
+      void buildDraftRef.current().then((draft) => {
+        if (draft) return saveReceptionDraft(draft);
+      });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [
+    account,
+    activeView,
+    file,
+    unitId,
+    unitCandidates,
+    recipientName,
+    recipientNameDetected,
+    recipientIsResident,
+    company,
+    deliveryPerson,
+    trackingCode,
+    trackingCodeDetected,
+    addressVerification,
+    lastLabelRead,
+    ocrMessage,
+    mismatchAcknowledged,
+    notifyOnReceive,
+    duplicateWarning,
+    isDamaged,
+    damageFile,
+    collectionBaseId,
+    collectionSelectionOverride,
+    collectionName,
+    porterConfirmed,
+    hasSignature,
+  ]);
 
   useEffect(() => {
     if (!account || activeView !== "ledger") return;
@@ -1339,6 +1424,104 @@ export function PorterReception() {
     setDuplicateWarning("");
   }
 
+  async function buildCurrentDraft(): Promise<ReceptionDraft | null> {
+    if (!account) return null;
+    const params = new URLSearchParams(window.location.search);
+    const rawView = params.get("view");
+    const view: DraftView =
+      rawView === "ledger" || rawView === "pending" || rawView === "home"
+        ? rawView
+        : activeView;
+    return {
+      savedAt: Date.now(),
+      condominiumId: account.condominium_id,
+      activeView: view,
+      labelPhoto: file ? await fileToDataUrl(file) : "",
+      unitId,
+      unitCandidates: unitCandidates as DraftUnit[],
+      recipientName,
+      recipientNameDetected,
+      recipientIsResident,
+      company,
+      deliveryPerson,
+      trackingCode,
+      trackingCodeDetected,
+      addressVerification,
+      lastLabelRead,
+      ocrMessage,
+      mismatchAcknowledged,
+      notifyOnReceive,
+      duplicateWarning,
+      isDamaged,
+      damagePhoto: damageFile ? await fileToDataUrl(damageFile) : "",
+      collectionBaseId,
+      collectionSelectionOverride,
+      collectionName,
+      porterConfirmed,
+      hasSignature,
+      signature:
+        hasSignature && signatureCanvas.current
+          ? signatureDataUrl(signatureCanvas.current)
+          : "",
+    };
+  }
+  useEffect(() => {
+    buildDraftRef.current = buildCurrentDraft;
+  });
+
+  async function restoreDraft(draft: ReceptionDraft) {
+    const params = new URLSearchParams(window.location.search);
+    const rawView = params.get("view");
+    setActiveView(
+      rawView === "ledger" || rawView === "pending" || rawView === "home"
+        ? rawView
+        : draft.activeView,
+    );
+    setUnitCandidates(
+      (draft.unitCandidates ?? []) as unknown as Unit[],
+    );
+    setUnitId(draft.unitId);
+    setRecipientName(draft.recipientName);
+    setRecipientNameDetected(draft.recipientNameDetected);
+    setRecipientIsResident(draft.recipientIsResident);
+    setCompany(draft.company);
+    setDeliveryPerson(draft.deliveryPerson);
+    setTrackingCode(draft.trackingCode);
+    setTrackingCodeDetected(draft.trackingCodeDetected);
+    setAddressVerification(draft.addressVerification);
+    setLastLabelRead(draft.lastLabelRead);
+    setOcrMessage(draft.ocrMessage);
+    setMismatchAcknowledged(draft.mismatchAcknowledged);
+    setNotifyOnReceive(draft.notifyOnReceive);
+    setDuplicateWarning(draft.duplicateWarning);
+    setIsDamaged(draft.isDamaged);
+    setCollectionBaseId(params.get("collect") ?? draft.collectionBaseId);
+    setCollectionSelectionOverride(draft.collectionSelectionOverride ?? null);
+    setCollectionName(draft.collectionName);
+    setPorterConfirmed(draft.porterConfirmed);
+    setHasSignature(draft.hasSignature);
+    restoredSignature.current = draft.signature ?? "";
+
+    if (draft.labelPhoto) {
+      try {
+        setFile(await dataUrlToFile(draft.labelPhoto, "etiqueta.jpg"));
+        setPreviewUrl(draft.labelPhoto);
+      } catch {
+        // Sem foto não há prévia, mas os campos preenchidos são preservados.
+      }
+    }
+    if (draft.damagePhoto) {
+      try {
+        setDamageFile(await dataUrlToFile(draft.damagePhoto, "avaria.jpg"));
+        setDamagePreviewUrl(draft.damagePhoto);
+      } catch {
+        // A foto da avaria pode ser refeita sem perder o restante.
+      }
+    }
+    setDraftRecovered(true);
+    draftReady.current = true;
+  }
+
   function rememberDeliveryPerson(value: string) {
     if (!account || !value) return;
     setSavedDeliveryPersonRevision((current) => current + 1);
@@ -1393,20 +1576,16 @@ export function PorterReception() {
       }
     } catch (error) {
       if (requestId !== readRequestId.current) return;
-      if (isStorageCapacityError(error)) {
-        setPageError(
-          "O celular está sem espaço disponível para processar a etiqueta. Libere espaço e tente novamente.",
-        );
-      }
+      const message = friendlyError(
+        error,
+        "Não foi possível processar a foto. Tente novamente.",
+      );
+      setPageError(message);
       setAddressVerification({
         status: "unknown",
         message: defaultAddressMessage("unknown"),
       });
-      setOcrMessage(
-        error instanceof Error
-          ? `Não foi possível processar a foto. ${error.message}`
-          : "Não foi possível processar a foto. Tente novamente.",
-      );
+      setOcrMessage(message);
     } finally {
       if (requestId === readRequestId.current) setIsReading(false);
     }
@@ -1479,6 +1658,8 @@ export function PorterReception() {
       });
 
       rememberDeliveryPerson(deliveryPerson.trim());
+      if (account) void clearReceptionDraft(account.condominium_id);
+      setDraftRecovered(false);
       setSuccessMessage(
         `Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`,
       );
@@ -1488,8 +1669,9 @@ export function PorterReception() {
       clearPreviewUrl();
       setFile(null);
       setDeliveryPerson(trimmedDeliveryPerson || lastDeliveryPerson);
-      await reloadPackages();
+      // notifyPackage já recarrega a lista; evitar um segundo fetch seguido.
       if (shouldNotify && result.id) await notifyPackage(result.id);
+      else await reloadPackages();
     } catch (error) {
       if (error instanceof DuplicatePackageError) {
         setDuplicateWarning(error.message);
@@ -1860,6 +2042,20 @@ export function PorterReception() {
     context.lineCap = "round";
     context.lineJoin = "round";
     context.strokeStyle = "#172033";
+
+    const restored = restoredSignature.current;
+    restoredSignature.current = "";
+    if (restored) {
+      const image = new Image();
+      image.onload = () => {
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        signatureHasInk.current = true;
+        setHasSignature(true);
+      };
+      image.src = restored;
+      return;
+    }
+
     signatureHasInk.current = false;
     setHasSignature(false);
     setPorterConfirmed(false);
@@ -1900,6 +2096,9 @@ export function PorterReception() {
   }
 
   function cancelCollection() {
+    if (account) void clearReceptionDraft(account.condominium_id);
+    setDraftRecovered(false);
+    restoredSignature.current = "";
     const url = new URL(window.location.href);
     if (url.searchParams.get("collect") === collectionBaseId) {
       window.history.back();
@@ -2023,6 +2222,8 @@ export function PorterReception() {
   /** Volta ao início sem registrar nada, mesmo se a leitura ainda estiver rodando. */
   function cancelReception() {
     readRequestId.current += 1;
+    if (account) void clearReceptionDraft(account.condominium_id);
+    setDraftRecovered(false);
     resetPhoto();
     setIsReading(false);
     setIsSaving(false);
@@ -2081,6 +2282,23 @@ export function PorterReception() {
           <p className="porter-success" role="status">
             <Check size={18} />
             {successMessage}
+          </p>
+        )}
+        {draftRecovered && (
+          <p className="porter-success" role="status">
+            <Check size={18} />
+            Rascunho recuperado deste aparelho. Continue de onde parou.
+            <button
+              type="button"
+              className="porter-text-button"
+              onClick={() => {
+                if (account) void clearReceptionDraft(account.condominium_id);
+                setDraftRecovered(false);
+                resetPhoto();
+              }}
+            >
+              Descartar
+            </button>
           </p>
         )}
 
@@ -2161,7 +2379,9 @@ export function PorterReception() {
                     </div>
                   </div>
                   <p className="porter-ocr-status" role="status">
-                    {isReading ? "Analisando a foto..." : ocrMessage}
+                    {isReading
+                      ? ocrMessage || "Analisando a foto..."
+                      : ocrMessage}
                   </p>
                   {lastLabelRead && !isReading && (
                     <details className="porter-diagnostics">

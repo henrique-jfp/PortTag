@@ -76,6 +76,8 @@ export type LabelReadResult = {
 
 export type LabelReadOptions = {
   expectedCep?: string;
+  /** Códigos já lidos na foto original; evita decodificar o mesmo canvas de novo. */
+  barcodeValues?: string[];
 };
 
 const courierNames = [
@@ -323,6 +325,13 @@ async function getOcrWorker() {
   }
 
   return workerPromise;
+}
+
+/** Aquece o worker local enquanto o porteiro ainda está escolhendo a foto. */
+export function warmPackageOcr() {
+  void getOcrWorker().catch(() => {
+    // Se não houver memória/cache, o fallback tenta de novo quando precisar.
+  });
 }
 
 function createCanvas(width: number, height: number) {
@@ -1277,17 +1286,19 @@ export async function readPackageLabel(
   const expectedCep = (options.expectedCep ?? "").replace(/\D/g, "");
   const variants: string[] = [];
 
-  let barcodeValues: string[] = [];
+  let barcodeValues: string[] = options.barcodeValues ?? [];
   let numericText = "";
   let cropped = false;
   let error: unknown = null;
 
   try {
-    onProgress("Lendo QR e códigos de barras...", 0.02);
-    try {
-      barcodeValues = await readPackageCodes(prepared.preview);
-    } catch {
-      // Código de barras é bônus: sem ele seguimos com o texto.
+    if (!barcodeValues.length) {
+      onProgress("Lendo QR e códigos de barras...", 0.02);
+      try {
+        barcodeValues = await readPackageCodes(prepared.preview);
+      } catch {
+        // Código de barras é bônus: sem ele seguimos com o texto.
+      }
     }
 
     progressListeners.add(onProgress);

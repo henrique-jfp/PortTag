@@ -70,7 +70,8 @@ export async function interpretWithGroq(
         body: JSON.stringify({
           model: Deno.env.get("GROQ_MODEL") ?? "openai/gpt-oss-120b",
           temperature: 0,
-          max_tokens: 1500,
+          // São 8 campos curtos; 1500 tokens só alongava a exceção.
+          max_tokens: 400,
           response_format: { type: "json_object" },
           reasoning_effort: "low",
           messages: [

@@ -19,6 +19,21 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+/**
+ * O Supabase renova o token e emite TOKEN_REFRESHED com um objeto de usuário
+ * novo, mas com o mesmo id. Sem estabilizar a identidade, todo refresh (~1x/hora
+ * e ao voltar do background) recarrega a tela do porteiro sem ele pedir.
+ */
+function stabilizeUser(current: User | null, next: User | null): User | null {
+  if (
+    current?.id === next?.id &&
+    current?.updated_at === next?.updated_at
+  ) {
+    return current;
+  }
+  return next;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -33,11 +48,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!mounted) return;
 
       if (error) {
-        console.error("Erro ao recuperar sessÃ£o:", error);
+        console.error("Erro ao recuperar sessão:", error);
       }
 
       setSession(data.session);
-      setUser(data.session?.user ?? null);
+      setUser((current) => stabilizeUser(current, data.session?.user ?? null));
       setLoading(false);
     }
 
@@ -49,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!mounted) return;
 
       setSession(currentSession);
-      setUser(currentSession?.user ?? null);
+      setUser((current) => stabilizeUser(current, currentSession?.user ?? null));
       setLoading(false);
     });
 

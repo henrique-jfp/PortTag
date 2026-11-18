@@ -1,24 +1,22 @@
 /* eslint-env serviceworker */
-// Cache pequeno e network-first: o app continua atualizando normalmente após
-// cada deploy; o cache só serve como fallback quando a rede falha.
-const CACHE_NAME = "encomenda-web-v2";
+// Cache só de casco estático. Navegações SEMPRE vão à rede: servir HTML
+// antigo depois de um deploy quebra os nomes hashed dos assets.
+const CACHE_NAME = "encomenda-web-v3";
 const PRECACHE = [
-  "/",
-  "/index.html",
-  "/manager.html",
-  "/porter.html",
   "/manifest-porter.webmanifest",
   "/icon-porttag-192.png",
   "/icon-porttag-512.png",
+  "/icon-porttag-180.png",
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(async (cache) => {
-      await Promise.allSettled(PRECACHE.map((url) => cache.add(url)));
-      await self.skipWaiting();
-    }),
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(PRECACHE.map((url) => cache.add(url))),
+    ),
   );
+  // Sem skipWaiting(): a nova versão entra em vigor só quando o app for
+  // reaberto por completo. Nunca no meio de um recebimento.
 });
 
 self.addEventListener("activate", (event) => {
@@ -29,9 +27,9 @@ self.addEventListener("activate", (event) => {
         Promise.all(
           keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
         ),
-      )
-      .then(() => self.clients.claim()),
+      ),
   );
+  // Sem clients.claim(): não tomamos o controle da aba em uso.
 });
 
 self.addEventListener("fetch", (event) => {
@@ -42,6 +40,18 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   // Os arquivos do Tesseract são grandes e não devem ocupar o cache do celular.
   if (url.pathname.startsWith("/ocr/")) return;
+
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request).catch(
+        () => new Response("Sem conexão. Abra o app novamente quando a rede voltar.", {
+          status: 503,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        }),
+      ),
+    );
+    return;
+  }
 
   event.respondWith(
     fetch(request)

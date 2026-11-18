@@ -1245,6 +1245,18 @@ input {
   font-weight: 600;
 }
 
+.porter-text-button {
+  margin-left: auto;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: #176b36;
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .porter-shell {
   width: 100%;
   max-width: 100%;
