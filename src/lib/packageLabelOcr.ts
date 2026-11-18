@@ -584,8 +584,8 @@ export type CompressedPackagePhoto = {
 };
 
 /** Lado maior da foto enviada à Vision API. */
-const aiImageLongEdge = 1280;
-const aiImageQuality = 0.8;
+const aiImageLongEdge = 1600;
+const aiImageQuality = 0.85;
 
 function canvasToBlob(
   canvas: HTMLCanvasElement,
