@@ -99,7 +99,7 @@ function findRecipient(lines) {
 
 function findUnit(text) {
   const match = text.match(
-    /\b(?:apto|apartamento|apt|ap|depto|departamento|unidade|casa|complemento|compl)\.?\s*[:#=-]?\s*([0-9]+[a-z]?)/i,
+    /\b(?:apto|apartamento|apt|ap|depto|departamento|unidade|casa|complemento|comlemento|complemto|complmento|compl)\.?\s*[:#=-]?\s*([0-9]+[a-z]?)/i,
   );
   return match ? match[1].toUpperCase() : "";
 }

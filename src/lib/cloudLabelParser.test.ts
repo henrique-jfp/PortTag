@@ -26,6 +26,12 @@ describe("parser da extração na nuvem", () => {
     expect(
       parseLabel("DESTINATARIO\nNome Sobrenome\nComplemento #307").unit_number,
     ).toBe("307");
+    expect(
+      parseLabel("DESTINATARIO\nNome Sobrenome\nComlemento: 307").unit_number,
+    ).toBe("307");
+    expect(
+      parseLabel("DESTINATARIO\nNome Sobrenome\nCOMPLEMTO307").unit_number,
+    ).toBe("307");
   });
 
   it("não pega o complemento do remetente", () => {

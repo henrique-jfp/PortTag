@@ -192,4 +192,18 @@ describe("unidade do apartamento", () => {
 
     expect(units.map((unit) => unit.unit_number)).toEqual(["307"]);
   });
+
+  it("aceita variantes de OCR de 'complemento'", () => {
+    const units = [
+      { id: "u307", unit_number: "307" },
+      { id: "u401", unit_number: "401" },
+    ];
+
+    expect(
+      findUnitCandidates("Comlemento:307", units).map((unit) => unit.unit_number),
+    ).toEqual(["307"]);
+    expect(
+      findUnitCandidates("COMPLEMTO-401", units).map((unit) => unit.unit_number),
+    ).toEqual(["401"]);
+  });
 });
