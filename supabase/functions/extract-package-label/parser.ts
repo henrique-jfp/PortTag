@@ -91,9 +91,32 @@ function findRecipient(text: string) {
   const anchor = lines.findIndex((line) =>
     /destinat[aá]ri[oa]s?|ship\s*to|deliver\s*to|consignat[aá]ri[oa]/i.test(line),
   );
-  const candidates =
-    anchor >= 0 ? lines.slice(anchor, anchor + 4) : lines.slice(0, 10);
-  for (const candidate of candidates) {
+  if (anchor >= 0) {
+    for (const candidate of lines.slice(anchor, anchor + 4)) {
+      const name = cleanRecipient(candidate);
+      if (name) return name;
+    }
+    return "";
+  }
+
+  // Etiqueta do Mercado Livre não escreve "destinatário". Nela o nome vem
+  // logo acima de "Endereço:"; sem isto o primeiro endereço do remetente
+  // ("Rodovia ...") era confundido com o nome do morador.
+  const addressAnchor = lines.findIndex((line) =>
+    /^endere[çc]o\s*:/i.test(line),
+  );
+  if (addressAnchor > 0) {
+    for (
+      let index = addressAnchor - 1;
+      index >= Math.max(0, addressAnchor - 3);
+      index -= 1
+    ) {
+      const name = cleanRecipient(lines[index]);
+      if (name) return name;
+    }
+  }
+
+  for (const candidate of lines.slice(0, 10)) {
     const name = cleanRecipient(candidate);
     if (name) return name;
   }
@@ -121,13 +144,23 @@ function findStreetLine(text: string) {
   return text
     .split(/\r?\n/)
     .find((candidate) =>
-      /\b(?:rua|avenida|av\.|travessa|estrada|r\.?)\b/i.test(candidate),
+      /\b(?:rua|avenida|av\.|travessa|estrada|r\.?|endere[çc]o)\b/i.test(
+        candidate,
+      ),
     );
 }
 
 function findStreet(text: string) {
   const line = findStreetLine(text);
   if (!line) return "";
+  if (/^endere[çc]o\s*:/i.test(line)) {
+    return line
+      .replace(/^endere[çc]o\s*:\s*/i, "")
+      .replace(/[,\n].*$/, "")
+      .replace(/\d.*$/, "")
+      .replace(/[.,;:\s]+$/g, "")
+      .trim();
+  }
   const match = line.match(
     /\b(rua|avenida|av\.|travessa|estrada|r\.?)\s+([^\d,\n]+)/i,
   );

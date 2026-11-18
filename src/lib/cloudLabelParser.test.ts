@@ -11,6 +11,9 @@ describe("parser da extração na nuvem", () => {
 
     expect(destinationText(mercadoLivreLabel)).toContain("Complemento: 307");
     expect(parsed.unit_number).toBe("307");
+    expect(parsed.recipient_name).toBe("Karolina Costa");
+    expect(parsed.destination_street).toBe("Praia Botafogo");
+    expect(parsed.destination_number).toBe("428");
   });
 
   it("aceita complemento colado e com outros separadores", () => {
