@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   detectDeliveryCompany,
   extractTrackingCode,
+  matchAiUnits,
   matchKnownBarcode,
+  type AiPackageLabel,
 } from "./packageLabelOcr";
 
 /**
@@ -95,5 +97,51 @@ describe("transportadora", () => {
 
   it("identifica o Mercado Livre pelo texto da etiqueta", () => {
     expect(detectDeliveryCompany("Mercado Livre Envios")).toBe("Mercado Livre");
+  });
+});
+
+function labelWithUnit(unitNumber: string, blockName = ""): AiPackageLabel {
+  return {
+    recipientName: "",
+    unitNumber,
+    blockName,
+    carrier: "",
+    trackingCode: "",
+    destinationCep: "",
+    destinationStreet: "",
+    destinationNumber: "",
+    addressStatus: "unknown",
+    addressReason: "",
+  };
+}
+
+describe("associação da unidade lida com o cadastro", () => {
+  const units = [
+    { id: "u307", unit_number: "307", block_id: "b1" },
+    { id: "u307a", unit_number: "307A", block_id: "b1" },
+    { id: "u401", unit_number: "401", block_id: "b2" },
+  ];
+
+  it("prefere o número exato quando existe unidade com sufixo", () => {
+    const candidates = matchAiUnits(labelWithUnit("307"), units, [], []);
+    expect(candidates.map((unit) => unit.id)).toEqual(["u307"]);
+  });
+
+  it("procura no condomínio inteiro se o bloco lido não contém a unidade", () => {
+    const blocks = [
+      { id: "b1", name: "Bloco 1" },
+      { id: "b2", name: "Bloco 2" },
+    ];
+    const candidates = matchAiUnits(
+      labelWithUnit("401", "Bloco 1"),
+      units,
+      blocks,
+      [],
+    );
+    expect(candidates.map((unit) => unit.id)).toEqual(["u401"]);
+  });
+
+  it("não inventa unidade quando o número não está no cadastro", () => {
+    expect(matchAiUnits(labelWithUnit("999"), units, [], [])).toEqual([]);
   });
 });

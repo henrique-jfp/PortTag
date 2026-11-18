@@ -822,7 +822,7 @@ function blockKey(value: string) {
  * normalizadas, e o bloco restringe a busca para não pegar a unidade 901 de
  * outra torre.
  */
-function matchAiUnits<T extends AiLabelUnit>(
+export function matchAiUnits<T extends AiLabelUnit>(
   label: AiPackageLabel,
   units: T[],
   blocks: AiLabelBlock[],
@@ -844,10 +844,29 @@ function matchAiUnits<T extends AiLabelUnit>(
   const pool = scoped.length ? scoped : units;
 
   if (label.unitNumber) {
+    // "307" e "307A" podem existir no mesmo cadastro. Quando o número lido é
+    // exatamente um deles, não deixe a chave frouxa criar ambiguidade.
+    const exactKey = (value: string) =>
+      normalizeApartmentReference(value).replace(/[^a-z0-9]/g, "");
+    const expected = exactKey(label.unitNumber);
+    const exact = pool.filter(
+      (unit) => exactKey(unit.unit_number) === expected,
+    );
+    if (exact.length) return exact;
+
     const matches = pool.filter((unit) =>
       sharesUnitKey(label.unitNumber, unit.unit_number),
     );
     if (matches.length) return matches;
+
+    // Se o OCR leu o bloco errado, a busca restrita não encontra a unidade.
+    // `units` já contém só as unidades que o porteiro pode registrar.
+    if (blockId) {
+      const anywhere = units.filter((unit) =>
+        sharesUnitKey(label.unitNumber, unit.unit_number),
+      );
+      if (anywhere.length) return anywhere;
+    }
   }
 
   if (label.recipientName) {

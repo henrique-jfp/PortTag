@@ -305,6 +305,11 @@ function draftFromAi(
           : []),
     `destinatario: ${ai.recipientName || "-"}`,
     `unidade: ${ai.unitNumber || "-"}${ai.blockName ? ` / ${ai.blockName}` : ""}`,
+    `candidatos no cadastro: ${
+      ai.unitCandidates.length
+        ? ai.unitCandidates.map((unit) => unit.unit_number).join(", ")
+        : "nenhum"
+    }`,
     `transportadora: ${carrier || "-"}`,
     `rastreio: ${code || "-"}${barcodeMatch ? " (código de barras)" : ""}`,
     `codigo barras: ${
@@ -329,6 +334,19 @@ function draftFromAi(
     barcodeMatch ? "código de barras" : "",
     ai.addressStatus === "verified" ? "endereço" : "",
   ].filter(Boolean);
+
+  // A etiqueta pode indicar um número que não existe no cadastro (ou que
+  // aparece em mais de uma unidade). Nesse caso o campo não pode ser preenchido
+  // sozinho — mas o porteiro precisa saber qual número foi lido.
+  const unitHint =
+    ai.unitNumber && ai.unitCandidates.length === 0
+      ? ` A etiqueta indica a unidade ${ai.unitNumber}, que não está no cadastro deste condomínio; selecione o apartamento manualmente.`
+      : ai.unitNumber && ai.unitCandidates.length > 1
+        ? ` A etiqueta indica a unidade ${ai.unitNumber}; escolha entre as sugestões acima.`
+        : "";
+  const readMessage = detectedFields.length
+    ? `Leitura na nuvem concluída: ${detectedFields.join(", ")}. Confira os dados.`
+    : "Leitura na nuvem concluída, mas o endereço não foi confirmado automaticamente. Confira a etiqueta antes de salvar.";
 
   return {
     source,
@@ -359,9 +377,7 @@ function draftFromAi(
       cropped: false,
       postalCodes: ai.postalCodes,
     },
-    ocrMessage: detectedFields.length
-      ? `Leitura na nuvem concluída: ${detectedFields.join(", ")}. Confira os dados.`
-      : "Leitura na nuvem concluída, mas o endereço não foi confirmado automaticamente. Confira a etiqueta antes de salvar.",
+    ocrMessage: `${readMessage}${unitHint}`,
   };
 }
 
