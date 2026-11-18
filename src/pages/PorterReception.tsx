@@ -14,7 +14,6 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { CameraCapture } from "../components/CameraCapture";
 import { Pagination } from "../components/Pagination";
 import {
   RECORD_PAGE_SIZE,
@@ -776,7 +775,6 @@ export function PorterReception() {
   );
   const restoredSignature = useRef("");
   const [draftRecovered, setDraftRecovered] = useState(false);
-  const [cameraOpen, setCameraOpen] = useState(false);
 
   const selectedUnit = useMemo(
     () => units.find((unit) => unit.id === unitId) ?? null,
@@ -1256,18 +1254,7 @@ export function PorterReception() {
 
   function openCamera() {
     setPageError("");
-    setCameraOpen(true);
-  }
-
-  function openNativeCamera() {
-    setCameraOpen(false);
-    setPageError("");
     imageInput.current?.click();
-  }
-
-  function handleCameraCapture(photo: File) {
-    setCameraOpen(false);
-    void processPhoto(photo);
   }
 
   async function showUnitDetails(unit: Unit) {
@@ -3576,13 +3563,6 @@ export function PorterReception() {
           </section>
         )}
       </div>
-      {cameraOpen && (
-        <CameraCapture
-          onCapture={handleCameraCapture}
-          onClose={() => setCameraOpen(false)}
-          onFallback={openNativeCamera}
-        />
-      )}
     </main>
   );
 }

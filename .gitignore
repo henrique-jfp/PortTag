@@ -12,3 +12,8 @@ scripts/label-reports/
 scripts/label-dataset/
 scripts/label-dataset.json
 scripts/label-confirmed.json
+# Fotos reais de etiquetas são dataset local: nunca entram no repositório.
+scripts/**/*.jpg
+scripts/**/*.jpeg
+scripts/**/*.png
+scripts/**/*.webp
