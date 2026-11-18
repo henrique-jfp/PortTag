@@ -1,5 +1,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { buildAddressReason, decideAddressStatus } from "./address.ts";
+import { carrierForLabel, carrierValues } from "./carrier.ts";
 
 type ExtractLabelRequest = {
   condominiumId?: string;
@@ -49,8 +50,8 @@ const requestTimeoutMs = 15_000;
 
 /**
  * Schema devolvido pelo Gemini. A IA apenas extrai campos: `address_status`
- * e `address_reason` são recalculados no servidor por `address.ts`, porque
- * decisão de endereço não pode depender do modelo.
+ * e `address_reason` não são pedidos ao modelo e continuam sendo calculados por
+ * `address.ts` na resposta da função, para a decisão nunca depender da IA.
  */
 const responseSchema = {
   type: "OBJECT",
@@ -58,16 +59,16 @@ const responseSchema = {
     recipient_name: { type: "STRING" },
     unit_number: { type: "STRING" },
     block_name: { type: "STRING" },
-    carrier: { type: "STRING" },
+    carrier: {
+      type: "STRING",
+      enum: [...carrierValues],
+      description:
+        "Use unknown quando a transportadora ou o código não permitirem identificação segura.",
+    },
     tracking_code: { type: "STRING" },
     destination_cep: { type: "STRING" },
     destination_street: { type: "STRING" },
     destination_number: { type: "STRING" },
-    address_status: {
-      type: "STRING",
-      enum: ["verified", "mismatch", "unknown"],
-    },
-    address_reason: { type: "STRING" },
   },
   required: [
     "recipient_name",
@@ -78,8 +79,6 @@ const responseSchema = {
     "destination_cep",
     "destination_street",
     "destination_number",
-    "address_status",
-    "address_reason",
   ],
 };
 
@@ -90,17 +89,21 @@ function buildPrompt(expectedAddress: {
 }) {
   return [
     "Leia esta foto de etiqueta de encomenda brasileira.",
-    "Transportadoras comuns: Mercado Livre, Shopee, Amazon, Correios, Shein, Jadlog, Loggi, Total Express.",
     "Extraia SOMENTE os dados do DESTINATÁRIO. Ignore remetente, vendedor, transportadora emitente, código de acesso da NF-e, pedido e dados fiscais.",
     "unit_number é só o número da unidade (ex.: \"901\", \"102B\", \"Cobertura 1\"). block_name é o bloco/torre (ex.: \"A\", \"Bloco 2\").",
     "destination_cep deve conter somente dígitos. Se a etiqueta mostrar o endereço em duas linhas, junte rua e número.",
-    `Endereço do condomínio que está recebendo: CEP ${expectedAddress.cep || "não informado"}, logradouro ${expectedAddress.street || "não informado"}, número ${expectedAddress.address_number || "não informado"}.`,
-    "address_status:",
-    "- verified: o CEP do destino confere, ou o logradouro e o número conferem com o condomínio;",
-    "- mismatch: você tem certeza de que o CEP ou o logradouro+número do destino pertencem a OUTRO endereço;",
-    "- unknown: qualquer parte do destino está ilegível, ausente ou ambígua.",
-    "address_status e address_reason são recalculados no servidor: preencha com unknown se não souber, mas sempre extraia os campos de destino.",
-    "Não invente dados. Campo ilegível fica string vazia (exceto address_status, que fica unknown).",
+    `Endereço do condomínio que está recebendo (referência para a leitura): CEP ${expectedAddress.cep || "não informado"}, logradouro ${expectedAddress.street || "não informado"}, número ${expectedAddress.address_number || "não informado"}.`,
+    "Para carrier, escolha somente uma das opções do schema. Use unknown se a transportadora estiver ilegível, ausente ou se o código não permitir identificação segura.",
+    "Padrões de código de rastreio:",
+    "- Correios: 2 letras + 9 dígitos + BR;",
+    "- Amazon: TBR + 9 dígitos, ou AMZC + 9 dígitos + 2 letras;",
+    "- Shopee: BR + 12 dígitos + 1 letra ou dígito, totalizando 15 caracteres;",
+    "- Anjun: AJ + 15 dígitos;",
+    "- J&T Express: 15 dígitos, na prática começando com 999 ou 888;",
+    "- iMile: 13 ou 14 dígitos;",
+    "- Mercado Livre: 11 dígitos.",
+    "Os padrões de J&T Express, iMile e Mercado Livre são fracos: na dúvida, prefira unknown a inventar a empresa.",
+    "Não invente dados. Campo ilegível fica string vazia; carrier usa unknown.",
   ].join("\n");
 }
 
@@ -251,18 +254,17 @@ Deno.serve(async (request: Request) => {
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema,
-      maxOutputTokens: 350,
-      temperature: 0.1,
-      // gemini-3.5-flash-lite rejeita thinkingBudget: 0; o nível minimal é o
-      // que desliga o raciocínio sem invalidar a requisição.
-      thinkingConfig: { thinkingLevel: "minimal" },
+      maxOutputTokens: 1024,
+      // Modelos Gemini 3.6+ ignoram temperature/top_p/top_k; o nível de
+      // raciocínio é controlado por thinkingConfig.
+      thinkingConfig: { thinkingLevel: "low" },
     },
   };
 
   let geminiResponse: Response;
   try {
     geminiResponse = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
       {
         method: "POST",
         headers: {
@@ -357,13 +359,14 @@ Deno.serve(async (request: Request) => {
     number: cleanText(parsed.destination_number, 20),
   };
   const status = decideAddressStatus(destination, expectedAddress);
+  const carrier = carrierForLabel(parsed.carrier);
 
   return respond({
     label: {
       recipient_name: cleanText(parsed.recipient_name, 120),
       unit_number: cleanText(parsed.unit_number, 30),
       block_name: cleanText(parsed.block_name, 40),
-      carrier: cleanText(parsed.carrier, 60),
+      carrier,
       tracking_code: cleanText(parsed.tracking_code, 80).replace(/\s+/g, ""),
       destination_cep: destination.cep,
       destination_street: destination.street,

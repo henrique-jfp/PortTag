@@ -56,8 +56,9 @@
    no banco se a conta ativa pertence ao condomínio informado. Ela usa a chave
    do Gemini somente no ambiente da Edge Function. Se a chave não estiver
    configurada, a função responde `503` com `fallback: true` e o app do porteiro
-   continua com o OCR local. A chave `service_role` não deve ser adicionada ao
-   frontend.
+   continua com o OCR local. A extração usa `gemini-3.6-flash` com raciocínio
+   baixo, transportadora em enum fechado e decisão de endereço calculada no
+   servidor. A chave `service_role` não deve ser adicionada ao frontend.
 
 ## Criar os acessos
 

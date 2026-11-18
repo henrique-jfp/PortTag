@@ -151,9 +151,16 @@ supabase functions deploy extract-package-label
 
 A função usa `verify_jwt = true`, valida o vínculo do porteiro com o condomínio
 e chama o Gemini com a foto comprimida. Sem a chave, ela responde `503` com
-`fallback: true` e o app continua no OCR local. O modelo é
-`gemini-3.5-flash-lite`, com resposta JSON estruturada e no máximo 350 tokens;
-a chave fica somente no ambiente da Edge Function.
+`fallback: true` e o app continua no OCR local. O modelo é `gemini-3.6-flash`
+(Flash normal, com `thinkingLevel: "low"`), com resposta JSON estruturada e no
+máximo 1024 tokens de saída; a chave fica somente no ambiente da Edge Function.
+
+A IA apenas extrai campos: `carrier` vem de um enum fechado (Correios, Amazon,
+Shopee, Anjun, J&T Express, iMile, Mercado Livre ou `unknown`). O valor
+`unknown` vira empresa em branco, sem impedir o recebimento, e a detecção local
+ainda pode tentar identificar a transportadora pelo código. O
+`address_status`/`address_reason` continua sendo calculado no servidor, nunca
+pela IA.
 
 Para reduzir o consumo no piloto, a foto é redimensionada no celular para no
 máximo 1280 px no maior lado, JPEG em qualidade 0.80, e a mesma imagem é usada
