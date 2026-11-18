@@ -74,8 +74,10 @@ function findRecipient(text: string) {
 }
 
 function findUnit(text: string) {
+  // Etiquetas do Mercado Livre identificam a unidade como "complemento:307".
+  // A âncora continua determinística: rótulo + número, sem decisão de IA.
   const match = text.match(
-    /\b(?:apto|apartamento|apt|ap|depto|departamento|unidade|casa)\.?\s*[:#-]?\s*([0-9]+[a-z]?)/i,
+    /\b(?:apto|apartamento|apt|ap|depto|departamento|unidade|casa|complemento|compl)\.?\s*[:#=-]?\s*([0-9]+[a-z]?)/i,
   );
   return match ? match[1].toUpperCase() : "";
 }

@@ -16,6 +16,8 @@ const unitLabelTokens = new Set([
   "apto",
   "apt",
   "ap",
+  "depto",
+  "departamento",
   "casa",
   "cobertura",
   "cob",
@@ -629,7 +631,7 @@ function findExplicitUnitTokens(text: string) {
 
     // Etiquetas colam o rótulo no número: AP901, APTO901, UN102, COB1.
     const glued = token.match(
-      /^(?:apartamento|apto|apt|ap|unidade|un|cobertura|cob|casa)([a-z]?\d+[a-z]?)$/,
+      /^(?:apartamento|apto|apt|ap|depto|departamento|unidade|un|cobertura|cob|casa|complemento|compl)([a-z]?\d+[a-z]?)$/,
     );
     if (glued) explicitTokens.add(glued[1]);
 
