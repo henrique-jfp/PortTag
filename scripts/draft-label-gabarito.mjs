@@ -87,7 +87,9 @@ function findUnit(text) {
 }
 
 function findBlock(text) {
-  const match = text.match(/\b(?:bloco|bl|torre)\s*[:#-]?\s*([a-z0-9]+)/i);
+  const match = text.match(
+    /\b(?:bloco|bl|torre)(?![a-z])\s*[:#-]?\s*([a-z0-9]+)/i,
+  );
   return match ? match[1].toUpperCase() : "";
 }
 

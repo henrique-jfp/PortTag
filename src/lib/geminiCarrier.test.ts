@@ -15,6 +15,8 @@ describe("enum de transportadora (Gemini)", () => {
       "J&T Express",
       "iMile",
       "Mercado Livre",
+      "Jadlog",
+      "Total Express",
       "unknown",
     ]);
     for (const carrier of carrierValues) {

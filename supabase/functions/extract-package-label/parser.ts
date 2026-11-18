@@ -18,14 +18,41 @@ const trackingPatterns: Array<[string, RegExp]> = [
   ["Mercado Livre", /\b\d{11}\b/i],
 ];
 
+/**
+ * O nome impresso vence a dedução pelo formato do código. Sem isto, um rótulo
+ * Jadlog com código de 11 dígitos virava "Mercado Livre" e um rótulo Mercado
+ * Livre com código de 13 dígitos virava "iMile".
+ */
+const carrierNamePatterns: Array<[string, RegExp]> = [
+  ["Correios", /\b(?:correios|sedex)\b/i],
+  ["Amazon", /\bamazon\b/i],
+  ["Shopee", /\b(?:shopee|spx)\b/i],
+  ["Anjun", /\banjun\b/i],
+  ["J&T Express", /\bj\s*&\s*t(?:\s*express)?\b/i],
+  ["iMile", /\bimile\b/i],
+  ["Mercado Livre", /\b(?:mercado\s*livre|meli|ml)\b/i],
+  ["Jadlog", /\bjadlog\b/i],
+  ["Total Express", /\btotal\s*express\b/i],
+];
+
+function findCarrierFromName(text: string) {
+  for (const [carrier, pattern] of carrierNamePatterns) {
+    if (pattern.test(text)) return carrier;
+  }
+  return "";
+}
+
 function findTracking(text: string) {
   for (const [carrier, pattern] of trackingPatterns) {
     const match = text.match(pattern);
     if (match) {
-      return { carrier, code: match[0].replace(/[\s-]/g, "").toUpperCase() };
+      return {
+        carrier: findCarrierFromName(text) || carrier,
+        code: match[0].replace(/[\s-]/g, "").toUpperCase(),
+      };
     }
   }
-  return { carrier: "", code: "" };
+  return { carrier: findCarrierFromName(text), code: "" };
 }
 
 function findCep(text: string) {
@@ -83,7 +110,10 @@ function findUnit(text: string) {
 }
 
 function findBlock(text: string) {
-  const match = text.match(/\b(?:bloco|bl|torre)\.?\s*[:#-]?\s*([a-z0-9]+)/i);
+  // O lookahead impede que "BLOCH" seja lido como "BL" + "OCH".
+  const match = text.match(
+    /\b(?:bloco|bl|torre)(?![a-z])\.?\s*[:#-]?\s*([a-z0-9]+)/i,
+  );
   return match ? match[1].toUpperCase() : "";
 }
 
