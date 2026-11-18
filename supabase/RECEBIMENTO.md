@@ -72,6 +72,18 @@
    supabase functions deploy extract-package-label
    ```
 
+   Para o laboratório de etiquetas (opcional, usado antes do lançamento para
+   mapear novos modelos), configure um segredo próprio e publique a função.
+   Ela usa `verify_jwt = false` e exige o cabeçalho `x-label-lab-secret`:
+
+   ```powershell
+   npx supabase secrets set LABEL_LAB_SECRET="ESCOLHA_UMA_SENHA_LONGA"
+   npx supabase functions deploy label-lab --yes
+   ```
+
+   O uso está documentado em `scripts/label-lab/MANUAL.md`. A função não salva
+   fotos nem gera arquivos no servidor.
+
    As funções `manage-porter` e `manage-manager` verificam a sessão e o perfil
    Super Admin no servidor. A função `extract-package-label` também exige JWT válido e confirma
    no banco se a conta ativa pertence ao condomínio informado. O pipeline padrão

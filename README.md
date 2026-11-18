@@ -62,6 +62,14 @@ Na primeira configuração, clone este repositório em
 somente nomes e placeholders; não coloque chaves reais no GitHub. Migrações e
 Edge Functions do Supabase continuam sendo publicadas separadamente.
 
+Para mapear novos modelos de etiqueta antes do lançamento, use o laboratório
+local: `scripts/label-lab.mjs` envia lotes de fotos para a Edge Function
+`label-lab`, que roda o mesmo pipeline de produção e gera um relatório de
+cobertura com sugestões de regras. O manual completo está em
+`scripts/label-lab/MANUAL.md`. A função é protegida por `LABEL_LAB_SECRET` e
+não salva imagem nem relatório; os arquivos gerados ficam em
+`scripts/label-reports/`, ignorado pelo Git.
+
 ### Acesso pelo celular (tela inicial)
 
 Para abrir sem a barra de endereço, instale como app — não use “Adicionar
