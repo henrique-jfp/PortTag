@@ -60,7 +60,9 @@ export function hasReceptionDraftContent(draft: ReceptionDraft) {
       draft.recipientName ||
       draft.company ||
       draft.trackingCode ||
-      draft.deliveryPerson ||
+      // O entregador fica preenchido de propósito depois de registrar, vindo
+      // da sessão. Isso não é rascunho: contar como conteúdo recriava o aviso
+      // em toda abertura do app.
       draft.addressVerification ||
       draft.lastLabelRead ||
       draft.ocrMessage ||

@@ -1454,6 +1454,14 @@ export function PorterReception() {
     setNotificationMessage("");
     setNotificationLink("");
     setNotifyOnReceive(false);
+    // Campos da retirada também precisam zerar: se sobrarem, o autosave
+    // recria um rascunho e o aviso "Continue de onde parou" volta sozinho.
+    setCollectionBaseId("");
+    setCollectionSelectionOverride(null);
+    setCollectionName("");
+    setPorterConfirmed(false);
+    setHasSignature(false);
+    restoredSignature.current = "";
     allowDuplicate.current = false;
   }
 

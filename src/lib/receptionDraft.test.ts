@@ -54,4 +54,11 @@ describe("hasReceptionDraftContent", () => {
 
     expect(hasReceptionDraftContent(draft)).toBe(true);
   });
+
+  it("não considera o último entregador como rascunho", () => {
+    const draft = emptyDraft();
+    draft.deliveryPerson = "João da Silva";
+
+    expect(hasReceptionDraftContent(draft)).toBe(false);
+  });
 });
