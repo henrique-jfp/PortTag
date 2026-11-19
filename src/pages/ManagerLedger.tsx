@@ -3,20 +3,19 @@ import {
   BarChart3,
   Building2,
   ClipboardList,
-  History,
   LayoutDashboard,
   LogOut,
   ShieldCheck,
   Users,
-  Warehouse,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { ManagerDashboard } from "../components/ManagerDashboard";
+import { ManagerDashboard, type PackageFilterPreset } from "../components/ManagerDashboard";
 import { PackageNotebook, type NotebookBuilding } from "../components/PackageNotebook";
 import { ManagerCondominiumPanel } from "../components/manager/ManagerCondominiumPanel";
 import { ManagerHistoryPanel } from "../components/manager/ManagerHistoryPanel";
 import { ManagerPortersPanel } from "../components/manager/ManagerPortersPanel";
 import { ManagerReportsPanel } from "../components/manager/ManagerReportsPanel";
+import { ManagerResidentsPanel } from "../components/manager/ManagerResidentsPanel";
 import { ManagerStructurePanel } from "../components/manager/ManagerStructurePanel";
 import { supabase } from "../lib/supabase";
 
@@ -30,23 +29,22 @@ type Condominium = {
 
 type Section =
   | "overview"
-  | "condominium"
-  | "structure"
+  | "notebook"
+  | "reports"
   | "residents"
   | "porters"
-  | "notebook"
-  | "history"
-  | "reports";
+  | "structure";
+
+type NotebookTab = "records" | "audit";
+type StructureTab = "address" | "units";
 
 const sections: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
-  { id: "condominium", label: "Condomínio", icon: Building2 },
-  { id: "structure", label: "Blocos e unidades", icon: Warehouse },
+  { id: "notebook", label: "Encomendas", icon: ClipboardList },
+  { id: "reports", label: "Relatórios", icon: BarChart3 },
   { id: "residents", label: "Moradores", icon: Users },
   { id: "porters", label: "Porteiros", icon: ShieldCheck },
-  { id: "notebook", label: "Encomendas", icon: ClipboardList },
-  { id: "history", label: "Histórico", icon: History },
-  { id: "reports", label: "Relatórios", icon: BarChart3 },
+  { id: "structure", label: "Estrutura", icon: Building2 },
 ];
 
 /**
@@ -59,6 +57,11 @@ export function ManagerLedger() {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [buildings, setBuildings] = useState<NotebookBuilding[]>([]);
   const [section, setSection] = useState<Section>("overview");
+  const [notebookTab, setNotebookTab] = useState<NotebookTab>("records");
+  const [notebookPreset, setNotebookPreset] = useState<PackageFilterPreset | null>(
+    null,
+  );
+  const [structureTab, setStructureTab] = useState<StructureTab>("address");
   const [selectedBuildingId, setSelectedBuildingId] = useState("");
   const [pageError, setPageError] = useState("");
 
@@ -160,6 +163,14 @@ export function ManagerLedger() {
     }
   }
 
+  function openSection(id: Section) {
+    setSection(id);
+    if (id === "notebook") {
+      setNotebookPreset(null);
+      setNotebookTab("records");
+    }
+  }
+
   if (loading) {
     return <div className="loading-screen">Carregando caderno...</div>;
   }
@@ -168,7 +179,12 @@ export function ManagerLedger() {
     buildings.find((building) => building.id === selectedBuildingId)?.id ??
     buildings[0]?.id ??
     "";
-  const managementSection = section !== "overview" && section !== "notebook";
+  const managementSection =
+    section === "residents" ||
+    section === "porters" ||
+    section === "reports" ||
+    section === "structure" ||
+    (section === "notebook" && notebookTab === "audit");
 
   return (
     <main className="ledger-page">
@@ -215,7 +231,7 @@ export function ManagerLedger() {
                   type="button"
                   className={section === item.id ? "is-active" : ""}
                   aria-current={section === item.id ? "page" : undefined}
-                  onClick={() => setSection(item.id)}
+                  onClick={() => openSection(item.id)}
                 >
                   <Icon size={16} />
                   {item.label}
@@ -245,40 +261,108 @@ export function ManagerLedger() {
             </div>
           )}
 
-          {section === "overview" && <ManagerDashboard buildings={buildings} />}
-          {section === "notebook" && <PackageNotebook buildings={buildings} />}
-          {section === "condominium" && activeBuildingId && (
-            <ManagerCondominiumPanel
-              key={activeBuildingId}
-              condominiumId={activeBuildingId}
+          {section === "overview" && (
+            <ManagerDashboard
+              buildings={buildings}
+              onOpenPackages={(preset) => {
+                setNotebookPreset(preset);
+                setNotebookTab("records");
+                setSection("notebook");
+              }}
             />
           )}
-          {section === "structure" && activeBuildingId && (
-            <ManagerStructurePanel
-              key={`${activeBuildingId}-structure`}
-              condominiumId={activeBuildingId}
-              initialTab="units"
-            />
+
+          {section === "notebook" && (
+            <>
+              <div className="manager-tabs" role="tablist" aria-label="Encomendas">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={notebookTab === "records"}
+                  className={notebookTab === "records" ? "is-active" : ""}
+                  onClick={() => setNotebookTab("records")}
+                >
+                  Registros
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={notebookTab === "audit"}
+                  className={notebookTab === "audit" ? "is-active" : ""}
+                  onClick={() => setNotebookTab("audit")}
+                >
+                  Linha do tempo / Auditoria
+                </button>
+              </div>
+              {notebookTab === "records" && (
+                <PackageNotebook
+                  key={notebookPreset?.label ?? "all-records"}
+                  buildings={buildings}
+                  initialFilters={notebookPreset?.filters}
+                  presetLabel={notebookPreset?.label ?? ""}
+                  onClearPreset={() => setNotebookPreset(null)}
+                />
+              )}
+              {notebookTab === "audit" && activeBuildingId && (
+                <ManagerHistoryPanel
+                  key={`${activeBuildingId}-history`}
+                  condominiumId={activeBuildingId}
+                />
+              )}
+            </>
           )}
+
+          {section === "structure" && (
+            <>
+              <div className="manager-tabs" role="tablist" aria-label="Estrutura">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={structureTab === "address"}
+                  className={structureTab === "address" ? "is-active" : ""}
+                  onClick={() => setStructureTab("address")}
+                >
+                  Dados e Endereço
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={structureTab === "units"}
+                  className={structureTab === "units" ? "is-active" : ""}
+                  onClick={() => setStructureTab("units")}
+                >
+                  Blocos e Unidades
+                </button>
+              </div>
+              {structureTab === "address" && activeBuildingId && (
+                <ManagerCondominiumPanel
+                  key={`${activeBuildingId}-address`}
+                  condominiumId={activeBuildingId}
+                />
+              )}
+              {structureTab === "units" && activeBuildingId && (
+                <ManagerStructurePanel
+                  key={`${activeBuildingId}-units`}
+                  condominiumId={activeBuildingId}
+                />
+              )}
+            </>
+          )}
+
           {section === "residents" && activeBuildingId && (
-            <ManagerStructurePanel
+            <ManagerResidentsPanel
               key={`${activeBuildingId}-residents`}
               condominiumId={activeBuildingId}
-              initialTab="residents"
             />
           )}
+
           {section === "porters" && activeBuildingId && (
             <ManagerPortersPanel
               key={activeBuildingId}
               condominiumId={activeBuildingId}
             />
           )}
-          {section === "history" && activeBuildingId && (
-            <ManagerHistoryPanel
-              key={activeBuildingId}
-              condominiumId={activeBuildingId}
-            />
-          )}
+
           {section === "reports" && activeBuildingId && (
             <ManagerReportsPanel
               key={activeBuildingId}

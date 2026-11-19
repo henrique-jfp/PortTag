@@ -438,6 +438,209 @@
   opacity: 0.6;
 }
 
+.notebook-preset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid #dbe6ff;
+  border-radius: 10px;
+  background: #f6f9ff;
+  color: #35435a;
+  font-size: 13px;
+}
+
+.notebook-timeline-block {
+  margin: 4px 0 16px;
+  padding: 14px;
+  border: 1px solid var(--nb-border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.notebook-timeline-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.notebook-timeline-heading h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.notebook-mini-timeline {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notebook-mini-timeline > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.notebook-timeline-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--nb-primary);
+  box-shadow: 0 0 0 3px var(--nb-primary-soft);
+}
+
+.notebook-mini-timeline strong {
+  display: block;
+  font-size: 12px;
+}
+
+.notebook-mini-timeline small {
+  display: block;
+  color: var(--nb-muted);
+  font-size: 11px;
+}
+
+.notebook-print-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--nb-primary);
+  border-radius: 9px;
+  background: var(--nb-primary);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notebook-print-button:hover:not(:disabled) {
+  background: #1e47a3;
+}
+
+.notebook-print-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.notebook-photo-hint {
+  margin-top: 10px !important;
+  color: #9a5b00 !important;
+}
+
+/* O comprovante existe só na impressão; o navegador salva como PDF. */
+.notebook-print {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .notebook-print,
+  .notebook-print * {
+    visibility: visible;
+  }
+
+  .notebook-print {
+    display: block;
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    color: #172033;
+    background: #fff;
+    font-size: 12px;
+  }
+
+  .notebook-print-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #2859c5;
+  }
+
+  .notebook-print-header p {
+    margin: 0;
+    color: #697386;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+
+  .notebook-print-header h2 {
+    margin: 3px 0 0;
+    font-size: 20px;
+  }
+
+  .notebook-print-header > span {
+    font-family: monospace;
+    font-size: 12px;
+  }
+
+  .notebook-print-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 20px;
+    margin: 18px 0;
+  }
+
+  .notebook-print-grid dt {
+    color: #697386;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .notebook-print-grid dd {
+    margin: 2px 0 0;
+    overflow-wrap: anywhere;
+  }
+
+  .notebook-print-section {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #dfe5ef;
+  }
+
+  .notebook-print-section h3 {
+    margin: 0 0 8px;
+    font-size: 12px;
+  }
+
+  .notebook-print-signature,
+  .notebook-print-photo {
+    display: block;
+    max-width: 100%;
+    max-height: 65mm;
+    border: 1px solid #dfe5ef;
+    object-fit: contain;
+  }
+
+  .notebook-print footer {
+    margin-top: 24px;
+    color: #697386;
+    font-size: 10px;
+  }
+}
+
 .notebook .pagination {
   margin-top: 14px;
 }

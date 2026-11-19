@@ -10,9 +10,13 @@ type Resident = {
 
 type UnitResidentsPanelProps = {
   unitId: string;
+  onChanged?: () => void;
 };
 
-export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
+export function UnitResidentsPanel({
+  unitId,
+  onChanged,
+}: UnitResidentsPanelProps) {
   const [residents, setResidents] = useState<Resident[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -127,6 +131,7 @@ export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
       setSuccessMessage(
         editingResidentId ? "Contato atualizado." : "Contato cadastrado.",
       );
+      onChanged?.();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Falha inesperada.";
@@ -164,6 +169,7 @@ export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
       );
       if (editingResidentId === resident.id) resetForm();
       setSuccessMessage("Contato excluído.");
+      onChanged?.();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Falha inesperada.";

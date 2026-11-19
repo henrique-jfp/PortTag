@@ -1,4 +1,4 @@
-@import "tailwindcss";
+﻿@import "tailwindcss";
 
 :root {
   font-family: Inter, system-ui, sans-serif;
@@ -1528,8 +1528,8 @@ input {
 }
 
 .porter-search-control input:focus {
-  border-color: #6d32c7;
-  outline: 3px solid rgba(109, 50, 199, 0.14);
+  border-color: #2859c5;
+  outline: 3px solid rgba(40, 89, 197, 0.14);
 }
 
 .porter-search-button,
@@ -1785,8 +1785,8 @@ input {
 .porter-form input:focus,
 .porter-form select:focus,
 .porter-collection-form input:focus {
-  border-color: #6d32c7;
-  outline: 3px solid rgba(109, 50, 199, 0.14);
+  border-color: #2859c5;
+  outline: 3px solid rgba(40, 89, 197, 0.14);
 }
 
 .porter-form small {
@@ -2166,6 +2166,190 @@ input {
 .overview-stat-danger .overview-stat-icon {
   background: #fce8e6;
   color: #b42318;
+}
+
+button.overview-stat {
+  position: relative;
+  width: 100%;
+  border: 1px solid #e6eaf1;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+button.overview-stat:hover:not(:disabled) {
+  border-color: #b9c9ea;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(20, 35, 65, 0.08);
+}
+
+button.overview-stat:disabled {
+  cursor: default;
+}
+
+.overview-stat-action {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  color: #a0a9b8;
+}
+
+.overview-alerts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.overview-alert {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  padding: 14px 16px;
+  border: 1px solid #f0d7a8;
+  border-radius: 12px;
+  background: #fffaf0;
+}
+
+.overview-alert:nth-child(2) {
+  border-color: #d9d0f5;
+  background: #f8f6ff;
+}
+
+.overview-alert h3 {
+  margin: 3px 0 0;
+  font-size: 14px;
+}
+
+.overview-alert > strong {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  align-self: center;
+  color: #9a5b00;
+  font-size: 26px;
+}
+
+.overview-alert:nth-child(2) > strong {
+  color: #6b48a0;
+}
+
+.overview-alert > p:not(.eyebrow) {
+  grid-column: 1;
+  margin: 2px 0 0;
+  color: #697386;
+  font-size: 12px;
+}
+
+.overview-alert > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  padding: 0;
+}
+
+.overview-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.overview-attention,
+.overview-latest {
+  padding: 16px;
+  border: 1px solid #e6eaf1;
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.overview-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.overview-section-heading h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.overview-section-heading span {
+  color: #697386;
+  font-size: 12px;
+}
+
+.overview-attention-list,
+.overview-latest-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.overview-attention-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e6eaf1;
+  border-radius: 9px;
+  background: #fff;
+  color: #35435a;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-attention-list button:hover {
+  border-color: #b9c9ea;
+  background: #f6f9ff;
+}
+
+.overview-attention-list strong,
+.overview-latest-list strong {
+  display: block;
+  font-size: 12px;
+}
+
+.overview-attention-list small,
+.overview-latest-list small {
+  display: block;
+  margin-top: 2px;
+  color: #697386;
+  font-size: 11px;
+}
+
+.overview-latest-list li {
+  padding: 9px 0;
+  border-bottom: 1px solid #e9edf4;
+}
+
+.overview-latest-list li:last-child {
+  border-bottom: 0;
+}
+
+.overview-all-clear {
+  display: grid;
+  gap: 3px;
+  padding: 16px;
+  border: 1px solid #bfe3cd;
+  border-radius: 10px;
+  background: #f1fbf5;
+}
+
+.overview-all-clear strong {
+  color: #176b36;
+  font-size: 13px;
+}
+
+.overview-all-clear span {
+  color: #4d6b5a;
+  font-size: 12px;
 }
 
 .ledger-calendar-section .section-heading,
@@ -2560,6 +2744,10 @@ input {
 @media (max-width: 1050px) {
   .overview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-bottom {
+    grid-template-columns: 1fr;
   }
 
   .year-calendar {

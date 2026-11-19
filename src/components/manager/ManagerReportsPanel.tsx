@@ -3,24 +3,8 @@ import {
   localDayAfter,
   localDayStart,
 } from "../../lib/packageQueries";
+import { buildReportCsv, type Report, type ReportRow } from "../../lib/reportCsv";
 import { supabase } from "../../lib/supabase";
-
-type ReportRow = { label: string; total: number; pending?: number; delivered?: number };
-type Report = {
-  summary: {
-    total: number;
-    pending: number;
-    delivered: number;
-    older3: number;
-    older7: number;
-    older15: number;
-    avg_hours: number;
-  };
-  byBlock: ReportRow[];
-  byUnit: ReportRow[];
-  bySender: ReportRow[];
-  byPorter: ReportRow[];
-};
 
 function number(value: unknown) {
   return Number(value ?? 0).toLocaleString("pt-BR");
@@ -48,7 +32,7 @@ function ReportTable({
                 <th>Item</th>
                 <th>Total</th>
                 {showStatus && <th>Na portaria</th>}
-                {showStatus && <th>Entregues</th>}
+                {showStatus && <th>Retiradas</th>}
               </tr>
             </thead>
             <tbody>
@@ -121,11 +105,26 @@ export function ManagerReportsPanel({
     setApplied({ from: dateFrom, to: dateTo });
   }
 
+  function handleExport() {
+    if (!report) return;
+    const csv = buildReportCsv(report, applied);
+    const url = URL.createObjectURL(
+      new Blob([csv], { type: "text/csv;charset=utf-8" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `relatorio-encomendas-${applied.from || "Completo"}${applied.to ? `-${applied.to}` : ""}.csv`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const summary = report?.summary;
 
   return (
     <section className="manager-panel">
-      <div className="manager-panel-heading">
+      <div className="manager-panel-heading manager-report-heading">
         <div>
           <p className="eyebrow">Indicadores</p>
           <h2>Relatórios</h2>
@@ -134,6 +133,14 @@ export function ManagerReportsPanel({
             todo o histórico do condomínio.
           </p>
         </div>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={handleExport}
+          disabled={!report || loading}
+        >
+          Exportar CSV
+        </button>
       </div>
 
       <form className="manager-filter-form" onSubmit={handleApply}>
@@ -173,7 +180,7 @@ export function ManagerReportsPanel({
             </div>
             <div>
               <strong>{number(summary.delivered)}</strong>
-              <span>Entregues</span>
+              <span>Retiradas</span>
             </div>
             <div>
               <strong>{number(summary.pending)}</strong>

@@ -6,6 +6,7 @@ import { normalizePorterUsername } from "../../lib/porterAccounts";
 type Block = { id: string; name: string };
 type Porter = {
   id: string;
+  auth_user_id: string | null;
   name: string;
   username: string;
   active: boolean;
@@ -46,6 +47,12 @@ function formatExpiry(value: string | null) {
   return value ? new Date(value).toLocaleString("pt-BR") : "Sem expiração";
 }
 
+function formatLastActivity(value: string | null) {
+  return value
+    ? `Último registro em ${new Date(value).toLocaleString("pt-BR")}`
+    : "Sem registro no caderno";
+}
+
 export function ManagerPortersPanel({
   condominiumId,
 }: {
@@ -57,6 +64,9 @@ export function ManagerPortersPanel({
   const [blockAssignments, setBlockAssignments] = useState<
     Map<string, string[]>
   >(new Map());
+  const [lastActivity, setLastActivity] = useState<Map<string, string>>(
+    new Map(),
+  );
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
@@ -75,7 +85,7 @@ export function ManagerPortersPanel({
     let active = true;
 
     void (async () => {
-      const [blocksResult, portersResult, assignmentsResult] =
+      const [blocksResult, portersResult, assignmentsResult, eventsResult] =
         await Promise.all([
           supabase
             .from("blocks")
@@ -84,15 +94,24 @@ export function ManagerPortersPanel({
             .order("name"),
           supabase
             .from("porter_accounts")
-            .select("id, name, username, active, access_expires_at")
+            .select("id, auth_user_id, name, username, active, access_expires_at")
             .eq("condominium_id", condominiumId)
             .order("name"),
           supabase.from("porter_blocks").select("porter_account_id, block_id"),
+          supabase
+            .from("package_events")
+            .select("actor_id, occurred_at")
+            .eq("condominium_id", condominiumId)
+            .order("occurred_at", { ascending: false })
+            .limit(500),
         ]);
 
       if (!active) return;
       const failed =
-        blocksResult.error ?? portersResult.error ?? assignmentsResult.error;
+        blocksResult.error ??
+        portersResult.error ??
+        assignmentsResult.error ??
+        eventsResult.error;
       if (failed) {
         setError(`Não foi possível carregar os porteiros. ${failed.message}`);
       } else {
@@ -105,6 +124,13 @@ export function ManagerPortersPanel({
           assignments.set(row.porter_account_id, current);
         });
         setBlockAssignments(assignments);
+        const activity = new Map<string, string>();
+        (eventsResult.data ?? []).forEach((event) => {
+          if (event.actor_id && !activity.has(event.actor_id)) {
+            activity.set(event.actor_id, event.occurred_at);
+          }
+        });
+        setLastActivity(activity);
       }
       setLoading(false);
     })().catch((cause: unknown) => {
@@ -172,14 +198,20 @@ export function ManagerPortersPanel({
   }
 
   async function reloadPorters() {
-    const [{ data: portersData }, { data: assignmentsData }] =
+    const [{ data: portersData }, { data: assignmentsData }, { data: eventsData }] =
       await Promise.all([
         supabase
           .from("porter_accounts")
-          .select("id, name, username, active, access_expires_at")
+          .select("id, auth_user_id, name, username, active, access_expires_at")
           .eq("condominium_id", condominiumId)
           .order("name"),
         supabase.from("porter_blocks").select("porter_account_id, block_id"),
+        supabase
+          .from("package_events")
+          .select("actor_id, occurred_at")
+          .eq("condominium_id", condominiumId)
+          .order("occurred_at", { ascending: false })
+          .limit(500),
       ]);
     if (portersData) setPorters(portersData);
     if (assignmentsData) {
@@ -190,6 +222,15 @@ export function ManagerPortersPanel({
         assignments.set(row.porter_account_id, current);
       });
       setBlockAssignments(assignments);
+    }
+    if (eventsData) {
+      const activity = new Map<string, string>();
+      eventsData.forEach((event) => {
+        if (event.actor_id && !activity.has(event.actor_id)) {
+          activity.set(event.actor_id, event.occurred_at);
+        }
+      });
+      setLastActivity(activity);
     }
   }
 
@@ -383,6 +424,12 @@ export function ManagerPortersPanel({
                       {porter.username} · {porter.active ? "Ativo" : "Inativo"}
                       <br />
                       {formatExpiry(porter.access_expires_at)}
+                      <br />
+                      {formatLastActivity(
+                        porter.auth_user_id
+                          ? (lastActivity.get(porter.auth_user_id) ?? null)
+                          : null,
+                      )}
                       <br />
                       Blocos:{" "}
                       {(blockAssignments.get(porter.id) ?? [])

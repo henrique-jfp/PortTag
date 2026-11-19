@@ -198,6 +198,23 @@ recebimentos. A busca de apartamentos e as listas do porteiro (caderno,
 A migration `20261118180000_package_drawer_pagination.sql` cria o índice e as
 RPCs `package_daily_counts`, `search_package_drawers` e `search_package_records`,
 todas com `security invoker` para preservar as policies RLS existentes.
+
+A área do Síndico tem seis seções no topo: **Visão geral**, **Encomendas**,
+**Relatórios**, **Moradores**, **Porteiros** e **Estrutura**. A Visão geral
+mostra alertas de avarias/fotos próximas do vencimento, pacotes sem aviso
+registrado e uma lista curta do que requer atenção; os cards e os alertas abrem
+as Encomendas com o filtro já aplicado. Em **Encomendas**, a aba **Registros**
+mantém o caderno e o detalhe de cada pacote traz a linha do tempo e o botão
+**Imprimir / Gerar Comprovante**, que usa a janela de impressão do navegador
+para salvar um PDF com condomínio, unidade, rastreio, recebimento, aviso,
+retirada, assinatura e foto da avaria. A aba **Linha do tempo / Auditoria**
+continua com o log imutável de eventos. **Relatórios** exporta o recorte atual
+em CSV, **Moradores** filtra unidades sem WhatsApp cadastrado e **Porteiros**
+mostra o último registro de cada operador. **Estrutura** reúne **Dados e
+Endereço** e **Blocos e Unidades**; ao alterar o endereço, o painel pede
+confirmação explícita porque ele alimenta a conferência determinística das
+etiquetas. Nenhuma dessas melhorias exige migration adicional.
+
 A retirada é registrada pelo porteiro após confirmação presencial do morador.
 Para confirmar a retirada, o morador assina na tela do celular e o porteiro
 confirma que presenciou o ato. Nome, assinatura e confirmação ficam guardados

@@ -91,7 +91,7 @@ export function ManagerHistoryPanel({
       <div className="manager-panel-heading">
         <div>
           <p className="eyebrow">Auditoria</p>
-          <h2>Histórico do caderno</h2>
+          <h2>Linha do tempo do caderno</h2>
           <p>
             Registro somente leitura dos eventos de cada encomenda, gerado
             automaticamente pelas operações da portaria.

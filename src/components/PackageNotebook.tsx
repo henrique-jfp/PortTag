@@ -7,9 +7,11 @@ import {
   DRAWER_PAGE_SIZE,
   RECORD_PAGE_SIZE,
   fetchDrawers,
+  fetchPackageEvents,
   fetchPackageRecords,
   fetchPackageSignature,
   type DrawerRecord,
+  type PackageEventRow,
   type PackageFilters,
   type PackageRecordRow,
   type PackageSort,
@@ -51,12 +53,18 @@ function recordLabel(record: PackageRecordRow) {
 export function PackageNotebook({
   buildings,
   forceBuildingList = false,
+  initialFilters,
+  presetLabel = "",
+  onClearPreset,
 }: {
   buildings: NotebookBuilding[];
   forceBuildingList?: boolean;
+  initialFilters?: PackageFilters;
+  presetLabel?: string;
+  onClearPreset?: () => void;
 }) {
   const [buildingId, setBuildingId] = useState("");
-  const [filters, setFilters] = useState<PackageFilters>({});
+  const [filters, setFilters] = useState<PackageFilters>(initialFilters ?? {});
   const [sort, setSort] = useState<PackageSort>("recent");
   const [porterNames, setPorterNames] = useState<Map<string, string>>(new Map());
   const [drawers, setDrawers] = useState<DrawerRecord[]>([]);
@@ -73,8 +81,14 @@ export function PackageNotebook({
     Record<string, string | null>
   >({});
   const [signatureLoadingId, setSignatureLoadingId] = useState("");
+  const [eventCache, setEventCache] = useState<Record<string, PackageEventRow[]>>({});
+  const [printRecordId, setPrintRecordId] = useState("");
+  const [printGeneratedAt, setPrintGeneratedAt] = useState("");
+  const [printPhotoUrl, setPrintPhotoUrl] = useState("");
+  const [printLoadingId, setPrintLoadingId] = useState("");
   const [error, setError] = useState("");
   const [signatureError, setSignatureError] = useState("");
+  const [printError, setPrintError] = useState("");
 
   // O Super Admin sempre começa pela lista de prédios; síndico e porteiro,
   // que têm um único condomínio, entram direto nas gavetas.
@@ -158,9 +172,32 @@ export function PackageNotebook({
 
   const selectedRecord =
     records.find((record) => record.id === selectedRecordId) ?? null;
+  const printRecord =
+    records.find((record) => record.id === printRecordId) ?? null;
   const currentBuilding = buildings.find(
     (building) => building.id === activeBuildingId,
   );
+
+  useEffect(() => {
+    if (!selectedRecordId || eventCache[selectedRecordId]) return;
+    let active = true;
+    fetchPackageEvents(selectedRecordId)
+      .then((events) => {
+        if (!active) return;
+        setEventCache((current) => ({ ...current, [selectedRecordId]: events }));
+      })
+      .catch((cause: unknown) => {
+        if (!active) return;
+        setError(
+          cause instanceof Error
+            ? `Não foi possível carregar a linha do tempo. ${cause.message}`
+            : "Não foi possível carregar a linha do tempo.",
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedRecordId, eventCache]);
 
   function resetDrawer() {
     setActiveDrawer(null);
@@ -185,6 +222,7 @@ export function PackageNotebook({
     setDrawersLoading(true);
     setError("");
     resetDrawer();
+    onClearPreset?.();
   }
 
   async function loadSignature(packageId: string) {
@@ -209,6 +247,118 @@ export function PackageNotebook({
     setSelectedRecordId((current) => (current === record.id ? "" : record.id));
     if (record.status === "collected") void loadSignature(record.id);
   }
+
+  function timelineEntries(record: PackageRecordRow) {
+    const labels: Record<string, string> = {
+      received: "Recebido",
+      notification: "Avisado",
+      collected: "Retirado",
+      damage_reported: "Avaria registrada",
+    };
+    const events = eventCache[record.id] ?? [];
+    if (events.length) {
+      return events.map((event) => {
+        const detail =
+          event.event_type === "received"
+            ? porterNames.get(record.received_by) ?? ""
+            : event.event_type === "collected"
+              ? record.collected_by_name ?? ""
+              : "";
+        return {
+          key: event.id,
+          label: labels[event.event_type] ?? event.event_type,
+          at: event.occurred_at,
+          detail,
+        };
+      });
+    }
+
+    const fallback: Array<{
+      key: string;
+      label: string;
+      at: string;
+      detail: string;
+    }> = [
+      {
+        key: "received",
+        label: "Recebido",
+        at: record.received_at,
+        detail: porterNames.get(record.received_by) ?? "",
+      },
+    ];
+    if (record.is_damaged) {
+      fallback.push({
+        key: "damage",
+        label: "Avaria registrada",
+        at: record.received_at,
+        detail: "Foto no caderno",
+      });
+    }
+    if (record.last_notified_at) {
+      fallback.push({
+        key: "notification",
+        label: "Avisado",
+        at: record.last_notified_at,
+        detail: "",
+      });
+    }
+    if (record.status === "collected") {
+      fallback.push({
+        key: "collected",
+        label: "Retirado",
+        at: record.collected_at ?? record.received_at,
+        detail: record.collected_by_name ?? "",
+      });
+    }
+    return fallback;
+  }
+
+  async function preparePrint(record: PackageRecordRow) {
+    setPrintError("");
+    setPrintLoadingId(record.id);
+    setPrintPhotoUrl("");
+    setPrintGeneratedAt(new Date().toLocaleString("pt-BR"));
+    try {
+      if (
+        record.status === "collected" &&
+        !Object.prototype.hasOwnProperty.call(signatureCache, record.id)
+      ) {
+        await loadSignature(record.id);
+      }
+      if (record.receipt_path && !record.photo_deleted_at) {
+        const { data, error: storageError } = await supabase.storage
+          .from("package-receipts")
+          .createSignedUrl(record.receipt_path, 120);
+        if (storageError) throw new Error(storageError.message);
+        await new Promise<void>((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => resolve();
+          image.onerror = () =>
+            reject(new Error("Não foi possível carregar a foto da avaria."));
+          image.src = data.signedUrl;
+        });
+        setPrintPhotoUrl(data.signedUrl);
+      }
+      setPrintRecordId(record.id);
+    } catch (cause) {
+      setPrintError(
+        cause instanceof Error
+          ? `Não foi possível preparar o comprovante. ${cause.message}`
+          : "Não foi possível preparar o comprovante.",
+      );
+    } finally {
+      setPrintLoadingId("");
+    }
+  }
+
+  useEffect(() => {
+    if (!printRecordId || printLoadingId) return;
+    const timer = window.setTimeout(() => {
+      window.print();
+      setPrintRecordId("");
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [printRecordId, printLoadingId]);
 
   if (!buildings.length) {
     return (
@@ -273,6 +423,20 @@ export function PackageNotebook({
         <p className="notebook-error" role="alert">
           {signatureError}
         </p>
+      )}
+      {printError && (
+        <p className="notebook-error" role="alert">
+          {printError}
+        </p>
+      )}
+
+      {presetLabel && (
+        <div className="notebook-preset" role="status">
+          <span>Filtro aplicado: <strong>{presetLabel}</strong></span>
+          <button className="notebook-close" type="button" onClick={clearFilters}>
+            Limpar filtro
+          </button>
+        </div>
       )}
 
       {(forceBuildingList || buildings.length > 1) && currentBuilding && (
@@ -620,6 +784,47 @@ export function PackageNotebook({
                             </div>
                           </dl>
 
+                          <div className="notebook-timeline-block">
+                            <div className="notebook-timeline-heading">
+                              <h3>Linha do tempo</h3>
+                            </div>
+                            <ol className="notebook-mini-timeline">
+                              {timelineEntries(selectedRecord).map((entry) => (
+                                <li key={entry.key}>
+                                  <span className="notebook-timeline-dot" aria-hidden="true" />
+                                  <div>
+                                    <strong>{entry.label}</strong>
+                                    <small>
+                                      {formatDate(entry.at)}
+                                      {entry.detail ? ` · ${entry.detail}` : ""}
+                                    </small>
+                                  </div>
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+
+                          <button
+                            className="notebook-print-button"
+                            type="button"
+                            disabled={printLoadingId === selectedRecord.id}
+                            onClick={() => void preparePrint(selectedRecord)}
+                          >
+                            {printLoadingId === selectedRecord.id
+                              ? "Preparando comprovante..."
+                              : "Imprimir / Gerar Comprovante"}
+                          </button>
+
+                          {selectedRecord.is_damaged &&
+                            selectedRecord.receipt_path &&
+                            !selectedRecord.photo_deleted_at && (
+                              <p className="notebook-photo-hint">
+                                Foto da avaria disponível até{" "}
+                                {formatDate(selectedRecord.photo_expires_at)}.
+                                Baixe antes da limpeza automática.
+                              </p>
+                            )}
+
                           <PackageReceipt
                             path={selectedRecord.receipt_path}
                             deletedAt={selectedRecord.photo_deleted_at}
@@ -682,6 +887,141 @@ export function PackageNotebook({
           )}
         </section>
       </div>
+
+      {printRecord && (
+        <section className="notebook-print" aria-label="Comprovante da encomenda">
+          <header className="notebook-print-header">
+            <div>
+              <p>Comprovante de encomenda</p>
+              <h2>{currentBuilding?.name ?? "Condomínio"}</h2>
+            </div>
+            <span>{printRecord.tracking_code || "Sem rastreio"}</span>
+          </header>
+
+          <dl className="notebook-print-grid">
+            <div>
+              <dt>Unidade</dt>
+              <dd>
+                {printRecord.block_name
+                  ? `${printRecord.block_name} · ${printRecord.unit_number}`
+                  : printRecord.unit_number}
+              </dd>
+            </div>
+            <div>
+              <dt>Destinatário</dt>
+              <dd>
+                {printRecord.resident_name ||
+                  (printRecord.recipient_is_resident
+                    ? "Morador da unidade"
+                    : "Não identificado")}
+              </dd>
+            </div>
+            <div>
+              <dt>Empresa / entregador</dt>
+              <dd>
+                {[printRecord.sender, printRecord.delivery_person]
+                  .filter(Boolean)
+                  .join(" · ") || "—"}
+              </dd>
+            </div>
+            <div>
+              <dt>Recebida em</dt>
+              <dd>
+                {formatDate(printRecord.received_at)} ·{" "}
+                {porterNames.get(printRecord.received_by) || "Porteiro não identificado"}
+              </dd>
+            </div>
+            <div>
+              <dt>Aviso ao morador</dt>
+              <dd>
+                {printRecord.last_notified_at
+                  ? formatDate(printRecord.last_notified_at)
+                  : "Não avisado"}
+              </dd>
+            </div>
+            <div>
+              <dt>Retirada em</dt>
+              <dd>
+                {printRecord.collected_at
+                  ? formatDate(printRecord.collected_at)
+                  : "Aguardando retirada"}
+              </dd>
+            </div>
+            <div>
+              <dt>Retirado por</dt>
+              <dd>
+                {printRecord.collected_by_name || "—"}
+                {printRecord.collected_confirmed_by
+                  ? ` · confirmado por ${porterNames.get(printRecord.collected_confirmed_by) || "porteiro"}`
+                  : ""}
+              </dd>
+            </div>
+            <div>
+              <dt>Estado na chegada</dt>
+              <dd>{printRecord.is_damaged ? "Avariado" : "Sem avaria"}</dd>
+            </div>
+          </dl>
+
+          <section className="notebook-print-section">
+            <h3>Linha do tempo</h3>
+            <ol className="notebook-mini-timeline">
+              {timelineEntries(printRecord).map((entry) => (
+                <li key={entry.key}>
+                  <span className="notebook-timeline-dot" aria-hidden="true" />
+                  <div>
+                    <strong>{entry.label}</strong>
+                    <small>
+                      {formatDate(entry.at)}
+                      {entry.detail ? ` · ${entry.detail}` : ""}
+                    </small>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          {printRecord.status === "collected" && (
+            <section className="notebook-print-section">
+              <h3>Assinatura do morador</h3>
+              {Object.prototype.hasOwnProperty.call(
+                signatureCache,
+                printRecord.id,
+              ) && signatureCache[printRecord.id] ? (
+                <img
+                  className="notebook-print-signature"
+                  src={signatureCache[printRecord.id] as string}
+                  alt="Assinatura de quem retirou a encomenda"
+                />
+              ) : (
+                <p>Assinatura não disponível.</p>
+              )}
+            </section>
+          )}
+
+          {printRecord.is_damaged && (
+            <section className="notebook-print-section">
+              <h3>Foto da avaria</h3>
+              {printPhotoUrl ? (
+                <img
+                  className="notebook-print-photo"
+                  src={printPhotoUrl}
+                  alt="Foto do volume avariado no recebimento"
+                />
+              ) : (
+                <p>
+                  {printRecord.photo_deleted_at
+                    ? "Foto removida após o prazo de retenção de 20 dias."
+                    : "Foto indisponível no momento da impressão."}
+                </p>
+              )}
+            </section>
+          )}
+
+          <footer>
+            Documento gerado pelo Caderno de Encomendas em {printGeneratedAt}.
+          </footer>
+        </section>
+      )}
     </div>
   );
 }

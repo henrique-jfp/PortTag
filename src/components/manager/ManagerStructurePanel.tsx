@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ConfirmationDialog } from "../ConfirmationDialog";
-import { UnitResidentsPanel } from "../UnitResidentsPanel";
 import { supabase } from "../../lib/supabase";
 import {
   generateUnitNumbers,
@@ -15,20 +14,15 @@ type Unit = {
   status: "active" | "inactive";
 };
 
-type Tab = "units" | "residents";
-
 function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? `${fallback} ${cause.message}` : fallback;
 }
 
 export function ManagerStructurePanel({
   condominiumId,
-  initialTab = "units",
 }: {
   condominiumId: string;
-  initialTab?: Tab;
 }) {
-  const [tab, setTab] = useState<Tab>(initialTab);
   const [loading, setLoading] = useState(true);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
@@ -43,7 +37,6 @@ export function ManagerStructurePanel({
   const [range, setRange] = useState("101-107");
   const [lastFloor, setLastFloor] = useState("9");
   const [search, setSearch] = useState("");
-  const [residentUnitId, setResidentUnitId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Unit | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -81,7 +74,6 @@ export function ManagerStructurePanel({
         setBlocks(blocksResult.data ?? []);
         setUnits(unitsResult.data ?? []);
         setSelectedBlockId(blocksResult.data?.[0]?.id ?? "");
-        setResidentUnitId(unitsResult.data?.[0]?.id ?? "");
       }
       setLoading(false);
     })().catch((cause: unknown) => {
@@ -249,7 +241,6 @@ export function ManagerStructurePanel({
       if (rpcError) throw new Error(rpcError.message);
       setUnits((current) => current.filter((unit) => unit.id !== deleteTarget.id));
       if (editingUnitId === deleteTarget.id) resetUnitForm();
-      if (residentUnitId === deleteTarget.id) setResidentUnitId("");
       feedback("Unidade excluída.");
     } catch (cause) {
       feedback(errorMessage(cause, "Não foi possível excluir a unidade."), true);
@@ -270,33 +261,12 @@ export function ManagerStructurePanel({
       <div className="manager-panel-heading">
         <div>
           <p className="eyebrow">Cadastros</p>
-          <h2>Blocos, unidades e moradores</h2>
+          <h2>Blocos e unidades</h2>
           <p>
             Estrutura usada para conferir o endereço das etiquetas e associar
-            as encomendas.
+            as encomendas. Os contatos dos moradores ficam na aba Moradores.
           </p>
         </div>
-      </div>
-
-      <div className="manager-tabs" role="tablist" aria-label="Cadastros">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "units"}
-          className={tab === "units" ? "is-active" : ""}
-          onClick={() => setTab("units")}
-        >
-          Blocos e unidades
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "residents"}
-          className={tab === "residents" ? "is-active" : ""}
-          onClick={() => setTab("residents")}
-        >
-          Moradores e contatos
-        </button>
       </div>
 
       {error && (
@@ -308,7 +278,7 @@ export function ManagerStructurePanel({
 
       {loading ? (
         <p className="manager-empty">Carregando cadastros...</p>
-      ) : tab === "units" ? (
+      ) : (
         <div className="manager-two-column">
           <div className="manager-card">
             <h3>Blocos</h3>
@@ -493,40 +463,9 @@ export function ManagerStructurePanel({
             )}
           </div>
         </div>
-      ) : (
-        <div className="manager-card">
-          <h3>Moradores e contatos</h3>
-          <p className="field-hint">
-            Nome e WhatsApp são opcionais. Uma unidade pode existir sem morador
-            cadastrado.
-          </p>
-          <label className="manager-field">
-            Unidade
-            <select
-              value={residentUnitId}
-              onChange={(event) => setResidentUnitId(event.target.value)}
-            >
-              <option value="">Selecione a unidade</option>
-              {units.map((unit) => (
-                <option key={unit.id} value={unit.id}>
-                  {blocks.find((block) => block.id === unit.block_id)?.name
-                    ? `${blocks.find((block) => block.id === unit.block_id)?.name} · `
-                    : ""}
-                  {unit.unit_number}
-                </option>
-              ))}
-            </select>
-          </label>
-          {residentUnitId ? (
-            <UnitResidentsPanel key={residentUnitId} unitId={residentUnitId} />
-          ) : (
-            <p className="manager-empty">Selecione uma unidade para continuar.</p>
-          )}
-        </div>
       )}
 
-      {tab === "units" && (
-        <div className="manager-card">
+      <div className="manager-card">
           <div className="manager-list-heading">
             <h3>Unidades cadastradas</h3>
             <input
@@ -568,16 +507,6 @@ export function ManagerStructurePanel({
                       Editar
                     </button>
                     <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => {
-                        setResidentUnitId(unit.id);
-                        setTab("residents");
-                      }}
-                    >
-                      Moradores
-                    </button>
-                    <button
                       className="danger-button"
                       type="button"
                       onClick={() => setDeleteTarget(unit)}
@@ -589,8 +518,7 @@ export function ManagerStructurePanel({
               ))}
             </ul>
           )}
-        </div>
-      )}
+      </div>
 
       {deleteTarget && (
         <ConfirmationDialog

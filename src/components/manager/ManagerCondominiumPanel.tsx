@@ -132,7 +132,25 @@ export function ManagerCondominiumPanel({
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!form) return;
+    if (!form || !condominium) return;
+
+    const addressChanged =
+      form.cep.trim() !== (condominium.cep ?? "").trim() ||
+      form.street.trim() !== (condominium.street ?? "").trim() ||
+      form.addressNumber.trim() !== (condominium.number ?? "").trim() ||
+      form.neighborhood.trim() !== (condominium.neighborhood ?? "").trim() ||
+      form.city.trim() !== condominium.city.trim() ||
+      form.state.trim().toUpperCase() !== condominium.state.trim().toUpperCase();
+
+    if (
+      addressChanged &&
+      !window.confirm(
+        "Este endereço é usado para validar as etiquetas na portaria. Alterar incorretamente fará as entregas exibirem alerta de divergência. Deseja salvar?",
+      )
+    ) {
+      return;
+    }
+
     setSaving(true);
     setError("");
     setSuccess("");

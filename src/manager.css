@@ -548,6 +548,29 @@
   flex: 1;
 }
 
+.manager-report-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.manager-resident-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.manager-resident-filters input {
+  min-width: min(100%, 260px);
+}
+
+.manager-residents-table td {
+  text-align: left !important;
+  vertical-align: top;
+  font-variant-numeric: normal;
+}
+
 @media (max-width: 980px) {
   .manager-two-column,
   .manager-report-grid {

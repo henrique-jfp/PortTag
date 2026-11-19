@@ -45,6 +45,8 @@ export type PackageSort = "recent" | "tracking" | "sender";
 export type PackageFilters = {
   dateFrom?: string;
   dateTo?: string;
+  /** Limite exato em UTC, usado pelos cards "há mais de X dias". */
+  receivedBefore?: string;
   unit?: string;
   tracking?: string;
   company?: string;
@@ -96,7 +98,9 @@ export function dateKey(value: string) {
 
 function dateBounds(filters: PackageFilters) {
   const from = filters.dateFrom ? localDayStart(filters.dateFrom) : null;
-  let to = filters.dateTo ? localDayAfter(filters.dateTo) : null;
+  let to =
+    filters.receivedBefore ??
+    (filters.dateTo ? localDayAfter(filters.dateTo) : null);
   if (filters.dateFrom && filters.dateTo === filters.dateFrom && from) {
     to = localDayAfter(filters.dateFrom);
   }
@@ -173,6 +177,25 @@ export async function fetchPackageRecords(options: {
     items: rows.map(({ total_records: _total, ...record }) => record),
     total: rows[0]?.total_records ?? 0,
   };
+}
+
+export type PackageEventRow = {
+  id: string;
+  event_type: string;
+  description: string;
+  occurred_at: string;
+  metadata: Record<string, unknown> | null;
+};
+
+/** Linha do tempo de uma única encomenda, da mais antiga para a mais recente. */
+export async function fetchPackageEvents(packageId: string) {
+  const { data, error } = await supabase
+    .from("package_events")
+    .select("id, event_type, description, occurred_at, metadata")
+    .eq("package_id", packageId)
+    .order("occurred_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PackageEventRow[];
 }
 
 /** A assinatura é base64 de imagem: só é buscada quando alguém pede para ver. */
