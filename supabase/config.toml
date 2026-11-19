@@ -12,3 +12,12 @@ verify_jwt = true
 
 [functions.label-lab]
 verify_jwt = false
+
+[functions.collect-label-sample]
+verify_jwt = true
+
+[functions.process-label-lab-queue]
+verify_jwt = false
+
+[functions.cleanup-label-lab]
+verify_jwt = false

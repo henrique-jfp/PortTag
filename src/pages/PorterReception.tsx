@@ -47,6 +47,12 @@ import {
 } from "../lib/packageNotifications";
 import { supabase } from "../lib/supabase";
 import {
+  decideLabelSample,
+  maybeCollectLabelSample,
+  type LabelSample,
+  type LabelSampleInput,
+} from "../lib/labelLabCollection";
+import {
   clearReceptionDraft,
   dataUrlToFile,
   fileToDataUrl,
@@ -268,6 +274,14 @@ type LabelReadContext = {
   blocks: Block[];
   residents: AuthorizedResident[];
   onProgress?: (message: string) => void;
+  /**
+   * Chamado depois do OCR com uma amostra elegível. Não altera o rascunho, o
+   * texto da tela nem a decisão de endereço; o envio é inteiramente opcional.
+   */
+  onSample?: (
+    sample: LabelSample,
+    compressed: Awaited<ReturnType<typeof compressPackagePhoto>>,
+  ) => void;
 };
 
 function draftFromAi(
@@ -455,6 +469,21 @@ async function readLabelFromPhoto(
   // O chamador pode ter comprimido antes para salvar o rascunho no aparelho.
   const compressed = options?.compressed ?? (await compressPackagePhoto(image));
 
+  // Decisão determinística e tardia: só roda quando o OCR já terminou e nunca
+  // devolve valor para a leitura. A imagem reaproveitada é a mesma do OCR.
+  const notifySample = (input: LabelSampleInput) => {
+    const decision = decideLabelSample(input);
+    if (!decision.collect) return;
+    ctx.onSample?.(
+      {
+        ...input,
+        condominiumId: ctx.condominium.id,
+        reasons: decision.reasons,
+      },
+      compressed,
+    );
+  };
+
   // A foto original só precisa ser decodificada de novo para o código de
   // barras. Quando a nuvem devolve rastreio e transportadora, esse segundo
   // bitmap (dezenas de MB) nunca era usado — e derrubava o WebView.
@@ -494,7 +523,24 @@ async function readLabelFromPhoto(
       : [];
 
     if (aiResult.ok) {
-      return draftFromAi(aiResult.value, barcodeValues, compressed.file, image);
+      const ai = aiResult.value;
+      const matchedUnit = ai.unitCandidates.find(
+        (unit) => unit.id === ai.unitId,
+      );
+      notifySample({
+        carrier: ai.carrier,
+        trackingCode: ai.trackingCode,
+        recipientName: ai.recipientName,
+        unitNumber: ai.unitId ? matchedUnit?.unit_number ?? ai.unitNumber : "",
+        unitCandidateCount: ai.unitCandidates.length,
+        addressStatus: ai.addressStatus,
+        ocrChars: ai.diagnostics?.ocrChars ?? 0,
+        ocrText: ai.diagnostics?.ocrText ?? "",
+        aiUsed: ai.diagnostics?.aiUsed,
+        aiError: ai.diagnostics?.aiError,
+        aiSkipped: ai.diagnostics?.aiSkipped,
+      });
+      return draftFromAi(ai, barcodeValues, compressed.file, image);
     }
 
     const detail =
@@ -507,10 +553,38 @@ async function readLabelFromPhoto(
       barcodeValues,
       detail.slice(0, 240) || "A leitura na nuvem não respondeu.",
     );
-    return draftFromBarcodeOnly(label, compressed.file, image);
+    const draft = draftFromBarcodeOnly(label, compressed.file, image);
+    notifySample({
+      carrier: draft.company,
+      trackingCode: draft.trackingCode,
+      recipientName: "",
+      unitNumber: "",
+      unitCandidateCount: 0,
+      addressStatus: "unknown",
+      ocrChars: 0,
+      ocrText: "",
+      aiError: detail,
+    });
+    return draft;
   } finally {
     preparedRef.current?.dispose();
   }
+}
+
+/**
+ * Dispara a coleta em uma tarefa separada, depois do OCR e da atualização da
+ * tela. Não há await, loading, confirmação nem mensagem nova: se falhar, o
+ * recebimento segue normalmente e a amostra simplesmente não entra na fila.
+ */
+function collectLabelSampleInBackground(
+  sample: LabelSample,
+  compressed: Awaited<ReturnType<typeof compressPackagePhoto>>,
+) {
+  setTimeout(() => {
+    void maybeCollectLabelSample({ client: supabase, sample, compressed }).catch(
+      () => {},
+    );
+  }, 0);
 }
 
 function buildWhatsappLink(
@@ -1572,6 +1646,7 @@ export function PorterReception() {
               logRead(message);
             }
           },
+          onSample: collectLabelSampleInBackground,
         },
         { compressed },
       );
@@ -1861,6 +1936,7 @@ export function PorterReception() {
         blocks,
         residents: authorizedResidents,
         onProgress: (message) => updateBulkItem(item.id, { message }),
+        onSample: collectLabelSampleInBackground,
       });
     } catch (error) {
       updateBulkItem(item.id, {

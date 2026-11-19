@@ -70,6 +70,19 @@ cobertura com sugestões de regras. O manual completo está em
 não salva imagem nem relatório; os arquivos gerados ficam em
 `scripts/label-reports/`, ignorado pelo Git.
 
+Além desse laboratório manual, o app do porteiro coleta amostras de forma
+invisível quando o OCR deixa lacuna real (destinatário, unidade, conflito de
+unidade ou endereço divergente/desconhecido) ou falha. A decisão é
+determinística em `src/lib/labelLabCollection.ts` e acontece depois do OCR: não
+há tela, botão, aviso, loading, nova leitura nem segunda chamada ao Vision. A
+mesma JPEG já comprimida vai para `collect-label-sample`, que usa a sessão do
+porteiro, grava no bucket privado e cria a tarefa. O worker
+`process-label-lab-queue` reaproveita `label-lab` fora do caminho crítico, e
+`cleanup-label-lab` apaga a foto e sanitiza o OCR identificável após a retenção.
+Nada disso publica regex: a aprovação e a versão do artefato ainda serão
+manuais. Os detalhes de segredos e agendamentos estão em
+[`supabase/RECEBIMENTO.md`](./supabase/RECEBIMENTO.md).
+
 ### Acesso pelo celular (tela inicial)
 
 Para abrir sem a barra de endereço, instale como app — não use “Adicionar
@@ -135,6 +148,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 19. `supabase/migrations/20261118160000_damage_photo_only.sql`
 20. `supabase/migrations/20261118180000_package_drawer_pagination.sql`
 21. `supabase/migrations/20261119120000_manager_administration.sql`
+22. `supabase/migrations/20261119130000_label_lab_collection.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -143,6 +157,13 @@ histórico imutável `package_events` com triggers e a RPC
 a todos os condomínios. Depois de executá-la, faça redeploy da Edge Function
 `manage-porter`: ela passou a aceitar também o síndico do condomínio, sem
 expor `service_role` ao frontend.
+
+A migração 22 cria o bucket privado `label-lab-private`, a fila
+`label_lab_queue`, a configuração `label_lab_settings` e a auditoria
+`label_lab_audit`. Ela não muda nenhuma regra de leitura: somente o Super Admin
+pode consultar essas tabelas, e a escrita acontece nas Edge Functions. A coleta
+pode ser desativada sem redeploy com
+`select public.update_label_lab_settings(p_collection_enabled => false);`.
 
 Crie e confirme a conta responsável pela plataforma em Supabase
 Authentication > Users. Promova somente essa conta no SQL Editor, substituindo

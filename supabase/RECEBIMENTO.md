@@ -50,6 +50,11 @@
     mantém o acesso global. Após essa migration, rode novamente
     `supabase functions deploy manage-porter` para liberar a gestão de
     porteiros aos síndicos.
+    Execute por fim `20261119130000_label_lab_collection.sql`: cria o bucket
+    privado `label-lab-private`, a fila `label_lab_queue`, os parâmetros de
+    retenção em `label_lab_settings` e a auditoria `label_lab_audit`. Nenhuma
+    policy concede escrita a `anon` ou `authenticated`; somente o Super Admin
+    lê as tabelas e as Edge Functions escrevem com `service_role`.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -91,6 +96,27 @@
 
    O uso está documentado em `scripts/label-lab/MANUAL.md`. A função não salva
    fotos nem gera arquivos no servidor.
+
+   Para habilitar a coleta invisível do Label Lab, publique as três funções
+   abaixo. `collect-label-sample` exige JWT e usa a sessão do porteiro; as
+   outras duas são chamadas pelo cron com segredos próprios:
+
+   ```powershell
+   supabase functions deploy collect-label-sample
+   supabase secrets set LABEL_LAB_SECRET="O_MESMO_SEGREDO_DO_LABORATORIO"
+   $workerSecret = "ESCOLHA_UMA_SENHA_LONGA"
+   $cleanupSecret = "ESCOLHA_OUTRA_SENHA_LONGA"
+   supabase secrets set LABEL_LAB_WORKER_SECRET="$workerSecret"
+   supabase secrets set LABEL_LAB_CLEANUP_SECRET="$cleanupSecret"
+   supabase functions deploy process-label-lab-queue
+   supabase functions deploy cleanup-label-lab
+   ```
+
+   `LABEL_LAB_SECRET` já protege `label-lab`; o worker precisa dele para chamar
+   o laboratório internamente. Não coloque nenhum desses segredos nem a chave
+   `service_role` em `src/` ou no repositório. O envio da amostra acontece
+   depois do OCR, sem segunda leitura de imagem, e falhas de rede são
+   ignoradas pelo app.
 
    As funções `manage-porter` e `manage-manager` verificam a sessão no servidor.
    `manage-manager` exige perfil Super Admin; `manage-porter` aceita também o
@@ -249,3 +275,61 @@ Se o projeto não tiver `pg_cron`, `pg_net` ou Vault habilitados, habilite as
 extensões disponíveis no painel Supabase antes de executar o script de
 agendamento. A limpeza ainda não é automática até a função e o job estarem
 publicados e configurados.
+
+## Publicar a análise e a retenção do Label Lab
+
+A coleta invisível depende de três jobs/segredos além dos do caderno. O projeto
+já precisa ter o Vault configurado para a limpeza de fotos de avaria; os scripts
+reaproveitam o segredo `package-cleanup-project-url` como URL do projeto.
+
+1. Publique `process-label-lab-queue` e `cleanup-label-lab` (comandos na seção
+   de deploy). O arquivo `supabase/config.toml` desativa o JWT nessas duas
+   funções porque o cron usa `x-cron-secret`.
+2. Guarde os dois segredos no Vault, com os mesmos valores usados em
+   `LABEL_LAB_WORKER_SECRET` e `LABEL_LAB_CLEANUP_SECRET`:
+
+   ```sql
+   select vault.create_secret(
+     'O_MESMO_VALOR_DE_LABEL_LAB_WORKER_SECRET',
+     'label-lab-worker-secret'
+   );
+   select vault.create_secret(
+     'O_MESMO_VALOR_DE_LABEL_LAB_CLEANUP_SECRET',
+     'label-lab-cleanup-secret'
+   );
+   ```
+
+3. Abra `supabase/schedules/process-label-lab-queue.sql` e
+   `supabase/schedules/cleanup-label-lab.sql`, substitua
+   `REPLACE_WITH_SUPABASE_PUBLISHABLE_OR_ANON_KEY` pela chave pública
+   (publishable ou anon) do projeto e execute ambos no SQL Editor. O worker roda
+   a cada 10 minutos; a limpeza, a cada hora. Não substitua o placeholder nos
+   arquivos versionados.
+4. Confira os jobs:
+
+   ```sql
+   select jobname, schedule
+   from cron.job
+   where jobname in ('process-label-lab-queue', 'cleanup-label-lab');
+   ```
+
+A retenção padrão é de 7 dias para amostras pendentes e 15 dias para amostras
+em análise/analisadas; registros `discarded` ou `published` são removidos na
+primeira limpeza. O Super Admin pode ajustar os prazos e desativar a coleta sem
+migration:
+
+```sql
+select public.update_label_lab_settings(
+  p_collection_enabled => true,
+  p_pending_retention_days => 7,
+  p_processing_retention_days => 15,
+  p_max_attempts => 3
+);
+```
+
+A limpeza apaga o arquivo do bucket, zera `ocr_text`, rastreio, resultado
+parseado, diagnóstico e análise, e grava apenas metadados em
+`label_lab_audit`. Fotos órfãs (upload concluído sem tarefa persistida) também
+são reconciliadas. A publicação de regex continua dependendo de aprovação
+explícita, teste de regressão e artefato versionado; este pipeline apenas
+prepara e conserva a evidência por tempo limitado.
