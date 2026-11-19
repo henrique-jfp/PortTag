@@ -81,6 +81,24 @@ function cleanText(value: unknown, maxLength = 200) {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+// A regressão roda as regex sobre o OCR original. Manter as quebras de linha
+// é essencial: sugestões como `(?<=TRANSP:\s)[A-Z\s]+(?=\n)` deixariam de
+// casar se o texto fosse achatado com `cleanText`.
+function cleanOcrText(value: unknown, maxLength = 3000) {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\S\n]+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+// Expressões são trimadas e limitadas, mas o espaço interno é preservado.
+function cleanPattern(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, 160);
+}
+
 function isUuid(value: unknown): value is string {
   return typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -155,7 +173,7 @@ function sanitizeRules(value: unknown): Rules {
     }
     rules[field] = rawList.map((item) => {
       const raw = isRecord(item) ? item : {};
-      const pattern = cleanText(raw.pattern, 160);
+      const pattern = cleanPattern(raw.pattern);
       if (pattern.length < 4) throw new Error("Regex muito curta.");
       try {
         new RegExp(pattern, "i");
@@ -181,7 +199,7 @@ function sanitizeCases(value: unknown): RegressionCase[] {
     }
     const sampleId = isUuid(raw.sampleId) ? raw.sampleId : undefined;
     const input = typeof raw.input === "string"
-      ? raw.input.replace(/\s+/g, " ").trim().slice(0, 3000)
+      ? cleanOcrText(raw.input, 3000)
       : undefined;
     if (!sampleId && !input) {
       throw new Error(`Caso ${index + 1} precisa de uma amostra ou texto OCR.`);
@@ -455,7 +473,7 @@ Deno.serve(async (request: Request) => {
             .maybeSingle();
           if (sampleError) throw new Error(sampleError.message);
           const analysis = isRecord(sample?.analysis) ? sample.analysis : {};
-          const ocrText = cleanText(
+          const ocrText = cleanOcrText(
             sample?.ocr_text ?? analysis.ocrText,
             3000,
           );

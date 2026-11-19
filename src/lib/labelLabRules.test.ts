@@ -44,6 +44,17 @@ describe("editor de regras do Label Lab", () => {
     expect(result.pattern).toContain("RASTREIO");
   });
 
+  it("mantém âncoras de linha ao aplicar regras sobre OCR", () => {
+    const rules = emptyLabelLabRules();
+    rules.carrier = [{ pattern: "(?<=TRANSP:\\s)([A-Z]+)(?=\\s)", note: "" }];
+    const result = applyLabelLabRule(
+      rules,
+      "carrier",
+      "TRANSP: SHIPPIFY TECNOLOGIA LTDA\nREMETENTE\n",
+    );
+    expect(result.value).toBe("SHIPPIFY");
+  });
+
   it("normaliza espaços e caixa na regressão", () => {
     expect(normalizeLabelLabValue("  João   Silva ")).toBe("joãosilva");
   });
