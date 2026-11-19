@@ -810,7 +810,6 @@ export function PorterReception() {
     () => Promise.resolve(null),
   );
   const restoredSignature = useRef("");
-  const [draftRecovered, setDraftRecovered] = useState(false);
 
   const selectedUnit = useMemo(
     () => units.find((unit) => unit.id === unitId) ?? null,
@@ -1587,7 +1586,6 @@ export function PorterReception() {
         // A foto da avaria pode ser refeita sem perder o restante.
       }
     }
-    setDraftRecovered(true);
     draftReady.current = true;
   }
 
@@ -1782,7 +1780,6 @@ export function PorterReception() {
 
       rememberDeliveryPerson(deliveryPerson.trim());
       if (account) void clearReceptionDraft(account.condominium_id);
-      setDraftRecovered(false);
       setSuccessMessage(
         `Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`,
       );
@@ -2220,7 +2217,6 @@ export function PorterReception() {
 
   function cancelCollection() {
     if (account) void clearReceptionDraft(account.condominium_id);
-    setDraftRecovered(false);
     restoredSignature.current = "";
     const url = new URL(window.location.href);
     if (url.searchParams.get("collect") === collectionBaseId) {
@@ -2346,7 +2342,6 @@ export function PorterReception() {
   function cancelReception() {
     readRequestId.current += 1;
     if (account) void clearReceptionDraft(account.condominium_id);
-    setDraftRecovered(false);
     resetPhoto();
     setIsReading(false);
     setIsSaving(false);
@@ -2407,24 +2402,6 @@ export function PorterReception() {
             {successMessage}
           </p>
         )}
-        {draftRecovered && (
-          <p className="porter-success" role="status">
-            <Check size={18} />
-            Rascunho recuperado deste aparelho. Continue de onde parou.
-            <button
-              type="button"
-              className="porter-text-button"
-              onClick={() => {
-                if (account) void clearReceptionDraft(account.condominium_id);
-                setDraftRecovered(false);
-                resetPhoto();
-              }}
-            >
-              Descartar
-            </button>
-          </p>
-        )}
-
         {notificationMessage && (
           <p className="porter-success" role="status">
             <Check size={18} />
