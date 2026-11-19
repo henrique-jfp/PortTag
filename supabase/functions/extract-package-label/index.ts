@@ -304,6 +304,9 @@ Deno.serve(async (request: Request) => {
     if (ai.fields) {
       const accepted: string[] = [];
       for (const field of aiFields) {
+        // A IA só preenche lacuna. Se o parser já leu o campo, substituí-lo
+        // permitia que "via de acesso norte km" virasse o nome do morador.
+        if (rules[field]) continue;
         const value = ai.fields[field];
         if (value && grounded(field, value, ocrText) !== false) {
           final[field] = value;
