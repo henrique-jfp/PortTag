@@ -151,6 +151,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 22. `supabase/migrations/20261119130000_label_lab_collection.sql`
 23. `supabase/migrations/20261119140000_label_lab_console.sql`
 24. `supabase/migrations/20261119150000_fix_label_lab_storage_deletion.sql`
+25. `supabase/migrations/20261119160000_delete_label_lab_ruleset.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -189,6 +190,10 @@ e podem ser reanalisadas ou descartadas.
 
 Para calibrar, adicione sugestões ao editor de regex, crie casos de regressão
 a partir das amostras, rode **Testar**, salve o rascunho, aprove e publique.
+**Salvar como nova versão** sempre cria um snapshot com o nome digitado;
+**Atualizar versão selecionada** reescreve apenas o rascunho aberto. Cada
+rascunho pode ser excluído pelo botão **Excluir** na lista de versões (a RPC
+`delete_label_lab_ruleset` bloqueia versões aprovadas/publicadas).
 **Aprovar** pede o texto `APROVAR` e a regressão verde, apenas registrando o
 aceite. **Publicar** pede `PUBLICAR`, exige a exclusão/sanitização das amostras
 usadas por `purge_label_lab_samples_for_ruleset` (a purga é reexecutada para
@@ -200,10 +205,11 @@ A Edge Function `admin-label-lab` (`verify_jwt = true`) valida o JWT, exige
 `profiles.is_super_admin`, chama `label-lab` com o segredo já existente
 `LABEL_LAB_SECRET`, lê as fotos do bucket privado e chama as RPCs; nenhum
 segredo chega ao frontend. Para implantar, aplique as migrations
-`20261119140000_label_lab_console.sql` e
+`20261119140000_label_lab_console.sql`,
 `20261119150000_fix_label_lab_storage_deletion.sql` (esta última habilita a
 exclusão das fotos nas RPCs de descarte e purga, exigida pelo trigger
-`storage.protect_delete`) e publique a função:
+`storage.protect_delete`) e `20261119160000_delete_label_lab_ruleset.sql`, e
+publique a função:
 
 ```powershell
 supabase functions deploy admin-label-lab

@@ -72,6 +72,10 @@
     `storage.allow_delete_query` apenas no escopo da transação, já que o
     trigger `storage.protect_delete` bloqueia `DELETE` direto em
     `storage.objects`. Sem ela, descarte e publicação falham com HTTP 400.
+    Aplique também `20261119160000_delete_label_lab_ruleset.sql`: cria a RPC
+    `delete_label_lab_ruleset`, restrita a rascunhos e ao Super Admin, com
+    auditoria `ruleset_deleted`. Versões aprovadas, publicadas ou superseded
+    não podem ser excluídas e as amostras de origem são mantidas.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -388,8 +392,9 @@ jobs novos.
 
 ### Publicar
 
-1. Aplique as migrations `20261119140000_label_lab_console.sql` e
-   `20261119150000_fix_label_lab_storage_deletion.sql` no SQL Editor e execute
+1. Aplique as migrations `20261119140000_label_lab_console.sql`,
+   `20261119150000_fix_label_lab_storage_deletion.sql` e
+   `20261119160000_delete_label_lab_ruleset.sql` no SQL Editor e execute
    `supabase functions deploy admin-label-lab`.
 2. Mantenha `LABEL_LAB_SECRET`, `LABEL_LAB_WORKER_SECRET`,
    `LABEL_LAB_CLEANUP_SECRET` e os schedules `process-label-lab-queue` e

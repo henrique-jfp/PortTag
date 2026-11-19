@@ -886,10 +886,18 @@
   overflow-y: auto;
 }
 
+.dashboard .lab-version-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
 .dashboard .lab-version {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 8px;
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--admin-border);
@@ -899,6 +907,12 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.dashboard .lab-version-delete {
+  flex: 0 0 auto;
+  padding-inline: 10px;
+  font-size: 0.85rem;
 }
 
 .dashboard .lab-version:hover {

@@ -559,6 +559,15 @@ Deno.serve(async (request: Request) => {
         return respond({ discarded });
       }
 
+      case "delete": {
+        if (!isUuid(input.rulesetId)) return respond({ error: "Rascunho inválido." }, 400);
+        const deleted = await rpc<boolean>("delete_label_lab_ruleset", {
+          p_ruleset_id: input.rulesetId,
+          p_actor: actor,
+        });
+        return respond({ deleted });
+      }
+
       default:
         return respond({ error: "Ação desconhecida." }, 400);
     }

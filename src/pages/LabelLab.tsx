@@ -187,6 +187,7 @@ export function LabelLab() {
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [publishedArtifact, setPublishedArtifact] = useState<Record<string, unknown> | null>(null);
   const [discardTarget, setDiscardTarget] = useState<Sample | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Ruleset | null>(null);
 
   const selectedCondominium = useMemo(
     () => condominiums.find((item) => item.id === selectedCondominiumId) ?? null,
@@ -499,21 +500,25 @@ export function LabelLab() {
     return applyLabelLabRule(rules, item.field, text);
   }
 
-  async function handleSaveDraft() {
+  async function handleSaveDraft(createNew: boolean) {
     const errors = validateLabelLabRules(rules);
     if (errors.length) {
       setPageError(errors.join(" "));
       return;
     }
+    if (rulesetName.trim().length < 3) {
+      setPageError("Informe um nome com pelo menos 3 caracteres para a versão.");
+      return;
+    }
     setBusyState("save");
     try {
+      const editable =
+        selectedRuleset?.status === "draft" || selectedRuleset?.status === "approved";
       const response = await callAdmin<{ ruleset: Ruleset }>({
         action: "save",
-        rulesetId:
-          selectedRuleset?.status === "published" ||
-          selectedRuleset?.status === "superseded"
-            ? null
-            : rulesetId || null,
+        // "Nova versão" sempre cria um snapshot com o nome digitado; "Atualizar"
+        // reescreve a versão selecionada. Publicadas nunca são alteradas.
+        rulesetId: !createNew && editable ? rulesetId || null : null,
         name: rulesetName,
         description: rulesetDescription,
         rules,
@@ -521,7 +526,11 @@ export function LabelLab() {
       setRulesetId(response.ruleset.id);
       setApprovalConfirmed(false);
       setPublishConfirmed(false);
-      setSuccessMessage(`Rascunho v${response.ruleset.version} salvo.`);
+      setSuccessMessage(
+        createNew
+          ? `Nova versão v${response.ruleset.version} criada com o nome "${response.ruleset.name}".`
+          : `Versão v${response.ruleset.version} atualizada.`,
+      );
       await reloadData();
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Falha ao salvar.");
@@ -659,6 +668,42 @@ export function LabelLab() {
     } catch (error) {
       setDiscardTarget(null);
       setPageError(error instanceof Error ? error.message : "Falha ao descartar.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleDeleteRuleset() {
+    if (!deleteTarget) return;
+    setBusyState("delete-ruleset");
+    try {
+      const response = await callAdmin<{ deleted: boolean }>({
+        action: "delete",
+        rulesetId: deleteTarget.id,
+      });
+      if (!response.deleted) {
+        setPageError("O rascunho já não existe.");
+        return;
+      }
+      if (deleteTarget.id === rulesetId) {
+        setRulesetId("");
+        setRules(emptyLabelLabRules());
+        setCases([]);
+        setRulesetName("Modelo de etiqueta");
+        setRulesetDescription("");
+        setRegressionResults([]);
+        setApprovalText("");
+        setPublishText("");
+        setApprovalConfirmed(false);
+        setPublishConfirmed(false);
+        setPublishedArtifact(null);
+      }
+      setDeleteTarget(null);
+      setSuccessMessage(`Rascunho v${deleteTarget.version} excluído.`);
+      await reloadData();
+    } catch (error) {
+      setDeleteTarget(null);
+      setPageError(error instanceof Error ? error.message : "Falha ao excluir.");
     } finally {
       setBusy("");
     }
@@ -927,7 +972,9 @@ export function LabelLab() {
           <h2>2. Editor de expressões</h2>
           <p>
             A IA sugere, mas só quatro campos podem ter regex. CEP, logradouro e
-            número continuam sendo decididos pelo código determinístico.
+            número continuam sendo decididos pelo código determinístico. As regex
+            desta seção valem no teste de regressão e no artefato publicado; elas
+            não alteram a análise acima nem o OCR do porteiro automaticamente.
           </p>
         </div>
         <div className="lab-toolbar">
@@ -988,14 +1035,27 @@ export function LabelLab() {
             </div>
           ))}
         </div>
+        <p className="lab-hint">
+          Cada nome gera uma versão independente. Use <strong>Nova versão</strong> para
+          guardar um novo teste; <strong>Atualizar</strong> apenas reescreve a versão
+          selecionada. O botão de exclusão fica na lista de versões.
+        </p>
         <div className="form-actions">
+          <button
+            className="primary-button"
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={() => void handleSaveDraft(true)}
+          >
+            {busy === "save" ? "Salvando..." : "Salvar como nova versão"}
+          </button>
           <button
             className="secondary-button"
             type="button"
-            disabled={Boolean(busy)}
-            onClick={() => void handleSaveDraft()}
+            disabled={Boolean(busy) || selectedRuleset?.status !== "draft"}
+            onClick={() => void handleSaveDraft(false)}
           >
-            {busy === "save" ? "Salvando..." : "Salvar rascunho"}
+            Atualizar versão selecionada
           </button>
         </div>
       </section>
@@ -1141,6 +1201,7 @@ export function LabelLab() {
           <p>
             Aprovar e publicar são atos separados, com confirmação digitada e
             auditoria. Publicar exclui as fotos e sanitiza o OCR das amostras usadas.
+            Rascunhos descartados podem ser excluídos pelo botão ao lado da versão.
           </p>
         </div>
         <div className="lab-grid">
@@ -1149,22 +1210,34 @@ export function LabelLab() {
             {rulesets.length ? (
               <div className="lab-version-list">
                 {rulesets.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={`lab-version ${item.id === rulesetId ? "lab-version-active" : ""}`}
-                    onClick={() => selectRuleset(item)}
-                  >
-                    <span>
-                      <strong>v{item.version}</strong> · {item.name}
-                    </span>
-                    <span className="lab-badge">{item.status}</span>
-                    <small>
-                      {item.regression?.total
-                        ? `${item.regression.passed}/${item.regression.total} casos`
-                        : "sem regressão"}
-                    </small>
-                  </button>
+                  <div className="lab-version-row" key={item.id}>
+                    <button
+                      type="button"
+                      className={`lab-version ${item.id === rulesetId ? "lab-version-active" : ""}`}
+                      onClick={() => selectRuleset(item)}
+                    >
+                      <span>
+                        <strong>v{item.version}</strong> · {item.name}
+                      </span>
+                      <span className="lab-badge">{item.status}</span>
+                      <small>
+                        {item.regression?.total
+                          ? `${item.regression.passed}/${item.regression.total} casos`
+                          : "sem regressão"}
+                      </small>
+                    </button>
+                    {item.status === "draft" ? (
+                      <button
+                        className="danger-button lab-version-delete"
+                        type="button"
+                        disabled={Boolean(busy)}
+                        title={`Excluir rascunho v${item.version}`}
+                        onClick={() => setDeleteTarget(item)}
+                      >
+                        Excluir
+                      </button>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             ) : (
@@ -1296,6 +1369,18 @@ export function LabelLab() {
           loading={busy === "discard"}
           onConfirm={() => void handleDiscard()}
           onCancel={() => setDiscardTarget(null)}
+        />
+      ) : null}
+
+      {deleteTarget ? (
+        <ConfirmationDialog
+          title="Excluir rascunho"
+          description={`A versão v${deleteTarget.version} ("${deleteTarget.name}") será excluída. Versões aprovadas ou publicadas não podem ser excluídas. As amostras usadas na regressão serão mantidas. Esta ação não pode ser desfeita.`}
+          confirmLabel="Excluir rascunho"
+          busyLabel="Excluindo..."
+          loading={busy === "delete-ruleset"}
+          onConfirm={() => void handleDeleteRuleset()}
+          onCancel={() => setDeleteTarget(null)}
         />
       ) : null}
     </main>
