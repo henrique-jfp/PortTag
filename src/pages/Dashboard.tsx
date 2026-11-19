@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowUpRight, Building2 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { PackageNotebook, type NotebookBuilding } from "../components/PackageNotebook";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
 
@@ -72,6 +73,7 @@ export function Dashboard() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [notebookOpen, setNotebookOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -344,9 +346,13 @@ export function Dashboard() {
         <div className="admin-header-actions">
           {isSuperAdmin && (
             <nav className="admin-shortcuts" aria-label="Acesso rápido">
-              <a className="secondary-button button-link" href="/manager.html">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setNotebookOpen(true)}
+              >
                 Caderno
-              </a>
+              </button>
               <a className="secondary-button button-link" href="/porter.html">
                 App Porteiro
               </a>
@@ -378,6 +384,15 @@ export function Dashboard() {
             </a>
           </div>
         </section>
+      ) : notebookOpen ? (
+        <PackageNotebook
+          forceBuildingList
+          buildings={condominiums.map((condominium): NotebookBuilding => ({
+            id: condominium.id,
+            name: condominium.name,
+            meta: `${condominium.city}, ${condominium.state} · ${condominium.block_count} bloco(s)${condominium.status === "inactive" ? " · inativo" : ""}`,
+          }))}
+        />
       ) : (
         <>
           <section className="admin-section">

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { AuthProvider } from "./contexts/AuthContext";
 import { PorterApp } from "./apps/PorterApp";
 import "./index.css";
+import "./notebook.css";
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {

@@ -15,11 +15,11 @@ import {
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { Pagination } from "../components/Pagination";
+import { PackageNotebook } from "../components/PackageNotebook";
 import {
   RECORD_PAGE_SIZE,
   fetchPackageRecords,
   fetchPackageSignature,
-  type PackageSort,
 } from "../lib/packageQueries";
 import {
   bulkReviewReasons,
@@ -669,11 +669,6 @@ export function PorterReception() {
   const [unitSearchPage, setUnitSearchPage] = useState(1);
   const [isLoadingUnitDetails, setIsLoadingUnitDetails] = useState(false);
   const [unitDetailsError, setUnitDetailsError] = useState("");
-  const [ledgerRecords, setLedgerRecords] = useState<PackageRecord[]>([]);
-  const [ledgerPage, setLedgerPage] = useState(1);
-  const [ledgerTotal, setLedgerTotal] = useState(0);
-  const [ledgerSort, setLedgerSort] = useState<PackageSort>("recent");
-  const [recordsLoading, setRecordsLoading] = useState(false);
   const [pendingPage, setPendingPage] = useState(1);
   const [signatureCache, setSignatureCache] = useState<
     Record<string, string | null>
@@ -792,13 +787,10 @@ export function PorterReception() {
     pendingPage,
     Math.max(1, Math.ceil(pendingPackages.length / RECORD_PAGE_SIZE)),
   );
-  const visiblePackages =
-    activeView === "pending"
-      ? pendingPackages.slice(
-          (safePendingPage - 1) * RECORD_PAGE_SIZE,
-          safePendingPage * RECORD_PAGE_SIZE,
-        )
-      : ledgerRecords;
+  const visiblePackages = pendingPackages.slice(
+    (safePendingPage - 1) * RECORD_PAGE_SIZE,
+    safePendingPage * RECORD_PAGE_SIZE,
+  );
   const bulkCounts = useMemo(
     () => ({
       done: bulkItems.filter((item) => item.status === "done").length,
@@ -1093,37 +1085,6 @@ export function PorterReception() {
     hasSignature,
   ]);
 
-  useEffect(() => {
-    if (!account || activeView !== "ledger") return;
-    let active = true;
-    void (async () => {
-      setRecordsLoading(true);
-      try {
-        const result = await fetchPackageRecords({
-          condominiumId: account.condominium_id,
-          sort: ledgerSort,
-          page: ledgerPage,
-        });
-        if (!active) return;
-        setLedgerRecords(result.items as PackageRecord[]);
-        setLedgerTotal(result.total);
-        if (ledgerPage > 1 && result.items.length === 0) setLedgerPage(1);
-      } catch (error) {
-        if (!active) return;
-        setPageError(
-          error instanceof Error
-            ? `Não foi possível carregar o caderno. ${error.message}`
-            : "Não foi possível carregar o caderno.",
-        );
-      } finally {
-        if (active) setRecordsLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [account, activeView, ledgerPage, ledgerSort]);
-
   async function reloadPackages() {
     if (!account) return;
     const pendingPackagesResult = await supabase
@@ -1137,15 +1098,6 @@ export function PorterReception() {
       return;
     }
     setPendingPackages(pendingPackagesResult.data ?? []);
-    if (activeView === "ledger") {
-      const result = await fetchPackageRecords({
-        condominiumId: account.condominium_id,
-        sort: ledgerSort,
-        page: ledgerPage,
-      });
-      setLedgerRecords(result.items as PackageRecord[]);
-      setLedgerTotal(result.total);
-    }
   }
 
   function handleUnitSearchChange(value: string) {
@@ -3308,25 +3260,9 @@ export function PorterReception() {
                 <p>
                   {activeView === "pending"
                     ? `${pendingPackages.length.toLocaleString("pt-BR")} encomenda(s) aguardando retirada.`
-                    : `${ledgerTotal.toLocaleString("pt-BR")} registros no condomínio.`}
+                    : "Consulte os registros por gaveta de apartamento."}
                 </p>
               </div>
-              {activeView === "ledger" && (
-                <label className="porter-ledger-sort">
-                  Ordenar por
-                  <select
-                    value={ledgerSort}
-                    onChange={(event) => {
-                      setLedgerSort(event.target.value as PackageSort);
-                      setLedgerPage(1);
-                    }}
-                  >
-                    <option value="recent">Mais recente (dia)</option>
-                    <option value="tracking">Rastreio / entregador / loja</option>
-                    <option value="sender">Entregador ou loja</option>
-                  </select>
-                </label>
-              )}
               <button
                 className="porter-back-button"
                 type="button"
@@ -3465,16 +3401,23 @@ export function PorterReception() {
               </form>
             )}
 
-            {recordsLoading && activeView === "ledger" ? (
-              <p className="porter-empty">Carregando registros...</p>
-            ) : visiblePackages.length === 0 ? (
-              <p className="porter-empty">
-                {activeView === "pending"
-                  ? "Nenhuma encomenda aguardando retirada."
-                  : "Nenhuma encomenda registrada ainda."}
-              </p>
+            {activeView === "ledger" && account ? (
+              <PackageNotebook
+                buildings={[
+                  {
+                    id: account.condominium_id,
+                    name: condominium?.name ?? "Meu condomínio",
+                  },
+                ]}
+              />
             ) : (
-              <ul className="porter-package-list">
+              <>
+                {visiblePackages.length === 0 ? (
+                  <p className="porter-empty">
+                    Nenhuma encomenda aguardando retirada.
+                  </p>
+                ) : (
+                  <ul className="porter-package-list">
                 {visiblePackages.map((item) => (
                   <li key={item.id}>
                     <div className="porter-package-info">
@@ -3551,16 +3494,17 @@ export function PorterReception() {
                     )}
                   </li>
                 ))}
-              </ul>
+                  </ul>
+                )}
+                <Pagination
+                  page={safePendingPage}
+                  total={pendingPackages.length}
+                  pageSize={RECORD_PAGE_SIZE}
+                  onChange={setPendingPage}
+                  label="Páginas de encomendas"
+                />
+              </>
             )}
-            <Pagination
-              page={activeView === "pending" ? safePendingPage : ledgerPage}
-              total={activeView === "pending" ? pendingPackages.length : ledgerTotal}
-              pageSize={RECORD_PAGE_SIZE}
-              onChange={activeView === "pending" ? setPendingPage : setLedgerPage}
-              label="Páginas de encomendas"
-              disabled={recordsLoading}
-            />
           </section>
         )}
       </div>
