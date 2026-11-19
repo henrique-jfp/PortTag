@@ -1988,7 +1988,7 @@ input {
 
 .manager-login-card .eyebrow {
   margin-top: 20px;
-  color: #0f766e;
+  color: #0f766e !important;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
