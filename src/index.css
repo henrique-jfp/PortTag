@@ -2783,9 +2783,9 @@ button.overview-stat:disabled {
     border-radius: 0;
   }
 
-  /* No celular em pé, a área de assinatura é quadrada e ocupa 70% da tela. */
+  /* No celular em pé, a área de assinatura usa toda a largura e é quadrada. */
   .porter-signature-pad {
-    width: min(70vw, 70dvh);
+    width: 100%;
     max-width: none;
   }
 
