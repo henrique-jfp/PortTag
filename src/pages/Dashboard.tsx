@@ -335,21 +335,21 @@ export function Dashboard() {
   return (
     <main className="dashboard">
       <header className="dashboard-header">
-        <div>
+        <div className="admin-page-title">
           <p className="eyebrow">Controle de Encomendas</p>
           <h1>{isSuperAdmin ? "Painel do Super Admin" : "Acesso de operador"}</h1>
           <p>Conectado como {user?.email}</p>
         </div>
-        <div className="header-actions">
+        <div className="admin-header-actions">
           {isSuperAdmin && (
-            <>
+            <nav className="admin-shortcuts" aria-label="Acesso rápido">
               <a className="secondary-button button-link" href="/manager.html">
                 Caderno
               </a>
               <a className="secondary-button button-link" href="/porter.html">
                 App Porteiro
               </a>
-            </>
+            </nav>
           )}
           <button className="secondary-button" onClick={handleSignOut}>
             Sair

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { CondominiumOperators } from "./CondominiumOperators";
 import { UnitResidentsPanel } from "../components/UnitResidentsPanel";
@@ -53,6 +53,7 @@ export function CondominiumUnits() {
   const [lastFloor, setLastFloor] = useState("9");
   const [savingBatch, setSavingBatch] = useState(false);
   const [managementTab, setManagementTab] = useState<"units" | "team">("units");
+  const [unitMode, setUnitMode] = useState<"single" | "batch">("single");
 
   useEffect(() => {
     let active = true;
@@ -188,8 +189,12 @@ export function CondominiumUnits() {
     setUnitNumber(unit.unit_number);
     setSelectedBlockId(unit.block_id ?? "");
     setUnitStatus(unit.status);
+    setUnitMode("single");
     setUnitError("");
     setUnitSuccess("");
+    document
+      .getElementById("unit-form")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function cancelUnitEdit() {
@@ -398,6 +403,40 @@ export function CondominiumUnits() {
     : units;
   const floorGroups = groupUnitsByFloor(displayedUnits);
 
+  let batchPreview = "";
+  try {
+    const previewNumbers = generateUnitNumbers(
+      parseUnitRange(unitRange),
+      Number(lastFloor),
+    );
+    if (previewNumbers.length > 0) {
+      batchPreview = `${previewNumbers.length} unidade(s): ${previewNumbers[0]} a ${previewNumbers[previewNumbers.length - 1]}`;
+    }
+  } catch {
+    batchPreview = "";
+  }
+
+  function handleTabsKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+    event.preventDefault();
+
+    const next =
+      event.key === "ArrowLeft" || event.key === "Home"
+        ? "units"
+        : "team";
+    setManagementTab(next);
+    event.currentTarget
+      .querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      [next === "units" ? 0 : 1]?.focus();
+  }
+
   if (loading) {
     return <div className="loading-screen">Carregando unidades...</div>;
   }
@@ -447,318 +486,368 @@ export function CondominiumUnits() {
         </Link>
       </header>
 
-      <nav className="header-actions" aria-label="Gerenciamento do condomínio">
+      <nav
+        className="admin-tabs"
+        role="tablist"
+        aria-label="Gerenciamento do condomínio"
+        onKeyDown={handleTabsKeyDown}
+      >
         <button
-          className={managementTab === "units" ? "primary-button" : "secondary-button"}
+          className="admin-tab"
+          id="admin-tab-units"
+          role="tab"
           type="button"
-          aria-pressed={managementTab === "units"}
+          aria-selected={managementTab === "units"}
+          aria-controls="admin-panel-units"
           onClick={() => setManagementTab("units")}
         >
           Blocos e unidades
         </button>
         <button
-          className={managementTab === "team" ? "primary-button" : "secondary-button"}
+          className="admin-tab"
+          id="admin-tab-team"
+          role="tab"
           type="button"
-          aria-pressed={managementTab === "team"}
+          aria-selected={managementTab === "team"}
+          aria-controls="admin-panel-team"
           onClick={() => setManagementTab("team")}
         >
           Equipe
         </button>
       </nav>
 
-      {managementTab === "team" ? (
-        <CondominiumOperators condominiumId={condominium.id} />
-      ) : (
-        <>
-      <section className="admin-section">
-        <div className="section-heading">
-          <div>
-            <h2>Blocos</h2>
-            <p>
-              Selecione o bloco em que está cadastrando. Os demais podem ser
-              adicionados agora ou depois.
-            </p>
-          </div>
-        </div>
-
-        <form className="inline-form" onSubmit={handleAddBlock}>
-          <label className="form-field">
-            Nome ou identificação do bloco
-            <input
-              required
-              placeholder="Ex.: A, Bloco 2, Torre Sul"
-              value={blockName}
-              onChange={(event) => setBlockName(event.target.value)}
-            />
-          </label>
-          <button className="primary-button" disabled={savingBlock}>
-            {savingBlock ? "Salvando..." : "Adicionar bloco"}
-          </button>
-        </form>
-
-        {blockError && (
-          <p className="feedback-message feedback-error" role="alert">
-            {blockError}
-          </p>
-        )}
-        {blockSuccess && (
-          <p className="feedback-message feedback-success" role="status">
-            {blockSuccess}
-          </p>
-        )}
-
-        {blocks.length > 0 ? (
-          <div className="block-list" aria-label="Blocos cadastrados">
-            {blocks.map((block) => {
-              const blockUnits = units.filter(
-                (unit) => unit.block_id === block.id,
-              ).length;
-              return (
-                <button
-                  key={block.id}
-                  className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
-                  type="button"
-                  disabled={Boolean(editingUnitId)}
-                  aria-pressed={selectedBlockId === block.id}
-                  onClick={() => setSelectedBlockId(block.id)}
-                >
-                  <strong>{block.name}</strong>
-                  <span>{blockUnits} apartamento(s)</span>
-                  {selectedBlockId === block.id && <small>Bloco atual</small>}
-                </button>
-              );
-            })}
-          </div>
+      <div
+        className="admin-tab-panel"
+        id={managementTab === "units" ? "admin-panel-units" : "admin-panel-team"}
+        role="tabpanel"
+        aria-labelledby={managementTab === "units" ? "admin-tab-units" : "admin-tab-team"}
+      >
+        {managementTab === "team" ? (
+          <CondominiumOperators condominiumId={condominium.id} />
         ) : (
-          <p className="field-hint">
-            {condominium.block_count > 0
-              ? "Nenhum bloco cadastrado ainda. Cadastre um bloco acima para começar."
-              : "Este condomínio foi cadastrado sem blocos."}
-          </p>
-        )}
-      </section>
-
-      <section className="admin-section">
-        <div className="section-heading">
-          <div>
-            <h2>
-              {editingUnitId
-                ? "Editar unidade"
-                : "Cadastrar apartamentos e contatos"}
-            </h2>
-            <p>
-              {selectedBlock
-                ? `Cadastro atual no bloco ${selectedBlock.name}.`
-                : "Cadastro direto no condomínio, sem bloco."}{" "}
-              Unidades podem existir sem moradores cadastrados.
-            </p>
-          </div>
-        </div>
-
-        <form className="inline-form" onSubmit={handleSaveUnit}>
-          {blocks.length > 0 ? (
-            <label className="form-field">
-              Bloco
-              <select
-                required
-                value={selectedBlockId}
-                onChange={(event) => setSelectedBlockId(event.target.value)}
-              >
-                <option value="">Selecione o bloco</option>
-                {blocks.map((block) => (
-                  <option key={block.id} value={block.id}>
-                    {block.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : condominium.block_count > 0 ? (
-            <p className="field-hint">
-              Cadastre ao menos um bloco antes de criar unidades.
-            </p>
-          ) : (
-            <p className="field-hint">
-              Este condomínio não utiliza blocos; a unidade será cadastrada
-              diretamente nele.
-            </p>
-          )}
-
-          <label className="form-field">
-            Número do apartamento ou sala
-            <input
-              required
-              value={unitNumber}
-              onChange={(event) => setUnitNumber(event.target.value)}
-            />
-          </label>
-
-          {editingUnitId && (
-            <label className="form-field">
-              Status
-              <select
-                value={unitStatus}
-                onChange={(event) =>
-                  setUnitStatus(event.target.value as "active" | "inactive")
-                }
-              >
-                <option value="active">Ativo</option>
-                <option value="inactive">Inativo</option>
-              </select>
-            </label>
-          )}
-
-          <div className="form-actions">
-            <button
-              className="primary-button"
-              disabled={
-                savingUnit ||
-                (condominium.block_count > 0 && blocks.length === 0)
-              }
-            >
-              {savingUnit
-                ? "Salvando..."
-                : editingUnitId
-                  ? "Salvar alterações"
-                  : "Cadastrar unidade"}
-            </button>
-            {editingUnitId && (
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={cancelUnitEdit}
-              >
-                Cancelar
-              </button>
-            )}
-          </div>
-        </form>
-
-        {!editingUnitId && (
-          <div className="unit-batch">
+          <>
+          <section className="admin-section">
             <div className="section-heading">
-              <h3>Pré-cadastrar apartamentos por andar</h3>
-              <p>
-                Exemplo: faixa 101-107 e último andar 9 cria 101-107, 201-207
-                até 901-907. Para começar no 9º, use 901-907.
-              </p>
+              <div>
+                <h2>Bloco de trabalho</h2>
+                <p>
+                  Escolha o bloco usado no cadastro e na listagem abaixo. Outros
+                  blocos podem ser adicionados agora ou depois.
+                </p>
+              </div>
             </div>
-            <form className="inline-form" onSubmit={handleSaveBatch}>
+
+            <div className="admin-context-bar">
+              <div>
+                <span className="admin-context-label">Bloco selecionado</span>
+                <span className="admin-context-value">
+                  {selectedBlock?.name ??
+                    (blocks.length ? "Nenhum bloco selecionado" : "Sem blocos")}
+                  {selectedBlock && (
+                    <span className="admin-context-badge">Bloco atual</span>
+                  )}
+                </span>
+              </div>
+              <div className="admin-context-meta">
+                {displayedUnits.length} unidade(s) neste bloco
+                {condominium.block_count > blocks.length
+                  ? ` · ${condominium.block_count} previsto(s)`
+                  : ""}
+              </div>
+            </div>
+
+            {blocks.length > 0 ? (
+              <div className="block-list" aria-label="Blocos cadastrados">
+                {blocks.map((block) => {
+                  const blockUnits = units.filter(
+                    (unit) => unit.block_id === block.id,
+                  ).length;
+                  return (
+                    <button
+                      key={block.id}
+                      className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
+                      type="button"
+                      disabled={Boolean(editingUnitId)}
+                      aria-pressed={selectedBlockId === block.id}
+                      onClick={() => setSelectedBlockId(block.id)}
+                    >
+                      <strong>{block.name}</strong>
+                      <span>{blockUnits} apartamento(s)</span>
+                      {selectedBlockId === block.id && <small>Bloco atual</small>}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="field-hint">
+                {condominium.block_count > 0
+                  ? "Nenhum bloco cadastrado ainda. Cadastre um bloco abaixo para começar."
+                  : "Este condomínio foi cadastrado sem blocos."}
+              </p>
+            )}
+
+            <form className="inline-form admin-inline-compact" onSubmit={handleAddBlock}>
               <label className="form-field">
-                Faixa no primeiro andar
+                Nome ou identificação do bloco
                 <input
                   required
-                  inputMode="numeric"
-                  placeholder="Ex.: 901-907"
-                  value={unitRange}
-                  onChange={(event) => setUnitRange(event.target.value)}
+                  placeholder="Ex.: A, Bloco 2, Torre Sul"
+                  value={blockName}
+                  onChange={(event) => setBlockName(event.target.value)}
                 />
               </label>
-              <label className="form-field floor-field">
-                Último andar a cadastrar
-                <input
-                  required
-                  inputMode="numeric"
-                  min="0"
-                  type="number"
-                  value={lastFloor}
-                  onChange={(event) => setLastFloor(event.target.value)}
-                />
-              </label>
-              <button
-                className="primary-button"
-                disabled={
-                  savingBatch ||
-                  (condominium.block_count > 0 && !selectedBlockId)
-                }
-              >
-                {savingBatch ? "Cadastrando..." : "Gerar apartamentos"}
+              <button className="primary-button" disabled={savingBlock}>
+                {savingBlock ? "Salvando..." : "Adicionar bloco"}
               </button>
             </form>
-          </div>
-        )}
 
-        {unitError && (
-          <p className="feedback-message feedback-error" role="alert">
-            {unitError}
-          </p>
-        )}
-        {unitSuccess && (
-          <p className="feedback-message feedback-success" role="status">
-            {unitSuccess}
-          </p>
-        )}
+            {blockError && (
+              <p className="feedback-message feedback-error" role="alert">
+                {blockError}
+              </p>
+            )}
+            {blockSuccess && (
+              <p className="feedback-message feedback-success" role="status">
+                {blockSuccess}
+              </p>
+            )}
+          </section>
 
-        <div className="section-heading units-heading">
-          <h2>
-            Unidades cadastradas
-            {selectedBlock ? ` — ${selectedBlock.name}` : ""} ({displayedUnits.length})
-          </h2>
-        </div>
-        {floorGroups.length === 0 ? (
-          <p className="empty-state">Nenhuma unidade cadastrada ainda.</p>
-        ) : (
-          <div className="building-floor-list">
-            {floorGroups.map((group) => (
-              <section className="building-floor" key={group.key}>
-                <header className="building-floor-heading">
-                  <strong>{group.label}</strong>
-                  <span>{group.units.length} unidade(s)</span>
-                </header>
-                <div className="building-floor-units">
-                  {group.units.map((unit) => (
-                    <article className="building-unit" key={unit.id}>
-                      <div className="building-unit-heading">
-                        <strong>{unit.unit_number}</strong>
-                        <span
-                          className={`unit-status unit-status-${unit.status}`}
-                        >
-                          {unit.status === "active" ? "Ativo" : "Inativo"}
-                        </span>
-                      </div>
-                      <div className="table-actions">
-                        <button
-                          className="text-button"
-                          type="button"
-                          onClick={() => startEditingUnit(unit)}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          className="text-button"
-                          type="button"
-                          aria-expanded={expandedResidentsUnitId === unit.id}
-                          onClick={() =>
-                            setExpandedResidentsUnitId((current) =>
-                              current === unit.id ? null : unit.id,
-                            )
-                          }
-                        >
-                          Moradores
-                        </button>
-                        <button
-                          className="text-button danger-text-button"
-                          type="button"
-                          disabled={deletingUnitId === unit.id}
-                          onClick={() => void handleDeleteUnit(unit)}
-                        >
-                          {deletingUnitId === unit.id
-                            ? "Excluindo..."
-                            : "Excluir"}
-                        </button>
-                      </div>
-                      {expandedResidentsUnitId === unit.id && (
-                        <UnitResidentsPanel unitId={unit.id} />
-                      )}
-                    </article>
-                  ))}
+          <section className="admin-section" id="unit-form">
+            <div className="section-heading">
+              <div>
+                <h2>
+                  {editingUnitId
+                    ? `Editar unidade ${unitNumber || ""}`
+                    : "Cadastrar unidades"}
+                </h2>
+                <p>
+                  {editingUnitId
+                    ? "Altere os dados e salve para voltar ao cadastro rápido."
+                    : "Unidades podem existir sem moradores cadastrados."}
+                </p>
+              </div>
+            </div>
+
+            <div
+              className="admin-segmented"
+              role="group"
+              aria-label="Forma de cadastro"
+            >
+              <button
+                type="button"
+                aria-pressed={unitMode === "single" || Boolean(editingUnitId)}
+                disabled={Boolean(editingUnitId)}
+                onClick={() => setUnitMode("single")}
+              >
+                Unidade avulsa
+              </button>
+              <button
+                type="button"
+                aria-pressed={unitMode === "batch" && !editingUnitId}
+                disabled={Boolean(editingUnitId)}
+                onClick={() => setUnitMode("batch")}
+              >
+                Em lote
+              </button>
+            </div>
+
+            <p className="admin-form-context">
+              Bloco de trabalho:{" "}
+              <strong>{selectedBlock?.name ?? "condomínio sem blocos"}</strong>.
+              {unitMode === "batch" && !editingUnitId
+                ? " As unidades geradas serão criadas neste bloco."
+                : " Para trocar, selecione outro bloco acima."}
+            </p>
+
+            {unitError && (
+              <p className="feedback-message feedback-error" role="alert">
+                {unitError}
+              </p>
+            )}
+            {unitSuccess && (
+              <p className="feedback-message feedback-success" role="status">
+                {unitSuccess}
+              </p>
+            )}
+
+            {unitMode === "single" || editingUnitId ? (
+              <form className="inline-form" onSubmit={handleSaveUnit}>
+                {blocks.length === 0 && condominium.block_count > 0 && (
+                  <p className="field-hint">
+                    Cadastre ao menos um bloco antes de criar unidades.
+                  </p>
+                )}
+
+                <label className="form-field">
+                  Número do apartamento ou sala
+                  <input
+                    required
+                    value={unitNumber}
+                    onChange={(event) => setUnitNumber(event.target.value)}
+                  />
+                </label>
+
+                {editingUnitId && (
+                  <label className="form-field">
+                    Status
+                    <select
+                      value={unitStatus}
+                      onChange={(event) =>
+                        setUnitStatus(event.target.value as "active" | "inactive")
+                      }
+                    >
+                      <option value="active">Ativo</option>
+                      <option value="inactive">Inativo</option>
+                    </select>
+                  </label>
+                )}
+
+                <div className="form-actions">
+                  <button
+                    className="primary-button"
+                    disabled={
+                      savingUnit ||
+                      (condominium.block_count > 0 && blocks.length === 0)
+                    }
+                  >
+                    {savingUnit
+                      ? "Salvando..."
+                      : editingUnitId
+                        ? "Salvar alterações"
+                        : "Cadastrar unidade"}
+                  </button>
+                  {editingUnitId && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={cancelUnitEdit}
+                    >
+                      Cancelar
+                    </button>
+                  )}
                 </div>
-              </section>
-            ))}
+              </form>
+            ) : (
+              <form className="inline-form" onSubmit={handleSaveBatch}>
+                <label className="form-field">
+                  Faixa no primeiro andar
+                  <input
+                    required
+                    inputMode="numeric"
+                    placeholder="Ex.: 901-907"
+                    value={unitRange}
+                    onChange={(event) => setUnitRange(event.target.value)}
+                  />
+                </label>
+                <label className="form-field floor-field">
+                  Último andar a cadastrar
+                  <input
+                    required
+                    inputMode="numeric"
+                    min="0"
+                    type="number"
+                    value={lastFloor}
+                    onChange={(event) => setLastFloor(event.target.value)}
+                  />
+                </label>
+
+                <p className="admin-form-context">
+                  Exemplo: faixa 101-107 e último andar 9 cria 101-107, 201-207
+                  até 901-907. Para começar no 9º, use 901-907.
+                </p>
+                {batchPreview && (
+                  <p className="admin-batch-preview" aria-live="polite">
+                    {batchPreview}
+                  </p>
+                )}
+
+                <div className="form-actions">
+                  <button
+                    className="primary-button"
+                    disabled={
+                      savingBatch ||
+                      (condominium.block_count > 0 && !selectedBlockId)
+                    }
+                  >
+                    {savingBatch ? "Cadastrando..." : "Gerar apartamentos"}
+                  </button>
+                </div>
+              </form>
+            )}
+
+          <div className="section-heading units-heading">
+            <h2>
+              Unidades cadastradas
+              {selectedBlock ? ` — ${selectedBlock.name}` : ""} ({displayedUnits.length})
+            </h2>
           </div>
+          {floorGroups.length === 0 ? (
+            <p className="empty-state">Nenhuma unidade cadastrada ainda.</p>
+          ) : (
+            <div className="building-floor-list">
+              {floorGroups.map((group) => (
+                <section className="building-floor" key={group.key}>
+                  <header className="building-floor-heading">
+                    <strong>{group.label}</strong>
+                    <span>{group.units.length} unidade(s)</span>
+                  </header>
+                  <div className="building-floor-units">
+                    {group.units.map((unit) => (
+                      <article className="building-unit" key={unit.id}>
+                        <div className="building-unit-heading">
+                          <strong>{unit.unit_number}</strong>
+                          <span
+                            className={`unit-status unit-status-${unit.status}`}
+                          >
+                            {unit.status === "active" ? "Ativo" : "Inativo"}
+                          </span>
+                        </div>
+                        <div className="table-actions">
+                          <button
+                            className="text-button unit-action-edit"
+                            type="button"
+                            onClick={() => startEditingUnit(unit)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            className="text-button unit-action-residents"
+                            type="button"
+                            aria-expanded={expandedResidentsUnitId === unit.id}
+                            onClick={() =>
+                              setExpandedResidentsUnitId((current) =>
+                                current === unit.id ? null : unit.id,
+                              )
+                            }
+                          >
+                            Moradores
+                          </button>
+                          <button
+                            className="text-button danger-text-button unit-action-delete"
+                            type="button"
+                            disabled={deletingUnitId === unit.id}
+                            onClick={() => void handleDeleteUnit(unit)}
+                          >
+                            {deletingUnitId === unit.id
+                              ? "Excluindo..."
+                              : "Excluir"}
+                          </button>
+                        </div>
+                        {expandedResidentsUnitId === unit.id && (
+                          <UnitResidentsPanel unitId={unit.id} />
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+          </section>
+          </>
         )}
-      </section>
-        </>
-      )}
+      </div>
     </main>
   );
 }

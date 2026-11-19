@@ -665,43 +665,45 @@ export function CondominiumOperators({
 
   return (
     <div>
-      {pageError && (
-        <p className="feedback-message feedback-error" role="alert">
-          {pageError}
-        </p>
-      )}
-      {credentials && (
-        <div className="credentials-card" role="status">
-          <strong>Credenciais temporárias de {credentials.name}</strong>
-          <p>
-            {credentials.email ? "E-mail" : "Usuário"}:{" "}
-            <code>{credentials.email ?? credentials.username}</code>
-            <br />
-            Senha: <code>{credentials.password}</code>
+      <div className="admin-feedback-stack">
+        {pageError && (
+          <p className="feedback-message feedback-error" role="alert">
+            {pageError}
           </p>
-          <div className="form-actions">
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => void copyCredentials()}
-            >
-              Copiar credenciais
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => setCredentials(null)}
-            >
-              Fechar
-            </button>
+        )}
+        {credentials && (
+          <div className="credentials-card" role="status">
+            <strong>Credenciais temporárias de {credentials.name}</strong>
+            <p>
+              {credentials.email ? "E-mail" : "Usuário"}:{" "}
+              <code>{credentials.email ?? credentials.username}</code>
+              <br />
+              Senha: <code>{credentials.password}</code>
+            </p>
+            <div className="form-actions">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void copyCredentials()}
+              >
+                Copiar credenciais
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setCredentials(null)}
+              >
+                Fechar
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-      {successMessage && (
-        <p className="feedback-message feedback-success" role="status">
-          {successMessage}
-        </p>
-      )}
+        )}
+        {successMessage && (
+          <p className="feedback-message feedback-success" role="status">
+            {successMessage}
+          </p>
+        )}
+      </div>
       {!isSuperAdmin ? (
         <section className="welcome-card">
           <h2>Acesso restrito</h2>
@@ -709,11 +711,22 @@ export function CondominiumOperators({
         </section>
       ) : (
         <>
+          <div className="admin-context-bar">
+            <div>
+              <span className="admin-context-label">Condomínio</span>
+              <span className="admin-context-value">
+                {selectedCondominium?.name ?? "Carregando..."}
+              </span>
+            </div>
+            <div className="admin-context-meta">
+              {porters.length} porteiro(s) · {managers.length} síndico(s)
+            </div>
+          </div>
+
           <section className="admin-section">
             <div className="section-heading">
               <h2>Cadastrar porteiro</h2>
               <p>
-                Condomínio: {selectedCondominium?.name ?? "Carregando..."}.
                 A senha temporária de 8 caracteres aparece uma vez ao salvar.
               </p>
             </div>
@@ -1004,8 +1017,7 @@ export function CondominiumOperators({
             <div className="section-heading">
               <h2>Criar síndico</h2>
               <p>
-                Condomínio: {selectedCondominium?.name ?? "Carregando..."}. O
-                sistema cria a conta com o e-mail do síndico e uma senha
+                O sistema cria a conta com o e-mail do síndico e uma senha
                 temporária de 8 caracteres. Guarde a senha: ela aparece somente
                 na criação ou quando você gerar uma nova.
               </p>
@@ -1048,7 +1060,6 @@ export function CondominiumOperators({
             <div className="section-heading">
               <h2>Vincular síndico existente</h2>
               <p>
-                Condomínio: {selectedCondominium?.name ?? "Carregando..."}.
                 Use esta opção quando a conta de e-mail já existir no Supabase
                 Authentication.
               </p>
