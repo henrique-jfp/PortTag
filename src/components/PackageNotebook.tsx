@@ -10,7 +10,9 @@ import {
   fetchPackageRecords,
   fetchPackageSignature,
   type DrawerRecord,
+  type PackageFilters,
   type PackageRecordRow,
+  type PackageSort,
 } from "../lib/packageQueries";
 
 export type NotebookBuilding = {
@@ -54,6 +56,8 @@ export function PackageNotebook({
   forceBuildingList?: boolean;
 }) {
   const [buildingId, setBuildingId] = useState("");
+  const [filters, setFilters] = useState<PackageFilters>({});
+  const [sort, setSort] = useState<PackageSort>("recent");
   const [porterNames, setPorterNames] = useState<Map<string, string>>(new Map());
   const [drawers, setDrawers] = useState<DrawerRecord[]>([]);
   const [drawerTotal, setDrawerTotal] = useState(0);
@@ -81,7 +85,7 @@ export function PackageNotebook({
   useEffect(() => {
     if (!activeBuildingId) return;
     let active = true;
-    fetchDrawers(activeBuildingId, {}, drawerPage)
+    fetchDrawers(activeBuildingId, filters, drawerPage)
       .then((result) => {
         if (!active) return;
         setDrawers(result.items);
@@ -98,7 +102,7 @@ export function PackageNotebook({
     return () => {
       active = false;
     };
-  }, [activeBuildingId, drawerPage]);
+  }, [activeBuildingId, drawerPage, filters]);
 
   useEffect(() => {
     if (!activeBuildingId || !activeDrawer?.unit_id) return;
@@ -106,7 +110,8 @@ export function PackageNotebook({
     fetchPackageRecords({
       condominiumId: activeBuildingId,
       unitId: activeDrawer.unit_id,
-      sort: "recent",
+      sort,
+      filters,
       page: recordPage,
     })
       .then((result) => {
@@ -125,7 +130,7 @@ export function PackageNotebook({
     return () => {
       active = false;
     };
-  }, [activeBuildingId, activeDrawer, recordPage]);
+  }, [activeBuildingId, activeDrawer, recordPage, sort, filters]);
 
   // Nomes dos porteiros são apenas informativos. Operadores não leem outros
   // porteiros por RLS; nesse caso o nome simplesmente fica "Não identificado".
@@ -163,6 +168,23 @@ export function PackageNotebook({
     setRecords([]);
     setRecordTotal(0);
     setRecordPage(1);
+  }
+
+  function updateFilters(patch: PackageFilters) {
+    setFilters((current) => ({ ...current, ...patch }));
+    setDrawerPage(1);
+    setDrawersLoading(true);
+    setError("");
+    resetDrawer();
+  }
+
+  function clearFilters() {
+    setFilters({});
+    setSort("recent");
+    setDrawerPage(1);
+    setDrawersLoading(true);
+    setError("");
+    resetDrawer();
   }
 
   async function loadSignature(packageId: string) {
@@ -270,6 +292,108 @@ export function PackageNotebook({
           <strong>{currentBuilding.name}</strong>
         </div>
       )}
+
+      <div className="notebook-filters">
+        <label>
+          De
+          <input
+            type="date"
+            value={filters.dateFrom ?? ""}
+            onChange={(event) =>
+              updateFilters({ dateFrom: event.target.value || undefined })
+            }
+          />
+        </label>
+        <label>
+          Até
+          <input
+            type="date"
+            value={filters.dateTo ?? ""}
+            onChange={(event) =>
+              updateFilters({ dateTo: event.target.value || undefined })
+            }
+          />
+        </label>
+        <label>
+          Apartamento / bloco
+          <input
+            type="search"
+            placeholder="Ex.: 902 ou Torre A"
+            value={filters.unit ?? ""}
+            onChange={(event) =>
+              updateFilters({ unit: event.target.value || undefined })
+            }
+          />
+        </label>
+        <label>
+          Empresa / entregador
+          <input
+            type="search"
+            placeholder="Ex.: Shopee"
+            value={filters.company ?? ""}
+            onChange={(event) =>
+              updateFilters({ company: event.target.value || undefined })
+            }
+          />
+        </label>
+        <label>
+          Porteiro
+          <input
+            type="search"
+            placeholder="Nome do porteiro"
+            value={filters.porter ?? ""}
+            onChange={(event) =>
+              updateFilters({ porter: event.target.value || undefined })
+            }
+          />
+        </label>
+        <label>
+          Rastreio
+          <input
+            type="search"
+            placeholder="Código"
+            value={filters.tracking ?? ""}
+            onChange={(event) =>
+              updateFilters({ tracking: event.target.value || undefined })
+            }
+          />
+        </label>
+        <label>
+          Situação
+          <select
+            value={filters.status ?? ""}
+            onChange={(event) =>
+              updateFilters({ status: event.target.value || undefined })
+            }
+          >
+            <option value="">Todas</option>
+            <option value="received">Na portaria</option>
+            <option value="collected">Retirado</option>
+          </select>
+        </label>
+        <label>
+          Ordem dos registros
+          <select
+            value={sort}
+            onChange={(event) => {
+              setSort(event.target.value as PackageSort);
+              setRecordPage(1);
+              setRecordsLoading(true);
+            }}
+          >
+            <option value="recent">Mais recentes</option>
+            <option value="tracking">Rastreio</option>
+            <option value="sender">Empresa / entregador</option>
+          </select>
+        </label>
+        <button
+          className="notebook-clear-filters"
+          type="button"
+          onClick={clearFilters}
+        >
+          Limpar filtros
+        </button>
+      </div>
 
       <div className="notebook-layout">
         <section className="notebook-panel">

@@ -1,0 +1,598 @@
+/* Painéis administrativos da área do síndico. Todos os seletores são
+   prefixados com .manager para não interferir no caderno compartilhado. */
+
+.manager-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 24px;
+  padding: 6px;
+  border: 1px solid #e3e8f1;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 6px 22px rgba(20, 35, 65, 0.05);
+}
+
+.manager-navigation button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  margin: 0;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #697386;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.manager-navigation button:hover {
+  background: #eef4ff;
+  color: #2859c5;
+}
+
+.manager-navigation button.is-active {
+  background: #2859c5;
+  color: #fff;
+}
+
+.manager-context {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  margin: 14px 0 0;
+  padding: 14px 16px;
+  border: 1px solid #dbe6ff;
+  border-radius: 12px;
+  background: #f6f9ff;
+}
+
+.manager-context label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: min(100%, 320px);
+  color: #697386;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.manager-context select {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #e3e8f1;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  font: inherit;
+  font-size: 13px;
+}
+
+.manager-context span {
+  color: #697386;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.manager-panel {
+  margin-top: 20px;
+}
+
+.manager-panel-heading {
+  margin-bottom: 16px;
+}
+
+.manager-panel-heading h2 {
+  margin: 5px 0 4px;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.manager-panel-heading p:last-child {
+  max-width: 720px;
+  margin: 0;
+  color: #697386;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.manager-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid #e3e8f1;
+}
+
+.manager-tabs button {
+  margin: 0;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #697386;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manager-tabs button.is-active {
+  border-bottom-color: #2859c5;
+  color: #2859c5;
+}
+
+.manager-card,
+.manager-panel > .manager-card {
+  margin-top: 14px;
+  padding: 20px;
+  border: 1px solid #e3e8f1;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(20, 35, 65, 0.05);
+}
+
+.manager-card h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.manager-card > .field-hint {
+  margin-bottom: 12px;
+}
+
+.manager-narrow {
+  max-width: 680px;
+}
+
+.manager-two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.manager-empty {
+  margin: 8px 0 0;
+  padding: 18px;
+  border: 1px dashed #d8dfeb;
+  border-radius: 10px;
+  color: #697386;
+  font-size: 13px;
+  text-align: center;
+}
+
+.manager-form {
+  display: grid;
+  gap: 12px;
+}
+
+.manager-form label,
+.manager-field,
+.manager-filter-form label,
+.manager-inline-renew label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: #697386;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.manager-form input,
+.manager-form select,
+.manager-field select,
+.manager-filter-form input,
+.manager-filter-form select,
+.manager-inline-form input,
+.manager-list-heading input,
+.manager-inline-renew select,
+.manager-inline-renew input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 11px;
+  border: 1px solid #dfe5ef;
+  border-radius: 9px;
+  background: #fbfcfe;
+  color: #172033;
+  font: inherit;
+  font-size: 13px;
+}
+
+.manager-form input:focus,
+.manager-form select:focus,
+.manager-field select:focus,
+.manager-filter-form input:focus,
+.manager-filter-form select:focus,
+.manager-inline-form input:focus,
+.manager-list-heading input:focus {
+  outline: 2px solid #e4edff;
+  border-color: #2859c5;
+}
+
+.manager-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.manager-inline-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.manager-inline-form input {
+  flex: 1;
+}
+
+.manager-inline-form button {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.manager-mode-switch,
+.manager-fieldset {
+  margin-bottom: 12px;
+}
+
+.manager-mode-switch {
+  display: flex;
+  gap: 6px;
+}
+
+.manager-mode-switch button {
+  margin: 0;
+  padding: 7px 11px;
+  border: 1px solid #dfe5ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #697386;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manager-mode-switch button.is-active {
+  border-color: #2859c5;
+  background: #eef4ff;
+  color: #2859c5;
+}
+
+.manager-fieldset {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #e3e8f1;
+  border-radius: 9px;
+}
+
+.manager-fieldset legend {
+  padding: 0 5px;
+  color: #697386;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.manager-fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.manager-fieldset input {
+  width: auto;
+  min-height: auto;
+}
+
+.manager-filter-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 180px)) auto;
+  align-items: end;
+  gap: 12px;
+  margin: 14px 0 0;
+  padding: 16px;
+  border: 1px solid #e3e8f1;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.manager-filter-form button {
+  align-self: end;
+  margin: 0;
+}
+
+.manager-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manager-list > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e9edf4;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.manager-list > li > div:first-child {
+  min-width: 0;
+}
+
+.manager-list strong {
+  display: block;
+  color: #172033;
+  font-size: 13px;
+}
+
+.manager-list small {
+  display: block;
+  margin-top: 3px;
+  color: #697386;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.manager-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.manager-list-heading h3 {
+  margin: 0;
+}
+
+.manager-list-heading input {
+  max-width: 280px;
+  min-height: 36px;
+}
+
+.manager-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.manager-list-actions button {
+  min-height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.manager-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.manager-summary-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid #e3e8f1;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.manager-summary-grid strong {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.manager-summary-grid span {
+  color: #697386;
+  font-size: 12px;
+}
+
+.manager-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.manager-report-grid .manager-card {
+  margin-top: 0;
+}
+
+.manager-table-wrap {
+  overflow-x: auto;
+}
+
+.manager-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.manager-table th,
+.manager-table td {
+  padding: 9px 8px;
+  border-bottom: 1px solid #eef1f6;
+  text-align: left;
+}
+
+.manager-table th {
+  color: #697386;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.manager-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.manager-timeline {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manager-timeline > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e9edf4;
+  border-left: 3px solid #2859c5;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.manager-event-collected {
+  border-left-color: #1f9d63;
+}
+
+.manager-event-notification {
+  border-left-color: #a76bcc;
+}
+
+.manager-event-damage_reported {
+  border-left-color: #d9822b;
+}
+
+.manager-event-type {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #eef4ff;
+  color: #2859c5;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.manager-event-collected .manager-event-type {
+  background: #e9f8f0;
+  color: #1f7a50;
+}
+
+.manager-event-notification .manager-event-type {
+  background: #f6eefc;
+  color: #8452a4;
+}
+
+.manager-event-damage_reported .manager-event-type {
+  background: #fff3e6;
+  color: #a45e17;
+}
+
+.manager-timeline strong {
+  display: block;
+  font-size: 13px;
+}
+
+.manager-timeline small {
+  display: block;
+  margin-top: 3px;
+  color: #697386;
+  font-size: 12px;
+}
+
+.manager-credentials {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border: 1px solid #bfe3cd;
+  border-radius: 12px;
+  background: #f1fbf5;
+}
+
+.manager-credentials h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.manager-credentials p {
+  margin: 0;
+  color: #172033;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.manager-credentials .field-hint {
+  margin-top: 8px;
+  color: #4d6b5a;
+}
+
+.manager-inline-renew {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  max-width: 520px;
+}
+
+.manager-inline-renew label {
+  flex: 1;
+}
+
+@media (max-width: 980px) {
+  .manager-two-column,
+  .manager-report-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .manager-filter-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .manager-filter-form button {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 620px) {
+  .manager-context {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manager-context label {
+    min-width: 0;
+  }
+
+  .manager-form-row,
+  .manager-filter-form {
+    grid-template-columns: 1fr;
+  }
+
+  .manager-list > li {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manager-list-actions {
+    justify-content: flex-start;
+  }
+
+  .manager-list-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manager-list-heading input {
+    max-width: none;
+  }
+}

@@ -42,6 +42,14 @@
    `package_daily_counts`, `search_package_drawers` e `search_package_records`.
    Elas usam `security invoker`, então as policies RLS de `packages` continuam
    decidindo o que síndico e porteiro podem ler; não reduza esse isolamento.
+    Execute em seguida
+    `20261119120000_manager_administration.sql`: amplia as RPCs de cadastro
+    para o síndico ativo do próprio condomínio, cria `package_events` (somente
+    leitura, alimentada por triggers) e a RPC `manager_package_report`. As
+    policies continuam limitando cada síndico ao seu condomínio; o Super Admin
+    mantém o acesso global. Após essa migration, rode novamente
+    `supabase functions deploy manage-porter` para liberar a gestão de
+    porteiros aos síndicos.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -84,8 +92,9 @@
    O uso está documentado em `scripts/label-lab/MANUAL.md`. A função não salva
    fotos nem gera arquivos no servidor.
 
-   As funções `manage-porter` e `manage-manager` verificam a sessão e o perfil
-   Super Admin no servidor. A função `extract-package-label` também exige JWT válido e confirma
+   As funções `manage-porter` e `manage-manager` verificam a sessão no servidor.
+   `manage-manager` exige perfil Super Admin; `manage-porter` aceita também o
+   vínculo de síndico ativo e limita cada ação ao condomínio correspondente. A função `extract-package-label` também exige JWT válido e confirma
    no banco se a conta ativa pertence ao condomínio informado. O pipeline padrão
    lê o texto com Google Cloud Vision, aplica regras determinísticas e só chama
    o Groq nas exceções (nome/unidade/endereço vazios ou divergentes), com cada

@@ -134,6 +134,15 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 18. `supabase/migrations/20261117220000_notification_message.sql`
 19. `supabase/migrations/20261118160000_damage_photo_only.sql`
 20. `supabase/migrations/20261118180000_package_drawer_pagination.sql`
+21. `supabase/migrations/20261119120000_manager_administration.sql`
+
+A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
+de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
+histórico imutável `package_events` com triggers e a RPC
+`manager_package_report` para os relatórios. O Super Admin continua com acesso
+a todos os condomínios. Depois de executá-la, faça redeploy da Edge Function
+`manage-porter`: ela passou a aceitar também o síndico do condomínio, sem
+expor `service_role` ao frontend.
 
 Crie e confirme a conta responsável pela plataforma em Supabase
 Authentication > Users. Promova somente essa conta no SQL Editor, substituindo

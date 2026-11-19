@@ -4,6 +4,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { ManagerApp } from "./apps/ManagerApp";
 import "./index.css";
 import "./notebook.css";
+import "./manager.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

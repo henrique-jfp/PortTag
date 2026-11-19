@@ -115,8 +115,30 @@ Deno.serve(async (request: Request) => {
     .maybeSingle();
 
   if (profileError) return respond({ error: profileError.message }, 500);
+
+  // Síndicos gerenciam apenas os porteiros dos condomínios aos quais estão
+  // vinculados como admin ativo. A checagem é repetida depois de resolver o
+  // condomínio/porteiro de cada ação (service_role ignora RLS).
+  const allowedCondominiumIds: string[] = [];
   if (!profile?.is_super_admin) {
-    return respond({ error: "Apenas o Super Admin pode gerenciar porteiros." }, 403);
+    const { data: memberships, error: membershipError } = await serviceClient
+      .from("condominium_users")
+      .select("condominium_id")
+      .eq("user_id", userData.user.id)
+      .eq("role", "admin")
+      .eq("status", "active");
+    if (membershipError) {
+      return respond({ error: membershipError.message }, 500);
+    }
+    allowedCondominiumIds.push(
+      ...(memberships ?? []).map((membership) => membership.condominium_id),
+    );
+    if (!allowedCondominiumIds.length) {
+      return respond(
+        { error: "Sem permissão para gerenciar porteiros." },
+        403,
+      );
+    }
   }
 
   let input: ManagePorterRequest;
@@ -151,6 +173,12 @@ Deno.serve(async (request: Request) => {
       !isUuid(condominiumId)
     ) {
       return respond({ error: "Informe nome, usuário e condomínio." }, 400);
+    }
+    if (
+      !profile?.is_super_admin &&
+      !allowedCondominiumIds.includes(condominiumId)
+    ) {
+      return respond({ error: "Sem permissão para gerenciar este condomínio." }, 403);
     }
     if (!blockIds.every((blockId) => isUuid(blockId))) {
       return respond({ error: "A seleção de blocos é inválida." }, 400);
@@ -324,6 +352,12 @@ Deno.serve(async (request: Request) => {
       .maybeSingle();
     if (accountError) return respond({ error: accountError.message }, 500);
     if (!account) return respond({ error: "Porteiro não encontrado." }, 404);
+    if (
+      !profile?.is_super_admin &&
+      !allowedCondominiumIds.includes(account.condominium_id)
+    ) {
+      return respond({ error: "Sem permissão para gerenciar este porteiro." }, 403);
+    }
 
     // undefined = manter o prazo atual; null = sem expiração.
     let nextExpiry: string | null | undefined;
