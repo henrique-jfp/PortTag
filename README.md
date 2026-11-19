@@ -150,6 +150,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 21. `supabase/migrations/20261119120000_manager_administration.sql`
 22. `supabase/migrations/20261119130000_label_lab_collection.sql`
 23. `supabase/migrations/20261119140000_label_lab_console.sql`
+24. `supabase/migrations/20261119150000_fix_label_lab_storage_deletion.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -198,8 +199,11 @@ número.
 A Edge Function `admin-label-lab` (`verify_jwt = true`) valida o JWT, exige
 `profiles.is_super_admin`, chama `label-lab` com o segredo já existente
 `LABEL_LAB_SECRET`, lê as fotos do bucket privado e chama as RPCs; nenhum
-segredo chega ao frontend. Para implantar, aplique a migration
-`20261119140000_label_lab_console.sql` e publique a função:
+segredo chega ao frontend. Para implantar, aplique as migrations
+`20261119140000_label_lab_console.sql` e
+`20261119150000_fix_label_lab_storage_deletion.sql` (esta última habilita a
+exclusão das fotos nas RPCs de descarte e purga, exigida pelo trigger
+`storage.protect_delete`) e publique a função:
 
 ```powershell
 supabase functions deploy admin-label-lab

@@ -66,6 +66,12 @@
     exclusão/sanitização das amostras usadas pela RPC
     `purge_label_lab_samples_for_ruleset`, reexecutada para cobrir amostras que
     entraram depois. Nenhuma regra altera CEP, logradouro ou número.
+    Aplique por fim `20261119150000_fix_label_lab_storage_deletion.sql`:
+    redefine `discard_label_lab_sample` e
+    `purge_label_lab_samples_for_ruleset` para habilitar
+    `storage.allow_delete_query` apenas no escopo da transação, já que o
+    trigger `storage.protect_delete` bloqueia `DELETE` direto em
+    `storage.objects`. Sem ela, descarte e publicação falham com HTTP 400.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -382,8 +388,9 @@ jobs novos.
 
 ### Publicar
 
-1. Aplique a migration `20261119140000_label_lab_console.sql` no SQL Editor e
-   execute `supabase functions deploy admin-label-lab`.
+1. Aplique as migrations `20261119140000_label_lab_console.sql` e
+   `20261119150000_fix_label_lab_storage_deletion.sql` no SQL Editor e execute
+   `supabase functions deploy admin-label-lab`.
 2. Mantenha `LABEL_LAB_SECRET`, `LABEL_LAB_WORKER_SECRET`,
    `LABEL_LAB_CLEANUP_SECRET` e os schedules `process-label-lab-queue` e
    `cleanup-label-lab` como estão.
