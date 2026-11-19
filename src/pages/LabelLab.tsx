@@ -12,6 +12,10 @@ import {
   type LabelLabRules,
   type LabelLabRule,
 } from "../lib/labelLabRules";
+import {
+  LABEL_LAB_RECIPES,
+  type LabelLabRecipe,
+} from "../lib/labelLabRecipes";
 import { supabase } from "../lib/supabase";
 
 type Condominium = {
@@ -190,6 +194,11 @@ export function LabelLab() {
   const [deleteTarget, setDeleteTarget] = useState<Ruleset | null>(null);
   const [activationTarget, setActivationTarget] = useState<Ruleset | null>(null);
   const [activationText, setActivationText] = useState("");
+  const [recipeOpen, setRecipeOpen] = useState(false);
+  const [recipeSearch, setRecipeSearch] = useState("");
+  const [recipeField, setRecipeField] = useState<LabelLabField | "">("");
+  const [usedRecipes, setUsedRecipes] = useState<string[]>([]);
+  const [copiedRecipe, setCopiedRecipe] = useState("");
 
   const selectedCondominium = useMemo(
     () => condominiums.find((item) => item.id === selectedCondominiumId) ?? null,
@@ -203,6 +212,17 @@ export function LabelLab() {
     () => samples.find((item) => item.id === selectedSampleId) ?? null,
     [samples, selectedSampleId],
   );
+  const filteredRecipes = useMemo(() => {
+    const term = recipeSearch.trim().toLocaleLowerCase("pt-BR");
+    return LABEL_LAB_RECIPES.filter((recipe) => {
+      if (recipeField && recipe.field !== recipeField) return false;
+      if (!term) return true;
+      return [recipe.title, recipe.note, recipe.pattern, recipe.sample]
+        .join(" ")
+        .toLocaleLowerCase("pt-BR")
+        .includes(term);
+    });
+  }, [recipeField, recipeSearch]);
 
   async function callAdmin<T>(body: Record<string, unknown>): Promise<T> {
     const controller = new AbortController();
@@ -711,6 +731,36 @@ export function LabelLab() {
     }
   }
 
+  function addRecipe(recipe: LabelLabRecipe) {
+    setRules((current) => {
+      const existing = current[recipe.field] ?? [];
+      if (existing.some((rule) => rule.pattern === recipe.pattern)) return current;
+      return {
+        ...current,
+        [recipe.field]: [
+          ...existing,
+          { pattern: recipe.pattern, note: recipe.note },
+        ],
+      };
+    });
+    setUsedRecipes((current) =>
+      current.includes(recipe.id) ? current : [...current, recipe.id],
+    );
+    setSuccessMessage(
+      `Regex adicionada ao campo ${fieldLabels[recipe.field]}. Rode o Teste de regressão para conferir.`,
+    );
+  }
+
+  async function copyRecipe(recipe: LabelLabRecipe) {
+    try {
+      await navigator.clipboard.writeText(recipe.pattern);
+      setCopiedRecipe(recipe.id);
+    } catch {
+      setCopiedRecipe("");
+      setPageError("Não foi possível copiar. Selecione o texto da regex manualmente.");
+    }
+  }
+
   async function handleActivate() {
     if (!activationTarget) return;
     if (activationText.trim().toUpperCase() !== "ATIVAR") {
@@ -1025,6 +1075,15 @@ export function LabelLab() {
               placeholder="Modelo Amazon caixa pequena, novo layout Shopee..."
             />
           </label>
+          <div className="lab-toolbar-help">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setRecipeOpen(true)}
+            >
+              Manual de regex prontas
+            </button>
+          </div>
         </div>
         <div className="lab-rule-grid">
           {(Object.keys(fieldLabels) as LabelLabField[]).map((field) => (
@@ -1430,6 +1489,117 @@ export function LabelLab() {
           onConfirm={() => void handleDeleteRuleset()}
           onCancel={() => setDeleteTarget(null)}
         />
+      ) : null}
+
+      {recipeOpen ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setRecipeOpen(false);
+          }}
+        >
+          <section
+            className="confirmation-dialog recipe-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="recipe-title"
+          >
+            <div className="recipe-header">
+              <div>
+                <h2 id="recipe-title">Manual de regex prontas</h2>
+                <p>
+                  Use <strong>Adicionar</strong> para colocar a regra no campo
+                  indicado e depois rodar o Teste de regressão. Use{" "}
+                  <strong>Copiar</strong> para ajustar antes de colar.
+                </p>
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setRecipeOpen(false)}
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="recipe-filters">
+              <label className="form-field">
+                Buscar
+                <input
+                  value={recipeSearch}
+                  onChange={(event) => setRecipeSearch(event.target.value)}
+                  placeholder="Ex.: apto, TRANSP, nome, 6 dígitos"
+                />
+              </label>
+              <label className="form-field">
+                Campo
+                <select
+                  value={recipeField}
+                  onChange={(event) =>
+                    setRecipeField(event.target.value as LabelLabField | "")
+                  }
+                >
+                  <option value="">Todos os campos</option>
+                  {(Object.keys(fieldLabels) as LabelLabField[]).map((field) => (
+                    <option key={field} value={field}>
+                      {fieldLabels[field]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="recipe-notice">
+              O teste roda com <code>i</code>, sem <code>m</code> e com quebras
+              de linha preservadas. Use <code>\n</code> para “valor na linha
+              abaixo” e <code>(...)</code> para escolher só o valor. CEP, rua e
+              número do condomínio não são campos editáveis.
+            </p>
+            <div className="recipe-list">
+              {filteredRecipes.length ? (
+                filteredRecipes.map((recipe) => (
+                  <article className="recipe-card" key={recipe.id}>
+                    <div className="recipe-card-head">
+                      <h3>{recipe.title}</h3>
+                      <span className="lab-badge">{fieldLabels[recipe.field]}</span>
+                    </div>
+                    <code className="recipe-pattern">{recipe.pattern}</code>
+                    <div className="recipe-example">
+                      <div>
+                        <span>OCR de exemplo</span>
+                        <pre>{recipe.sample}</pre>
+                      </div>
+                      <div>
+                        <span>Valor lido</span>
+                        <code>{recipe.expected}</code>
+                      </div>
+                    </div>
+                    <p className="recipe-note">{recipe.note}</p>
+                    <div className="recipe-actions">
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={usedRecipes.includes(recipe.id)}
+                        onClick={() => addRecipe(recipe)}
+                      >
+                        {usedRecipes.includes(recipe.id)
+                          ? "Adicionada"
+                          : "Adicionar ao campo"}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => void copyRecipe(recipe)}
+                      >
+                        {copiedRecipe === recipe.id ? "Copiada" : "Copiar"}
+                      </button>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <p className="lab-hint">Nenhuma receita encontrada. Tente outro termo.</p>
+              )}
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {activationTarget ? (
