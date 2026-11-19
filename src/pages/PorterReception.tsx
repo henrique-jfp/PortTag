@@ -179,6 +179,10 @@ function friendlyError(error: unknown, fallback: string) {
     : fallback;
 }
 
+function monotonicNow() {
+  return performance.now();
+}
+
 function deliveryPersonStorageKey(condominiumId: string) {
   return `encomenda-last-delivery-person:${condominiumId}`;
 }
@@ -810,6 +814,13 @@ export function PorterReception() {
     () => Promise.resolve(null),
   );
   const restoredSignature = useRef("");
+  const [readLog, setReadLog] = useState<string[]>([]);
+  const readLogStart = useRef(0);
+
+  function logRead(message: string) {
+    const elapsed = Math.round(monotonicNow() - readLogStart.current);
+    setReadLog((current) => [...current.slice(-40), `${elapsed} ms · ${message}`]);
+  }
 
   const selectedUnit = useMemo(
     () => units.find((unit) => unit.id === unitId) ?? null,
@@ -1654,8 +1665,11 @@ export function PorterReception() {
     if (!account || !condominium) return;
 
     const requestId = ++readRequestId.current;
+    readLogStart.current = monotonicNow();
+    setReadLog([]);
     setIsReading(true);
     setOcrMessage("Preparando a foto para leitura...");
+    logRead("foto recebida");
 
     let compressed: Awaited<ReturnType<typeof compressPackagePhoto>>;
     try {
@@ -1685,13 +1699,17 @@ export function PorterReception() {
           blocks,
           residents: authorizedResidents,
           onProgress: (message) => {
-            if (requestId === readRequestId.current) setOcrMessage(message);
+            if (requestId === readRequestId.current) {
+              setOcrMessage(message);
+              logRead(message);
+            }
           },
         },
         { compressed },
       );
       if (requestId !== readRequestId.current) return;
       applyDraftToForm(draft, URL.createObjectURL(draft.file));
+      logRead("leitura concluída");
       if (isDeviceResourceError(draft.labelRead?.error)) {
         setPageError(DEVICE_RESOURCE_MESSAGE);
       }
@@ -1707,6 +1725,7 @@ export function PorterReception() {
         message: defaultAddressMessage("unknown"),
       });
       setOcrMessage(message);
+      logRead(message);
     } finally {
       if (requestId === readRequestId.current) setIsReading(false);
     }
@@ -2487,6 +2506,16 @@ export function PorterReception() {
                       ? ocrMessage || "Analisando a foto..."
                       : ocrMessage}
                   </p>
+                  {readLog.length > 0 && (
+                    <details className="porter-diagnostics porter-read-log" open={isReading}>
+                      <summary>Log da leitura em tempo real</summary>
+                      <ol>
+                        {readLog.map((line, index) => (
+                          <li key={`${index}-${line}`}>{line}</li>
+                        ))}
+                      </ol>
+                    </details>
+                  )}
                   {lastLabelRead && !isReading && (
                     <details className="porter-diagnostics">
                       <summary>Diagnóstico da leitura</summary>
