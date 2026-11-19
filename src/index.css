@@ -1,4 +1,4 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
 
 :root {
   font-family: Inter, system-ui, sans-serif;
@@ -1031,7 +1031,7 @@ input {
   min-height: 100dvh;
   place-items: center;
   padding: 20px;
-  background: #edf2f8;
+  background: #f4efff;
 }
 
 .porter-login-card,
@@ -1054,8 +1054,17 @@ input {
   place-items: center;
   margin-bottom: 20px;
   border-radius: 18px;
-  background: #e8efff;
-  color: #2859c5;
+  background: #e9dbff;
+  color: #6d32c7;
+}
+
+.porter-login-card > .porter-login-eyebrow {
+  margin: 0 0 6px;
+  color: #6d32c7;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .porter-login-card h1 {
@@ -1098,8 +1107,8 @@ input {
 }
 
 .porter-login-input:focus-within {
-  border-color: #2859c5;
-  outline: 3px solid rgba(40, 89, 197, 0.14);
+  border-color: #6d32c7;
+  outline: 3px solid rgba(109, 50, 199, 0.14);
 }
 
 .porter-login-input input {
@@ -1133,6 +1142,10 @@ input {
 .porter-collection-button {
   background: #2859c5;
   color: #fff;
+}
+
+.porter-login-card .porter-primary-button {
+  background: #6d32c7;
 }
 
 .porter-secondary-button {
@@ -1515,8 +1528,8 @@ input {
 }
 
 .porter-search-control input:focus {
-  border-color: #2859c5;
-  outline: 3px solid rgba(40, 89, 197, 0.14);
+  border-color: #6d32c7;
+  outline: 3px solid rgba(109, 50, 199, 0.14);
 }
 
 .porter-search-button,
@@ -1772,8 +1785,8 @@ input {
 .porter-form input:focus,
 .porter-form select:focus,
 .porter-collection-form input:focus {
-  border-color: #2859c5;
-  outline: 3px solid rgba(40, 89, 197, 0.14);
+  border-color: #6d32c7;
+  outline: 3px solid rgba(109, 50, 199, 0.14);
 }
 
 .porter-form small {
@@ -1956,6 +1969,7 @@ input {
   display: grid;
   place-items: center;
   padding: 20px;
+  background: #eef6f3;
 }
 
 .manager-login-card {
@@ -1967,12 +1981,21 @@ input {
   box-shadow: 0 12px 40px rgba(20, 35, 65, 0.08);
 }
 
-.manager-login-card h1 {
-  margin: 5px 0;
+.manager-login-card .brand-icon {
+  background: #d9f0e8;
+  color: #0f766e;
 }
 
 .manager-login-card .eyebrow {
   margin-top: 20px;
+  color: #0f766e;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.manager-login-card h1 {
+  margin: 5px 0;
 }
 
 .manager-login-card form {
@@ -1985,7 +2008,7 @@ input {
   margin-top: 8px;
   border: 0;
   border-radius: 9px;
-  background: #2859c5;
+  background: #0f766e;
   color: #fff;
   font: inherit;
   font-weight: 650;

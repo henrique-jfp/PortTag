@@ -21,7 +21,7 @@ export function Login() {
       await signIn(email.trim(), password);
       navigate("/", { replace: true });
     } catch {
-      setError("E-mail ou senha invÃ¡lidos. Confira seus dados.");
+      setError("E-mail ou senha inválidos. Confira seus dados.");
     } finally {
       setLoading(false);
     }
@@ -36,7 +36,7 @@ export function Login() {
 
         <h1>Controle de Encomendas</h1>
         <p className="subtitle">
-          Acesse o painel de gerenciamento do condomÃ­nio.
+          Acesse o painel de gerenciamento do condomínio.
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -76,7 +76,7 @@ export function Login() {
         </form>
 
         <p className="footer-note">
-          Sistema de gestÃ£o de encomendas para condomÃ­nios
+          Sistema de gestão de encomendas para condomínios
         </p>
       </section>
     </main>

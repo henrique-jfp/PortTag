@@ -29,9 +29,11 @@ function ManagerLogin() {
         <div className="brand-icon">
           <Package size={30} />
         </div>
-        <p className="eyebrow">Controle de Encomendas</p>
+        <p className="eyebrow">PortTag · Síndico</p>
         <h1>Área do Síndico</h1>
-        <p className="subtitle">Entre para consultar o caderno de registros.</p>
+        <p className="subtitle">
+          Acesse o caderno de registros do seu condomínio.
+        </p>
         <form onSubmit={handleSubmit}>
           <label htmlFor="manager-email">E-mail</label>
           <div className="input-wrapper">

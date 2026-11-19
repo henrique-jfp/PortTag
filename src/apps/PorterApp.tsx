@@ -30,8 +30,12 @@ function PorterLogin() {
         <div className="porter-brand-mark">
           <Camera size={30} aria-hidden="true" />
         </div>
+        <p className="porter-login-eyebrow">PortTag · Portaria</p>
         <h1>Receber encomenda</h1>
-        <p>Entre com o usuário e a senha entregues pelo responsável.</p>
+        <p>
+          Acesso da portaria: entre com o usuário e a senha entregues pelo
+          responsável.
+        </p>
         <form onSubmit={handleSubmit}>
           <label htmlFor="porter-username">Usuário</label>
           <div className="porter-login-input">
