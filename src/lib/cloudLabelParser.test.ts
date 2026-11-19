@@ -163,3 +163,59 @@ describe("parser da extração na nuvem", () => {
     expect(totalExpress.carrier).toBe("Total Express");
   });
 });
+
+describe("regras publicadas no Label Lab", () => {
+  const text = [
+    "DESTINATARIO",
+    "Nome Antigo",
+    "APTO 99",
+    "TRANSP: OUTRA EMPRESA",
+    "ETIQUETA 123456",
+    "RUA TESTE, 100",
+    "CEP 12345-678",
+  ].join("\n");
+
+  it("aplica as regex publicadas somente nos campos não determinísticos", () => {
+    const parsed = parseLabel(text, {
+      carrier: [{ pattern: "TRANSP:\\s*([A-Z ]+)" }],
+      tracking_code: [{ pattern: "ETIQUETA\\s*(\\d{6})" }],
+      unit_number: [{ pattern: "APTO\\s*(\\d+)" }],
+      recipient_name: [{ pattern: "Nome\\s+(\\w+)" }],
+    });
+
+    expect(parsed.carrier).toBe("OUTRA EMPRESA");
+    expect(parsed.tracking_code).toBe("123456");
+    expect(parsed.unit_number).toBe("99");
+    expect(parsed.recipient_name).toBe("Antigo");
+    expect(parsed.destination_cep).toBe("12345-678");
+    expect(parsed.destination_street).toBe("RUA TESTE");
+    expect(parsed.destination_number).toBe("100");
+  });
+
+  it("canoniza transportadora conhecida e ignora campo de endereço", () => {
+    const shippifyText = [
+      "TRANSP: SHIPPIFY TECNOLOGIA LTDA",
+      "DESTINATARIO",
+      "Nome Antigo",
+      "APTO 99",
+      "CODIGO DE ENTREGA 048888",
+      "CEP 12345-678",
+    ].join("\n");
+    const parsed = parseLabel(shippifyText, {
+      carrier: [{ pattern: "TRANSP:\\s*(SHIPPIFY)" }],
+      destination_cep: [{ pattern: "(\\d{5}-\\d{3})" }],
+    } as Parameters<typeof parseLabel>[1]);
+
+    expect(parsed.carrier).toBe("Shippify");
+    expect(parsed.destination_cep).toBe("12345-678");
+  });
+
+  it("mantém o parser embutido se a regex publicada falhar", () => {
+    const builtIn = parseLabel(text);
+    const parsed = parseLabel(text, {
+      tracking_code: [{ pattern: "(" }],
+    });
+
+    expect(parsed).toEqual(builtIn);
+  });
+});

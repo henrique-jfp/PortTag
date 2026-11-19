@@ -52,6 +52,7 @@ import {
   type LabelSample,
   type LabelSampleInput,
 } from "../lib/labelLabCollection";
+import { loadActiveLabelRules } from "../lib/labelLabActiveRules";
 import {
   clearReceptionDraft,
   dataUrlToFile,
@@ -292,7 +293,8 @@ function draftFromAi(
 ): PackageDraft {
   const detectedRecipient = ai.recipientName.trim();
   const barcodeMatch = matchKnownBarcode(barcodeValues);
-  const localCode = barcodeValues.map(extractTrackingCode).find(Boolean) ?? "";
+  const localCode =
+    barcodeValues.map((value) => extractTrackingCode(value)).find(Boolean) ?? "";
   // Código de barras lido na foto original vence a IA quando bate com um
   // formato conhecido; sem correspondência, mantém a ordem anterior.
   const code = barcodeMatch?.code || ai.trackingCode || localCode;
@@ -404,7 +406,7 @@ function draftFromBarcodeOnly(
   const barcodeMatch = matchKnownBarcode(label.barcodeValues);
   const code =
     barcodeMatch?.code ||
-    label.barcodeValues.map(extractTrackingCode).find(Boolean) ||
+    label.barcodeValues.map((value) => extractTrackingCode(value)).find(Boolean) ||
     "";
   const detectedCompany =
     barcodeMatch?.carrier ||
@@ -893,6 +895,12 @@ export function PorterReception() {
   const selectedCollectionIds =
     collectionSelectionOverride ?? collectionCandidateIds;
   const batchBase = batchCandidates.find((item) => item.id === collectionBaseId);
+
+  // Regras publicadas no Label Lab são carregadas em segundo plano, sem
+  // loading, aviso ou etapa extra: só o leitor local das fallback as consome.
+  useEffect(() => {
+    void loadActiveLabelRules(supabase);
+  }, []);
 
   useEffect(() => {
     return () => {

@@ -76,6 +76,14 @@
     `delete_label_lab_ruleset`, restrita a rascunhos e ao Super Admin, com
     auditoria `ruleset_deleted`. Versões aprovadas, publicadas ou superseded
     não podem ser excluídas e as amostras de origem são mantidas.
+    Aplique por último `20261119170000_label_lab_active_rules.sql`: cria
+    `label_lab_active_rules` e a RPC anônima `get_active_label_lab_rules`,
+    redefine `publish_label_lab_ruleset` para gravar o artefato na linha ativa
+    no mesmo commit e cria `activate_label_lab_ruleset` para reverter para uma
+    versão publicada. O extrator de produção e o fallback local leem essa RPC;
+    se ela falhar, o parser embutido continua valendo. A v1 já publicada é
+    migrada automaticamente para a linha ativa. Nenhuma regex altera CEP,
+    logradouro ou número.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -393,9 +401,14 @@ jobs novos.
 ### Publicar
 
 1. Aplique as migrations `20261119140000_label_lab_console.sql`,
-   `20261119150000_fix_label_lab_storage_deletion.sql` e
-   `20261119160000_delete_label_lab_ruleset.sql` no SQL Editor e execute
-   `supabase functions deploy admin-label-lab`.
+   `20261119150000_fix_label_lab_storage_deletion.sql`,
+   `20261119160000_delete_label_lab_ruleset.sql` e
+   `20261119170000_label_lab_active_rules.sql` no SQL Editor e execute
+   `supabase functions deploy admin-label-lab`,
+   `supabase functions deploy extract-package-label` e
+   `supabase functions deploy label-lab`. As duas últimas precisam ser
+   redeployadas porque agora leem as regras ativas em runtime; depois disso,
+   publicar uma versão na Central não exige mais deploy.
 2. Mantenha `LABEL_LAB_SECRET`, `LABEL_LAB_WORKER_SECRET`,
    `LABEL_LAB_CLEANUP_SECRET` e os schedules `process-label-lab-queue` e
    `cleanup-label-lab` como estão.

@@ -1,3 +1,4 @@
+import { fetchActiveLabelRules } from "../extract-package-label/activeRules.ts";
 import { buildAddressReason, decideAddressStatus } from "../extract-package-label/address.ts";
 import { carrierForLabel } from "../extract-package-label/carrier.ts";
 import { grounded } from "../extract-package-label/grounding.ts";
@@ -227,7 +228,10 @@ async function analyzeImage(
   try {
     const read = await readLabelText(imageBase64, options.vision, visionTimeoutMs);
     const ocrText = read.text;
-    const rules = parseLabel(ocrText);
+    // A Análise da Central usa exatamente as regras que estão valendo no
+    // recebimento; a RPC é pública e tem fallback para o parser embutido.
+    const activeRules = await fetchActiveLabelRules();
+    const rules = parseLabel(ocrText, activeRules);
 
     const needsAi =
       ocrText.length >= 20 &&

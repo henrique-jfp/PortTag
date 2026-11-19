@@ -1,4 +1,5 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { fetchActiveLabelRules } from "./activeRules.ts";
 import { buildAddressReason, decideAddressStatus } from "./address.ts";
 import { carrierForLabel } from "./carrier.ts";
 import { grounded } from "./grounding.ts";
@@ -241,6 +242,10 @@ Deno.serve(async (request: Request) => {
     return respond({ error: "Vision OCR not configured", fallback: true }, 503);
   }
 
+  // Regras publicadas são buscadas em paralelo à Vision: não entram no tempo
+  // de leitura e, se a RPC falhar, o parser embutido continua valendo.
+  const activeRulesPromise = fetchActiveLabelRules(serviceClient);
+
   let ocrText = "";
   let ocrWords = 0;
   let ocrMs = 0;
@@ -264,9 +269,11 @@ Deno.serve(async (request: Request) => {
     );
   }
 
-  // 1º voto: regras determinísticas. Rastreio e transportadora ficam aqui para
-  // sempre — o LLM erra esses dois campos e não é determinístico.
-  const rules = parseLabel(ocrText);
+  // 1º voto: regras determinísticas, incluindo as publicadas no Label Lab.
+  // Rastreio e transportadora ficam aqui para sempre — o LLM erra esses dois
+  // campos e não é determinístico.
+  const activeRules = await activeRulesPromise;
+  const rules = parseLabel(ocrText, activeRules);
   const groqKey = (Deno.env.get("GROQ_API_KEY") ?? "").trim();
   const remainingMs = requestBudgetMs - (Date.now() - requestStartedAt);
   // A IA entra só quando falta campo. Um CEP divergente é decisão determinística:

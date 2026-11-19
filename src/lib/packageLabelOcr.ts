@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getActiveLabelRules } from "./labelLabActiveRules";
+import { applyLabelLabRule, type LabelLabRules } from "./labelLabRules";
 import {
   findResidentUnitCandidates,
   findUnitCandidates,
@@ -112,7 +114,16 @@ function isOrderIdLine(line: string) {
 const trackingLabelPattern =
   /\b(?:c[oó]digo\s+de\s+(?:rastreio|rastreamento|entrega)|rastreio|rastreamento|tracking(?:\s*(?:code|number|id|no))?|awb)\b\s*[:#-]?\s*/i;
 
-export function extractTrackingCode(value: string) {
+export function extractTrackingCode(
+  value: string,
+  rules: LabelLabRules | null = getActiveLabelRules(),
+) {
+  // Regra publicada no Label Lab tem prioridade sobre os formatos embutidos.
+  const published = rules
+    ? applyLabelLabRule(rules, "tracking_code", value.slice(0, 3000)).value
+    : "";
+  if (published) return published.replace(/[\s-]/g, "").toUpperCase();
+
   const lines = value.split(/\r?\n/).map((line) => line.trim());
   const eligibleLines = lines.filter(
     (line) => line && !isOrderIdLine(line),
@@ -190,9 +201,21 @@ export function matchKnownBarcode(values: string[]): KnownBarcodeMatch | null {
   return null;
 }
 
-export function detectDeliveryCompany(value: string) {
+export function detectDeliveryCompany(
+  value: string,
+  rules: LabelLabRules | null = getActiveLabelRules(),
+) {
   const normalized = normalizeText(value);
-  const trackingCode = extractTrackingCode(value);
+  const published = rules
+    ? applyLabelLabRule(rules, "carrier", value.slice(0, 3000)).value
+    : "";
+  if (published) {
+    return (
+      courierNames.find(([needle]) => normalizeText(needle) === normalizeText(published))?.[1] ??
+      published
+    );
+  }
+  const trackingCode = extractTrackingCode(value, rules);
 
   if (/^TBR\d{9,12}$/.test(trackingCode)) return "Amazon";
   if (/^[A-Z]{2}\d{9}BR$/.test(trackingCode) || /\bsedex\b/.test(normalized)) {

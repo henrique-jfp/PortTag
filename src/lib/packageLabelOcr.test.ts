@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { emptyLabelLabRules } from "./labelLabRules";
 import {
   detectDeliveryCompany,
   extractTrackingCode,
@@ -41,6 +42,15 @@ describe("código de rastreio", () => {
 
   it("lê o código de entrega de 6 dígitos das etiquetas Shippify", () => {
     expect(extractTrackingCode("CODIGO DE ENTREGA\n048888")).toBe("048888");
+  });
+
+  it("usa as regex publicadas antes dos formatos embutidos", () => {
+    const rules = emptyLabelLabRules();
+    rules.tracking_code = [{ pattern: "ETIQUETA\\s*(\\d{6})", note: "" }];
+    rules.carrier = [{ pattern: "TRANSP:\\s*([A-Z ]+)", note: "" }];
+
+    expect(extractTrackingCode("ETIQUETA 123456", rules)).toBe("123456");
+    expect(detectDeliveryCompany("TRANSP: SHIPPIFY", rules)).toBe("Shippify");
   });
 });
 

@@ -79,8 +79,12 @@ mesma JPEG já comprimida vai para `collect-label-sample`, que usa a sessão do
 porteiro, grava no bucket privado e cria a tarefa. O worker
 `process-label-lab-queue` reaproveita `label-lab` fora do caminho crítico, e
 `cleanup-label-lab` apaga a foto e sanitiza o OCR identificável após a retenção.
-Nada disso publica regex: a aprovação e a versão do artefato ainda serão
-manuais. Os detalhes de segredos e agendamentos estão em
+A Central do Label Lab no Super Admin completa o fluxo: a regex só entra no
+teste de regressão enquanto o rascunho não é publicado; ao publicar, o artefato
+é gravado em `label_lab_active_rules` e passa a valer no OCR de produção e no
+fallback local sem download de JSON nem deploy. Regras publicadas antes podem
+ser reativadas. CEP, logradouro e número continuam decididos apenas pelo código
+determinístico. Os detalhes de segredos e agendamentos estão em
 [`supabase/RECEBIMENTO.md`](./supabase/RECEBIMENTO.md).
 
 ### Acesso pelo celular (tela inicial)

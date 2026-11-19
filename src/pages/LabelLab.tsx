@@ -188,6 +188,8 @@ export function LabelLab() {
   const [publishedArtifact, setPublishedArtifact] = useState<Record<string, unknown> | null>(null);
   const [discardTarget, setDiscardTarget] = useState<Sample | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Ruleset | null>(null);
+  const [activationTarget, setActivationTarget] = useState<Ruleset | null>(null);
+  const [activationText, setActivationText] = useState("");
 
   const selectedCondominium = useMemo(
     () => condominiums.find((item) => item.id === selectedCondominiumId) ?? null,
@@ -632,7 +634,7 @@ export function LabelLab() {
       setPublishText("");
       setPublishConfirmed(false);
       setSuccessMessage(
-        `Versão v${response.ruleset.version} publicada. Fotos e OCR das amostras usadas foram excluídos.`,
+        `Versão v${response.ruleset.version} publicada e ativa no recebimento. Não é preciso baixar o JSON nem fazer deploy. Fotos e OCR das amostras usadas foram excluídos.`,
       );
       selectSample("");
       await reloadData();
@@ -704,6 +706,35 @@ export function LabelLab() {
     } catch (error) {
       setDeleteTarget(null);
       setPageError(error instanceof Error ? error.message : "Falha ao excluir.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleActivate() {
+    if (!activationTarget) return;
+    if (activationText.trim().toUpperCase() !== "ATIVAR") {
+      setPageError("Digite ATIVAR para voltar a usar esta versão publicada.");
+      return;
+    }
+    setBusyState("activate");
+    try {
+      const response = await callAdmin<{ ruleset: Ruleset }>({
+        action: "activate",
+        rulesetId: activationTarget.id,
+        confirmationText: activationText,
+      });
+      setActivationTarget(null);
+      setActivationText("");
+      selectRuleset(response.ruleset);
+      setSuccessMessage(
+        `Versão v${response.ruleset.version} ativa no recebimento. As regex publicadas valem na próxima leitura.`,
+      );
+      await reloadData();
+    } catch (error) {
+      setActivationTarget(null);
+      setActivationText("");
+      setPageError(error instanceof Error ? error.message : "Falha ao ativar.");
     } finally {
       setBusy("");
     }
@@ -972,9 +1003,10 @@ export function LabelLab() {
           <h2>2. Editor de expressões</h2>
           <p>
             A IA sugere, mas só quatro campos podem ter regex. CEP, logradouro e
-            número continuam sendo decididos pelo código determinístico. As regex
-            desta seção valem no teste de regressão e no artefato publicado; elas
-            não alteram a análise acima nem o OCR do porteiro automaticamente.
+            número continuam sendo decididos pelo código determinístico. Em rascunho,
+            as regex valem só no teste de regressão. Ao publicar, passam a valer
+            automaticamente na análise e no OCR do porteiro — sem baixar JSON nem
+            fazer deploy.
           </p>
         </div>
         <div className="lab-toolbar">
@@ -1200,8 +1232,10 @@ export function LabelLab() {
           <h2>4. Versões, aprovação e publicação</h2>
           <p>
             Aprovar e publicar são atos separados, com confirmação digitada e
-            auditoria. Publicar exclui as fotos e sanitiza o OCR das amostras usadas.
-            Rascunhos descartados podem ser excluídos pelo botão ao lado da versão.
+            auditoria. Publicar já ativa as regex no recebimento e exclui as fotos
+            e o OCR das amostras usadas. Versões publicadas antes podem ser
+            reativadas pelo botão da lista; rascunhos descartados podem ser
+            excluídos. CEP, logradouro e número nunca são alterados por aqui.
           </p>
         </div>
         <div className="lab-grid">
@@ -1235,6 +1269,20 @@ export function LabelLab() {
                         onClick={() => setDeleteTarget(item)}
                       >
                         Excluir
+                      </button>
+                    ) : null}
+                    {item.status === "superseded" ? (
+                      <button
+                        className="secondary-button lab-version-activate"
+                        type="button"
+                        disabled={Boolean(busy)}
+                        title={`Voltar a usar a versão publicada v${item.version}`}
+                        onClick={() => {
+                          setActivationTarget(item);
+                          setActivationText("");
+                        }}
+                      >
+                        Ativar
                       </button>
                     ) : null}
                   </div>
@@ -1323,7 +1371,7 @@ export function LabelLab() {
             {publishedArtifact ? (
               <div className="lab-artifact">
                 <p>
-                  Artefato v{String(publishedArtifact.version ?? "?")} pronto:
+                  Artefato v{String(publishedArtifact.version ?? "?")} ativo no recebimento:
                   {" "}
                   <code>{String(publishedArtifact.checksum ?? selectedRuleset?.checksum ?? "")}</code>
                 </p>
@@ -1382,6 +1430,62 @@ export function LabelLab() {
           onConfirm={() => void handleDeleteRuleset()}
           onCancel={() => setDeleteTarget(null)}
         />
+      ) : null}
+
+      {activationTarget ? (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setActivationTarget(null);
+              setActivationText("");
+            }
+          }}
+        >
+          <section
+            className="confirmation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="activation-title"
+            aria-describedby="activation-description"
+          >
+            <h2 id="activation-title">Ativar versão publicada</h2>
+            <p id="activation-description">
+              A v{activationTarget.version} ("{activationTarget.name}") volta a valer
+              no recebimento na próxima leitura de etiqueta. A versão atual deixa
+              de ser aplicada. Fotos e OCR já foram excluídos na publicação.
+            </p>
+            <label className="form-field">
+              Digite ATIVAR
+              <input
+                autoFocus
+                value={activationText}
+                onChange={(event) => setActivationText(event.target.value)}
+              />
+            </label>
+            <div className="form-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy === "activate"}
+                onClick={() => {
+                  setActivationTarget(null);
+                  setActivationText("");
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={busy === "activate"}
+                onClick={() => void handleActivate()}
+              >
+                {busy === "activate" ? "Ativando..." : "Ativar versão"}
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
     </main>
   );

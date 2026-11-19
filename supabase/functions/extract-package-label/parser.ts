@@ -5,7 +5,12 @@
  * Rastreio e transportadora são lidos do texto inteiro (1º voto). Nome, unidade,
  * bloco e endereço vêm do bloco do destinatário, para não confundir com o
  * remetente. A IA entra depois apenas como 2º voto nos campos em branco.
+ *
+ * As regex publicadas no Label Lab podem substituir apenas os quatro campos
+ * não determinísticos. CEP, logradouro e número nunca são passados para elas.
  */
+
+import { carrierValues } from "./carrier.ts";
 
 const trackingPatterns: Array<[string, RegExp]> = [
   // Regra publicada no Label Lab v1 (artefato label-lab-rules/v1): o código de
@@ -302,7 +307,55 @@ export type ParsedLabel = {
   destination_number: string;
 };
 
-export function parseLabel(text: string): ParsedLabel {
+/** Mesmo formato do artefato `label-lab-rules/v1`, sem os campos de endereço. */
+export type LabelLabRule = { pattern: string; note?: string };
+export type LabelLabDynamicRules = Partial<
+  Record<
+    "carrier" | "tracking_code" | "unit_number" | "recipient_name",
+    LabelLabRule[]
+  >
+>;
+
+const dynamicRuleInputLimit = 3_000;
+
+function firstRuleValue(
+  rules: LabelLabDynamicRules | undefined,
+  field: keyof LabelLabDynamicRules,
+  text: string,
+) {
+  for (const rule of (rules?.[field] ?? []).slice(0, 12)) {
+    if (
+      !rule ||
+      typeof rule.pattern !== "string" ||
+      rule.pattern.length < 4 ||
+      rule.pattern.length > 160
+    ) {
+      continue;
+    }
+    try {
+      const match = new RegExp(rule.pattern, "i").exec(text);
+      if (!match) continue;
+      const value = (match[1] ?? match[0]).replace(/\s+/g, " ").trim();
+      if (value) return value;
+    } catch {
+      // Uma regex publicada com erro nunca derruba o recebimento.
+    }
+  }
+  return "";
+}
+
+function canonicalCarrier(value: string) {
+  const normalized = value.toLocaleLowerCase("pt-BR");
+  return (
+    carrierValues.find(
+      (carrier) =>
+        carrier !== "unknown" &&
+        carrier.toLocaleLowerCase("pt-BR") === normalized,
+    ) ?? value
+  );
+}
+
+function parseBuiltIn(text: string): ParsedLabel {
   const tracking = findTracking(text);
   const destination = destinationText(text);
   const recipientName = findRecipient(destination);
@@ -315,5 +368,39 @@ export function parseLabel(text: string): ParsedLabel {
     destination_cep: findCep(destination, recipientName),
     destination_street: findStreet(destination),
     destination_number: findStreetNumber(destination),
+  };
+}
+
+/**
+ * Regras publicadas vencem o parser embutido no campo que casaram. O texto é
+ * recortado para limitar o trabalho de expressões escritas à mão; o endereço
+ * continua vindo somente das regras fixas e da checagem determinística.
+ */
+export function parseLabel(
+  text: string,
+  dynamicRules?: LabelLabDynamicRules | null,
+): ParsedLabel {
+  const parsed = parseBuiltIn(text);
+  if (!dynamicRules) return parsed;
+
+  const input = text.slice(0, dynamicRuleInputLimit);
+  const carrier = firstRuleValue(dynamicRules, "carrier", input);
+  const tracking = firstRuleValue(dynamicRules, "tracking_code", input);
+  const unit = firstRuleValue(dynamicRules, "unit_number", input);
+  const recipient = firstRuleValue(dynamicRules, "recipient_name", input);
+
+  return {
+    ...parsed,
+    ...(carrier ? { carrier: canonicalCarrier(carrier) } : {}),
+    ...(tracking
+      ? {
+          tracking_code: tracking
+            .replace(/[\s-]/g, "")
+            .toUpperCase()
+            .slice(0, 80),
+        }
+      : {}),
+    ...(unit ? { unit_number: unit.toUpperCase().slice(0, 30) } : {}),
+    ...(recipient ? { recipient_name: recipient.slice(0, 120) } : {}),
   };
 }

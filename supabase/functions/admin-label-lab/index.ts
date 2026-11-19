@@ -550,6 +550,21 @@ Deno.serve(async (request: Request) => {
         return respond({ ruleset });
       }
 
+      case "activate": {
+        if (!isUuid(input.rulesetId)) {
+          return respond({ error: "Versão inválida." }, 400);
+        }
+        const ruleset = await rpc<Record<string, unknown>>(
+          "activate_label_lab_ruleset",
+          {
+            p_ruleset_id: input.rulesetId,
+            p_actor: actor,
+            p_confirmation_text: input.confirmationText ?? "",
+          },
+        );
+        return respond({ ruleset });
+      }
+
       case "discard": {
         if (!isUuid(input.sampleId)) return respond({ error: "Amostra inválida." }, 400);
         const discarded = await rpc<boolean>("discard_label_lab_sample", {

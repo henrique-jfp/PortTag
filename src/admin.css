@@ -909,7 +909,8 @@
   cursor: pointer;
 }
 
-.dashboard .lab-version-delete {
+.dashboard .lab-version-delete,
+.dashboard .lab-version-activate {
   flex: 0 0 auto;
   padding-inline: 10px;
   font-size: 0.85rem;

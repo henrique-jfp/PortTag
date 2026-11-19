@@ -119,7 +119,14 @@ O JSON ao lado mantém o resultado bruto para conferência.
 
 ## 5. Transformando sugestão em regra
 
-Fluxo recomendado:
+Para ajustar somente transportadora, rastreio, unidade ou destinatário, use a
+**Central do Label Lab** no Super Admin: importe a amostra, rode a regressão,
+aprove e publique. A publicação grava a regra na tabela `label_lab_active_rules`
+e ela passa a valer na próxima leitura, sem baixar JSON e sem redeploy. O
+procedimento abaixo continua sendo para mudanças estruturais no parser (novos
+formatos de endereço, caminhos de decisão ou código da função).
+
+Fluxo recomendado para mudanças no código:
 
 1. Abra o **texto OCR** da etiqueta problemática no relatório.
 2. Confira a regex candidata. Ela precisa casar com um trecho real e não pode ser genérica demais.
