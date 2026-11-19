@@ -1917,6 +1917,8 @@ input {
 .porter-signature-pad {
   position: relative;
   width: min(100%, 420px);
+  aspect-ratio: 1 / 1;
+  align-self: start;
   margin-inline: auto;
   overflow: hidden;
   border: 1px solid #cbd4e2;
