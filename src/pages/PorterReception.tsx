@@ -2045,7 +2045,7 @@ export function PorterReception() {
       return;
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.lineWidth = 3;
+    context.lineWidth = 3.5;
     context.lineCap = "round";
     context.lineJoin = "round";
     context.strokeStyle = "#172033";
@@ -2081,6 +2081,8 @@ export function PorterReception() {
       canvas.setPointerCapture(event.pointerId);
       context.beginPath();
       context.moveTo(x, y);
+      context.lineTo(x, y);
+      context.stroke();
       signatureHasInk.current = true;
       setHasSignature(true);
       return;
@@ -3329,8 +3331,8 @@ export function PorterReception() {
                 <div className="porter-signature-pad">
                   <canvas
                     ref={signatureCanvas}
-                    width={500}
-                    height={500}
+                    width={600}
+                    height={300}
                     aria-label="Espaço para o morador assinar"
                     onPointerDown={drawSignature}
                     onPointerMove={drawSignature}
@@ -3358,7 +3360,7 @@ export function PorterReception() {
                   )}
                 </div>
                 <button
-                  className="porter-secondary-button"
+                  className="porter-secondary-button porter-clear-signature-button"
                   type="button"
                   onClick={clearSignature}
                   disabled={!hasSignature || savingCollection}
