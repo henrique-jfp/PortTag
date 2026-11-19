@@ -71,6 +71,11 @@ const cityStateLine = new RegExp(
   "i",
 );
 
+/** Códigos de centro de distribuição da Amazon não são nome de morador. */
+const logisticsMarkers =
+  /\b(?:nts|aft|fc|xfc|xcv|sorter|fulfillment|centro de distribui[çc]ao|galp[aã]o|oversize|cycle|lrj|cgh|srj|frj)\b/i;
+const nameConnectors = /^(?:e|de|da|do|das|dos)$/i;
+
 function cleanRecipient(candidate: string) {
   const name = candidate
     .replace(
@@ -90,6 +95,13 @@ function cleanRecipient(candidate: string) {
   if (tokens.length < 2 || tokens.length > 8 || /\d/.test(name)) return "";
   if (addressKeywords.test(name.toLowerCase())) return "";
   if (cityStateLine.test(name)) return "";
+  if (logisticsMarkers.test(name)) return "";
+  if (tokens.includes("-")) return "";
+  const meaningful = tokens.filter((token) => !nameConnectors.test(token));
+  if (meaningful.length < 2) return "";
+  // "NTS AFT - X FC" sobrevive quando o OCR perde o 9 de "XCV9". Siglas
+  // curtas em caixa alta não são nome de pessoa.
+  if (meaningful.some((token) => /^[A-Z]{1,3}$/.test(token))) return "";
   return name;
 }
 

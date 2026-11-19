@@ -79,6 +79,24 @@ describe("parser da extração na nuvem", () => {
     );
   });
 
+  it("não confunde código de galpão da Amazon com o destinatário", () => {
+    const semNove = parseLabel(
+      [
+        "XCV - NTS AFT - X FC",
+        "Via de Acesso Norte , Km 38 , Galpao 7",
+        "Cajamar SP 07789-100",
+        "GUILHERME NOGUEIRA COSTA E VALLE",
+        "Praca Edmundo Bittencourt 15",
+      ].join("\n"),
+    );
+    const comoOcr = parseLabel(
+      ["NTS AFT - XFC", "GUILHERME NOGUEIRA COSTA E VALLE"].join("\n"),
+    );
+
+    expect(semNove.recipient_name).toBe("GUILHERME NOGUEIRA COSTA E VALLE");
+    expect(comoOcr.recipient_name).toBe("GUILHERME NOGUEIRA COSTA E VALLE");
+  });
+
   it("usa o nome impresso para corrigir a transportadora deduzida do código", () => {
     const jadlog = parseLabel(
       "jadlog\nDESTINATARIO\nNome Sobrenome\n18250937612",
