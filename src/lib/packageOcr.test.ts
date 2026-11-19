@@ -82,7 +82,7 @@ describe("etiqueta da Shopee", () => {
     const result = verify(shopeeLabel, shopeeAddress);
 
     expect(result.status).toBe("verified");
-    expect(extractRecipientName(shopeeLabel, [], shopeeAddress.cep)).toBe(
+    expect(extractRecipientName(shopeeLabel, [], shopeeAddress.cep ?? "")).toBe(
       "Gabriella Bomtempo Freire",
     );
   });
@@ -175,6 +175,27 @@ describe("CEP fora do texto reconhecido", () => {
     });
 
     expect(result.status).toBe("verified");
+  });
+});
+
+describe("cadastro com campos de endereço nulos", () => {
+  it("não quebra quando address_number é nulo", () => {
+    const result = verifyPackageDestinationAddress({
+      recognizedText: mercadoLivreLabel,
+      address: { cep: "22260-040", street: null, address_number: null },
+    });
+
+    expect(result.status).toBe("verified");
+    expect(result.signals?.numberMatched).toBe(false);
+  });
+
+  it("não quebra quando CEP e rua também são nulos", () => {
+    const result = verifyPackageDestinationAddress({
+      recognizedText: mercadoLivreLabel,
+      address: { cep: null, street: null, address_number: null },
+    });
+
+    expect(result.status).toBe("unknown");
   });
 });
 

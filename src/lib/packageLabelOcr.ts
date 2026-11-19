@@ -746,7 +746,11 @@ export type AiLabelExtractionInput<
   condominiumId: string;
   imageBase64: string;
   mimeType: string;
-  expectedAddress: { cep: string; street: string; address_number: string };
+  expectedAddress: {
+    cep: string | null;
+    street: string | null;
+    address_number: string | null;
+  };
   units: T[];
   blocks: B[];
   residents: R[];

@@ -85,7 +85,8 @@ type Condominium = {
   block_count: number;
   cep: string;
   street: string;
-  address_number: string;
+  // Pode vir nulo do banco; a verificação de endereço normaliza antes de usar.
+  address_number: string | null;
 };
 
 type Block = {

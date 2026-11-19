@@ -433,9 +433,11 @@ export function extractRecipientName(
 }
 
 export type PackageDestinationAddress = {
-  cep: string;
-  street: string;
-  address_number: string;
+  // O banco permite nulo em address_number desde a migration de blocos.
+  // Tipar como string escondia o null do TypeScript e derrubava o fallback.
+  cep: string | null;
+  street: string | null;
+  address_number: string | null;
 };
 
 export type PackageAddressSignals = {
@@ -479,10 +481,15 @@ const conflictingStreetThreshold = 0.34;
 export function verifyPackageDestinationAddress(
   input: DestinationVerificationInput,
 ): PackageAddressVerification {
-  const { recognizedText, address } = input;
+  const { recognizedText } = input;
   const numericText = input.numericText ?? "";
   const barcodeText = input.barcodeText ?? "";
   const residentNames = input.residentNames ?? [];
+  const address = {
+    cep: input.address?.cep ?? "",
+    street: input.address?.street ?? "",
+    address_number: input.address?.address_number ?? "",
+  };
 
   const expectedCep = address.cep.replace(/\D/g, "");
   const hasExpectedCep = expectedCep.length === 8;
