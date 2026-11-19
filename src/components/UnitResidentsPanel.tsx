@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { ConfirmationDialog } from "./ConfirmationDialog";
 import { supabase } from "../lib/supabase";
 
 type Resident = {
@@ -20,6 +21,8 @@ export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
   const [whatsapp, setWhatsapp] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Resident | null>(null);
+  const [deletingResidentId, setDeletingResidentId] = useState("");
 
   async function loadResidents(): Promise<boolean> {
     const { data, error } = await supabase
@@ -133,12 +136,19 @@ export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
     }
   }
 
-  async function handleDelete(resident: Resident) {
-    const label = resident.name || resident.whatsapp || "este contato";
-    if (!window.confirm(`Excluir ${label} desta unidade?`)) return;
+  function requestDelete(resident: Resident) {
+    setDeleteTarget(resident);
+    setErrorMessage("");
+    setSuccessMessage("");
+  }
+
+  async function confirmDelete() {
+    const resident = deleteTarget;
+    if (!resident) return;
 
     setErrorMessage("");
     setSuccessMessage("");
+    setDeletingResidentId(resident.id);
     try {
       const { error } = await supabase.rpc("delete_unit_resident", {
         p_resident_id: resident.id,
@@ -158,6 +168,9 @@ export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
       const message =
         error instanceof Error ? error.message : "Falha inesperada.";
       setErrorMessage(`Não foi possível excluir o contato. ${message}`);
+    } finally {
+      setDeletingResidentId("");
+      setDeleteTarget(null);
     }
   }
 
@@ -191,7 +204,7 @@ export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
                 <button
                   className="text-button danger-text-button"
                   type="button"
-                  onClick={() => void handleDelete(resident)}
+                  onClick={() => requestDelete(resident)}
                 >
                   Excluir
                 </button>
@@ -249,6 +262,18 @@ export function UnitResidentsPanel({ unitId }: UnitResidentsPanelProps) {
         <p className="feedback-message feedback-success" role="status">
           {successMessage}
         </p>
+      )}
+
+      {deleteTarget && (
+        <ConfirmationDialog
+          title="Excluir contato?"
+          description={`Excluir ${deleteTarget.name || deleteTarget.whatsapp || "este contato"} desta unidade?`}
+          confirmLabel="Excluir contato"
+          busyLabel="Excluindo..."
+          loading={Boolean(deletingResidentId)}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
       )}
     </div>
   );

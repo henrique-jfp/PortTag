@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { ConfirmationDialog } from "../components/ConfirmationDialog";
 import { useAuth } from "../contexts/AuthContext";
 import {
   normalizePorterUsername,
@@ -43,6 +44,14 @@ type Credentials = {
 };
 
 type AccessDuration = "never" | "seven-days" | "custom";
+
+type ConfirmationRequest = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  busyLabel?: string;
+  onConfirm: () => void | Promise<void>;
+};
 
 function localDateTimeValue(date = new Date()) {
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -120,6 +129,8 @@ export function CondominiumOperators({
     useState<AccessDuration>("never");
   const [reactivateCustomExpiry, setReactivateCustomExpiry] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
+  const [teamSection, setTeamSection] = useState<"porters" | "managers">("porters");
+  const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => setCurrentTime(Date.now()), 0);
@@ -324,6 +335,47 @@ export function CondominiumOperators({
     );
   }
 
+  function requestConfirmation(
+    title: string,
+    description: string,
+    confirmLabel: string,
+    onConfirm: () => void | Promise<void>,
+    busyLabel?: string,
+  ) {
+    setConfirmation({ title, description, confirmLabel, busyLabel, onConfirm });
+  }
+
+  async function handleConfirm() {
+    const action = confirmation?.onConfirm;
+    if (!action) return;
+    try {
+      await action();
+    } finally {
+      setConfirmation(null);
+    }
+  }
+
+  function handleTeamTabsKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+    event.preventDefault();
+
+    const next =
+      event.key === "ArrowLeft" || event.key === "Home"
+        ? "porters"
+        : "managers";
+    setTeamSection(next);
+    event.currentTarget
+      .querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      [next === "porters" ? 0 : 1]?.focus();
+  }
+
   async function handleCreatePorter(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCondominiumId) return;
@@ -397,19 +449,6 @@ export function CondominiumOperators({
     action: "reset-password" | "deactivate" | "activate" | "renew-access",
     accessExpiresAt?: string | null,
   ) {
-    if (
-      action === "deactivate" &&
-      !window.confirm(`Remover o acesso de ${porter.name}?`)
-    ) {
-      return;
-    }
-    if (
-      action === "reset-password" &&
-      !window.confirm(`Gerar uma nova senha temporária para ${porter.name}?`)
-    ) {
-      return;
-    }
-
     setPageError("");
     setSuccessMessage("");
     setWorkingId(porter.id);
@@ -542,12 +581,6 @@ export function CondominiumOperators({
     manager: Manager,
     action: "reset-password" | "activate",
   ) {
-    const confirmation =
-      action === "activate"
-        ? `Reativar o acesso de ${manager.email} e gerar uma nova senha?`
-        : `Gerar uma nova senha temporária para ${manager.email}?`;
-    if (!window.confirm(confirmation)) return;
-
     setPageError("");
     setSuccessMessage("");
     setCredentials(null);
@@ -618,12 +651,11 @@ export function CondominiumOperators({
   }
 
   async function handleDeactivateManager(manager: Manager) {
-    if (
-      manager.status !== "active" ||
-      !window.confirm(`Remover o acesso de ${manager.email}?`)
-    ) {
-      return;
-    }
+    if (manager.status !== "active") return;
+
+    setPageError("");
+    setSuccessMessage("");
+    setWorkingId(manager.id);
     try {
       const { error } = await supabase.rpc("deactivate_condominium_admin", {
         p_membership_id: manager.id,
@@ -638,6 +670,8 @@ export function CondominiumOperators({
       setPageError(
         error instanceof Error ? error.message : "Não foi possível remover o acesso.",
       );
+    } finally {
+      setWorkingId("");
     }
   }
 
@@ -723,6 +757,52 @@ export function CondominiumOperators({
             </div>
           </div>
 
+          <nav
+            className="admin-tabs"
+            role="tablist"
+            aria-label="Equipe do condomínio"
+            onKeyDown={handleTeamTabsKeyDown}
+          >
+            <button
+              className="admin-tab"
+              id="admin-team-tab-porters"
+              role="tab"
+              type="button"
+              aria-selected={teamSection === "porters"}
+              aria-controls="admin-team-panel-porters"
+              onClick={() => setTeamSection("porters")}
+            >
+              Porteiros <span className="admin-tab-count">{porters.length}</span>
+            </button>
+            <button
+              className="admin-tab"
+              id="admin-team-tab-managers"
+              role="tab"
+              type="button"
+              aria-selected={teamSection === "managers"}
+              aria-controls="admin-team-panel-managers"
+              onClick={() => setTeamSection("managers")}
+            >
+              Síndicos <span className="admin-tab-count">{managers.length}</span>
+            </button>
+          </nav>
+
+          <div
+            className="admin-tab-panel"
+            id={
+              teamSection === "porters"
+                ? "admin-team-panel-porters"
+                : "admin-team-panel-managers"
+            }
+            role="tabpanel"
+            aria-labelledby={
+              teamSection === "porters"
+                ? "admin-team-tab-porters"
+                : "admin-team-tab-managers"
+            }
+          >
+            {teamSection === "porters" ? (
+              <>
           <section className="admin-section">
             <div className="section-heading">
               <h2>Cadastrar porteiro</h2>
@@ -901,7 +981,14 @@ export function CondominiumOperators({
                             className="text-button"
                             disabled={workingId === porter.id}
                             onClick={() =>
-                              void handlePorterAction(porter, "reset-password")
+                              requestConfirmation(
+                                "Gerar nova senha?",
+                                `Gerar uma nova senha temporária para ${porter.name}? Guarde a senha exibida a seguir: ela aparece somente agora.`,
+                                "Gerar nova senha",
+                                () =>
+                                  handlePorterAction(porter, "reset-password"),
+                                "Gerando...",
+                              )
                             }
                           >
                             Nova senha
@@ -910,7 +997,13 @@ export function CondominiumOperators({
                             className="text-button danger-text-button"
                             disabled={workingId === porter.id}
                             onClick={() =>
-                              void handlePorterAction(porter, "deactivate")
+                              requestConfirmation(
+                                "Remover acesso do porteiro?",
+                                `Remover o acesso de ${porter.name}? Ele não poderá mais entrar no app Porteiro até ser reativado.`,
+                                "Remover acesso",
+                                () => handlePorterAction(porter, "deactivate"),
+                                "Removendo...",
+                              )
                             }
                           >
                             Remover acesso
@@ -1012,7 +1105,9 @@ export function CondominiumOperators({
               </ul>
             )}
           </section>
-
+              </>
+            ) : (
+              <>
           <section className="admin-section">
             <div className="section-heading">
               <h2>Criar síndico</h2>
@@ -1096,7 +1191,14 @@ export function CondominiumOperators({
                             className="text-button"
                             disabled={workingId === manager.id}
                             onClick={() =>
-                              void handleManagerAction(manager, "reset-password")
+                              requestConfirmation(
+                                "Gerar nova senha?",
+                                `Gerar uma nova senha temporária para ${manager.email}? Guarde a senha exibida a seguir: ela aparece somente agora.`,
+                                "Gerar nova senha",
+                                () =>
+                                  handleManagerAction(manager, "reset-password"),
+                                "Gerando...",
+                              )
                             }
                           >
                             Nova senha
@@ -1104,7 +1206,15 @@ export function CondominiumOperators({
                           <button
                             className="text-button danger-text-button"
                             disabled={workingId === manager.id}
-                            onClick={() => void handleDeactivateManager(manager)}
+                            onClick={() =>
+                              requestConfirmation(
+                                "Remover acesso do síndico?",
+                                `Remover o acesso de ${manager.email}? Ele não poderá mais entrar no app Síndico até ser reativado.`,
+                                "Remover acesso",
+                                () => handleDeactivateManager(manager),
+                                "Removendo...",
+                              )
+                            }
                           >
                             Remover acesso
                           </button>
@@ -1114,7 +1224,13 @@ export function CondominiumOperators({
                           className="text-button"
                           disabled={workingId === manager.id}
                           onClick={() =>
-                            void handleManagerAction(manager, "activate")
+                            requestConfirmation(
+                              "Reativar acesso?",
+                              `Reativar o acesso de ${manager.email} e gerar uma nova senha temporária?`,
+                              "Reativar e gerar senha",
+                              () => handleManagerAction(manager, "activate"),
+                              "Reativando...",
+                            )
                           }
                         >
                           Reativar e gerar senha
@@ -1126,7 +1242,22 @@ export function CondominiumOperators({
               </ul>
             )}
           </section>
+              </>
+            )}
+          </div>
         </>
+      )}
+
+      {confirmation && (
+        <ConfirmationDialog
+          title={confirmation.title}
+          description={confirmation.description}
+          confirmLabel={confirmation.confirmLabel}
+          busyLabel={confirmation.busyLabel}
+          loading={Boolean(workingId)}
+          onConfirm={handleConfirm}
+          onCancel={() => setConfirmation(null)}
+        />
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { CondominiumOperators } from "./CondominiumOperators";
+import { ConfirmationDialog } from "../components/ConfirmationDialog";
 import { UnitResidentsPanel } from "../components/UnitResidentsPanel";
 import { useAuth } from "../contexts/AuthContext";
 import { generateUnitNumbers, parseUnitRange } from "../lib/unitGeneration";
@@ -54,6 +55,7 @@ export function CondominiumUnits() {
   const [savingBatch, setSavingBatch] = useState(false);
   const [managementTab, setManagementTab] = useState<"units" | "team">("units");
   const [unitMode, setUnitMode] = useState<"single" | "batch">("single");
+  const [deleteUnitTarget, setDeleteUnitTarget] = useState<Unit | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -358,16 +360,15 @@ export function CondominiumUnits() {
     }
   }
 
-  async function handleDeleteUnit(unit: Unit) {
-    const blockName = blocks.find((block) => block.id === unit.block_id)?.name;
-    const location = blockName ? ` do bloco ${blockName}` : "";
-    if (
-      !window.confirm(
-        `Excluir o apartamento ${unit.unit_number}${location}? Os contatos associados também serão excluídos.`,
-      )
-    ) {
-      return;
-    }
+  function requestDeleteUnit(unit: Unit) {
+    setDeleteUnitTarget(unit);
+    setUnitError("");
+    setUnitSuccess("");
+  }
+
+  async function confirmDeleteUnit() {
+    const unit = deleteUnitTarget;
+    if (!unit) return;
 
     setUnitError("");
     setUnitSuccess("");
@@ -394,6 +395,7 @@ export function CondominiumUnits() {
       setUnitError(`Não foi possível excluir o apartamento. ${message}`);
     } finally {
       setDeletingUnitId(null);
+      setDeleteUnitTarget(null);
     }
   }
 
@@ -776,22 +778,82 @@ export function CondominiumUnits() {
               </form>
             )}
 
-          <div className="section-heading units-heading">
-            <h2>
-              Unidades cadastradas
-              {selectedBlock ? ` — ${selectedBlock.name}` : ""} ({displayedUnits.length})
-            </h2>
+          <div className="section-heading units-heading admin-units-heading">
+            <div>
+              <h2>
+                Unidades cadastradas
+                {selectedBlock ? ` — ${selectedBlock.name}` : ""} ({displayedUnits.length})
+              </h2>
+              {normalizedUnitSearch && (
+                <p>
+                  {filteredUnits.length} resultado(s) para “{unitSearch.trim()}”.
+                </p>
+              )}
+            </div>
+            <div className="admin-unit-toolbar">
+              <input
+                className="admin-unit-search"
+                type="search"
+                placeholder="Buscar unidade"
+                aria-label="Buscar unidade"
+                value={unitSearch}
+                onChange={(event) => {
+                  setUnitSearch(event.target.value);
+                  setCollapsedFloors([]);
+                }}
+              />
+              <button
+                className="text-button"
+                type="button"
+                disabled={floorGroups.length === 0}
+                onClick={() =>
+                  setCollapsedFloors(
+                    allFloorsCollapsed ? [] : floorGroups.map((group) => group.key),
+                  )
+                }
+              >
+                {allFloorsCollapsed ? "Expandir tudo" : "Recolher tudo"}
+              </button>
+            </div>
           </div>
           {floorGroups.length === 0 ? (
-            <p className="empty-state">Nenhuma unidade cadastrada ainda.</p>
+            <p className="empty-state">
+              {normalizedUnitSearch
+                ? "Nenhuma unidade encontrada para esta busca."
+                : "Nenhuma unidade cadastrada ainda."}
+            </p>
           ) : (
             <div className="building-floor-list">
-              {floorGroups.map((group) => (
-                <section className="building-floor" key={group.key}>
+              {floorGroups.map((group) => {
+                const isCollapsed = collapsedFloors.includes(group.key);
+                return (
+                <section
+                  className={`building-floor${isCollapsed ? " building-floor-collapsed" : ""}`}
+                  key={group.key}
+                >
                   <header className="building-floor-heading">
-                    <strong>{group.label}</strong>
-                    <span>{group.units.length} unidade(s)</span>
+                    <button
+                      className="building-floor-toggle"
+                      type="button"
+                      aria-expanded={!isCollapsed}
+                      onClick={() => toggleFloor(group.key)}
+                    >
+                      <span className="admin-floor-title">
+                        <strong>{group.label}</strong>
+                        <ChevronDown
+                          size={16}
+                          aria-hidden="true"
+                          className={
+                            isCollapsed
+                              ? "admin-chevron admin-chevron-collapsed"
+                              : "admin-chevron"
+                          }
+                        />
+                      </span>
+                      <span>{group.units.length} unidade(s)</span>
+                    </button>
                   </header>
+                  {!isCollapsed && (
                   <div className="building-floor-units">
                     {group.units.map((unit) => (
                       <article className="building-unit" key={unit.id}>
@@ -827,7 +889,7 @@ export function CondominiumUnits() {
                             className="text-button danger-text-button unit-action-delete"
                             type="button"
                             disabled={deletingUnitId === unit.id}
-                            onClick={() => void handleDeleteUnit(unit)}
+                            onClick={() => requestDeleteUnit(unit)}
                           >
                             {deletingUnitId === unit.id
                               ? "Excluindo..."
@@ -840,14 +902,28 @@ export function CondominiumUnits() {
                       </article>
                     ))}
                   </div>
+                  )}
                 </section>
-              ))}
+                );
+              })}
             </div>
           )}
           </section>
           </>
         )}
       </div>
+
+      {deleteUnitTarget && (
+        <ConfirmationDialog
+          title="Excluir unidade?"
+          description={`Excluir a unidade ${deleteUnitTarget.unit_number}? Os contatos associados também serão excluídos.`}
+          confirmLabel="Excluir unidade"
+          busyLabel="Excluindo..."
+          loading={Boolean(deletingUnitId)}
+          onConfirm={confirmDeleteUnit}
+          onCancel={() => setDeleteUnitTarget(null)}
+        />
+      )}
     </main>
   );
 }
