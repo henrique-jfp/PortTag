@@ -38,7 +38,7 @@ const dataset = {
     },
     notes: Object.hasOwn(confirmed, draft.id)
       ? "Gabarito revisado."
-      : "Rascunho por OCR local: conferir na foto e mover para label-confirmed.json.",
+      : "Rascunho histórico: conferir na foto e mover para label-confirmed.json.",
   })),
 };
 

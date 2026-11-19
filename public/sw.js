@@ -38,8 +38,6 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  // Os arquivos do Tesseract são grandes e não devem ocupar o cache do celular.
-  if (url.pathname.startsWith("/ocr/")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(

@@ -26,28 +26,20 @@ import {
   isDuplicateBulkMessage,
 } from "../lib/bulkImportReview";
 import {
+  barcodeOnlyLabelRead,
   buildLabelDiagnostics,
   compressPackagePhoto,
   detectDeliveryCompany,
   extractPackageLabelWithAi,
   extractTrackingCode,
-  findResidentUnitCandidates,
-  findUnitCandidates,
   matchKnownBarcode,
   preparePackageImage,
   readPackageCodes,
-  readPackageLabel,
-  releasePackageOcr,
   type AiLabelExtraction,
   type LabelReadResult,
   type PreparedPackageImage,
 } from "../lib/packageLabelOcr";
-import {
-  extractRecipientName,
-  findDestinationSection,
-  verifyPackageDestinationAddress,
-  type PackageAddressVerification,
-} from "../lib/packageOcr";
+import type { PackageAddressVerification } from "../lib/packageOcr";
 import {
   buildPackageNotificationMessage,
   whatsappLink,
@@ -162,9 +154,9 @@ function isDeviceResourceError(error: unknown) {
             "message" in error ? String(error.message) : ""
           }`
         : String(error ?? "");
-  // Tesseract erra com "memory/alloc"; a câmera do Android fala em
-  // "espaço/storage". Nenhum dos dois quer dizer que o celular está sem
-  // espaço de armazenamento — mostrar essa mensagem engana o porteiro.
+  // A câmera e o navegador falam em "espaço/storage". Nenhum dos dois quer
+  // dizer que o celular está sem espaço de armazenamento — mostrar essa
+  // mensagem engana o porteiro.
   return /quota|out of memory|memory|mem[oó]ria|alloc|storage|armazenamento|insufficient space|no space|not enough (storage|space)|falta de espaço|sem espaço|espaço insuficiente|espaço disponível/i.test(
     message,
   );
@@ -219,10 +211,6 @@ function signatureDataUrl(canvas: HTMLCanvasElement) {
  * à fila de importação. A foto comprimida vai só para a leitura e é descartada
  * depois; nenhuma imagem da etiqueta é enviada ao Storage.
  */
-/** Espelha as âncoras de unidade do parser da nuvem, inclusive "complemento". */
-const unitAnchorPattern =
-  /\b(?:apto|apartamento|apt|ap|depto|departamento|unidade|casa|complemento|comlemento|complemto|complmento|compl)\.?\s*[:#=-]?\s*([0-9]+[a-z]?)/i;
-
 type PackageDraft = {
   /** Arquivo original, guardado para permitir nova tentativa de leitura. */
   source: File;
@@ -394,97 +382,45 @@ function draftFromAi(
   };
 }
 
-function draftFromLocalOcr(
+function draftFromBarcodeOnly(
   label: LabelReadResult,
-  ctx: LabelReadContext,
   file: File,
   source: File,
 ): PackageDraft {
-  const expectedCep = ctx.condominium.cep ?? "";
-  const residentNames = ctx.residents
-    .map((resident) => resident.name?.trim() ?? "")
-    .filter(Boolean);
-  const barcodeText = label.barcodeValues.join("\n");
-  const recognizedText = label.text;
-  const destinationText = findDestinationSection(
-    recognizedText,
-    residentNames,
-    expectedCep,
-  );
-  const detectedRecipientName = extractRecipientName(
-    recognizedText,
-    residentNames,
-    expectedCep,
-  );
-  const verification = verifyPackageDestinationAddress({
-    recognizedText,
-    numericText: label.numericText,
-    barcodeText,
-    address: ctx.condominium,
-    residentNames,
-  });
-  const residentCandidates = findResidentUnitCandidates(
-    `${barcodeText}\n${recognizedText}`,
-    ctx.units,
-    ctx.residents,
-  );
-  const numberCandidates = findUnitCandidates(
-    `${barcodeText}\n${destinationText || recognizedText}`,
-    ctx.units,
-  );
-  const candidates = residentCandidates.length
-    ? residentCandidates
-    : numberCandidates;
   const barcodeMatch = matchKnownBarcode(label.barcodeValues);
   const code =
     barcodeMatch?.code ||
     label.barcodeValues.map(extractTrackingCode).find(Boolean) ||
-    extractTrackingCode(recognizedText);
+    "";
   const detectedCompany =
     barcodeMatch?.carrier ||
-    detectDeliveryCompany(`${barcodeText}\n${recognizedText}\n${code}`);
+    (code ? detectDeliveryCompany(code) : "");
 
-  let ocrMessage: string;
-  if (label.error) {
-    if (isDeviceResourceError(label.error)) {
-      ocrMessage = DEVICE_RESOURCE_MESSAGE;
-    } else if (code || detectedCompany || candidates.length) {
-      ocrMessage =
-        "Leitura no aparelho (modo offline): código da etiqueta lido, mas o texto não foi reconhecido; confira os dados.";
-    } else {
-      const details =
-        label.error instanceof Error ? ` ${label.error.message}` : "";
-      ocrMessage = `Leitura no aparelho (modo offline): não foi possível ler o texto da etiqueta.${details}`;
-    }
-  } else {
-    const detectedFields = [
-      detectedRecipientName ? "destinatário" : "",
-      candidates.length === 1 ? "apartamento" : "",
-      detectedCompany ? "empresa" : "",
-      code ? "rastreio" : "",
-      barcodeMatch ? "código de barras" : "",
-      verification.status === "verified" ? "endereço" : "",
-    ].filter(Boolean);
-    const characters = recognizedText.replace(/\s/g, "").length;
-    ocrMessage = detectedFields.length
-      ? `Leitura no aparelho (modo offline): ${detectedFields.join(", ")}. Confira os dados.`
-      : `Leitura no aparelho (modo offline): a etiqueta foi lida (${characters} caracteres), mas o endereço não foi confirmado. Enquadre a etiqueta inteira, com boa luz, e tire outra foto.`;
-  }
+  const detectedFields = [
+    detectedCompany ? "empresa" : "",
+    code ? "rastreio" : "",
+  ].filter(Boolean);
+  const detail =
+    label.error instanceof Error ? label.error.message : "A nuvem não respondeu.";
+  const ocrMessage = detectedFields.length
+    ? `Leitura na nuvem indisponível (${detail}). Código de barras: ${detectedFields.join(", ")}. Preencha unidade e morador manualmente e confira a etiqueta antes de salvar.`
+    : `Leitura na nuvem indisponível (${detail}). Sem leitura automática: preencha unidade, morador e os demais dados manualmente.`;
 
   return {
     source,
     file,
-    unitId: candidates.length === 1 ? candidates[0].id : "",
-    unitCandidates: candidates,
-    readUnitNumber:
-      `${destinationText}\n${recognizedText}`.match(unitAnchorPattern)?.[1]?.toUpperCase() ??
-      "",
-    recipientName: detectedRecipientName,
+    unitId: "",
+    unitCandidates: [],
+    readUnitNumber: "",
+    recipientName: "",
     recipientIsResident: false,
     company: detectedCompany,
     deliveryPerson: "",
     trackingCode: code,
-    addressVerification: verification,
+    addressVerification: {
+      status: "unknown",
+      message: "Leitura na nuvem indisponível; confira o endereço na etiqueta.",
+    },
     labelRead: label,
     ocrMessage,
   };
@@ -502,10 +438,10 @@ function settled<T>(promise: Promise<T>): Promise<Settled<T>> {
 }
 
 /**
- * Uma foto, uma leitura: Vision primeiro, OCR local como fallback. O código de
- * barras é lido da foto original em paralelo com a IA, porque a compressão
- * para a nuvem pode apagar linhas finas do código. Não toca no estado do React
- * para que a mesma função sirva à fila de importação.
+ * Uma foto, uma leitura: Vision + regras na nuvem. Sem nuvem, o máximo que o
+ * aparelho faz é ler o código de barras da foto original; nome, unidade e
+ * endereço ficam para o preenchimento manual. Não toca no estado do React para
+ * que a mesma função sirva à fila de importação.
  */
 async function readLabelFromPhoto(
   image: File,
@@ -519,9 +455,9 @@ async function readLabelFromPhoto(
   // O chamador pode ter comprimido antes para salvar o rascunho no aparelho.
   const compressed = options?.compressed ?? (await compressPackagePhoto(image));
 
-  // A foto original só precisa ser decodificada de novo para o código de barras
-  // ou para o OCR local. Quando a nuvem devolve rastreio e transportadora, esse
-  // segundo bitmap (dezenas de MB) nunca era usado — e derrubava o WebView.
+  // A foto original só precisa ser decodificada de novo para o código de
+  // barras. Quando a nuvem devolve rastreio e transportadora, esse segundo
+  // bitmap (dezenas de MB) nunca era usado — e derrubava o WebView.
   const preparedFor = async () => {
     preparedRef.current ??= await preparePackageImage(image);
     return preparedRef.current;
@@ -547,8 +483,8 @@ async function readLabelFromPhoto(
     );
 
     // O leitor de barras aloca buffers do tamanho da foto. Se a Vision já
-    // trouxe rastreio e transportadora, as quatro tentativas locais não
-    // acrescentam nada e só consomem memória do WebView.
+    // trouxe rastreio e transportadora, decodificar a foto original não
+    // acrescenta nada e só consome memória do WebView.
     const needsBarcode =
       !aiResult.ok || !aiResult.value.trackingCode || !aiResult.value.carrier;
     const barcodeValues = needsBarcode
@@ -564,27 +500,16 @@ async function readLabelFromPhoto(
     const detail =
       aiResult.error instanceof Error
         ? aiResult.error.message.replace(/\s+/g, " ").trim()
-        : "";
-    ctx.onProgress?.(
-      `Leitura na nuvem indisponível; lendo a etiqueta no aparelho (modo offline)${
-        detail ? `: ${detail.slice(0, 120)}` : ""
-      }...`,
-    );
+        : "A leitura na nuvem não respondeu.";
+    ctx.onProgress?.("Leitura na nuvem indisponível; verificando o código de barras...");
 
-    const label = await readPackageLabel(
-      await preparedFor(),
-      {
-        expectedCep: ctx.condominium.cep ?? "",
-        barcodeValues,
-      },
-      (status) => ctx.onProgress?.(status),
+    const label = barcodeOnlyLabelRead(
+      barcodeValues,
+      detail.slice(0, 240) || "A leitura na nuvem não respondeu.",
     );
-    return draftFromLocalOcr(label, ctx, compressed.file, image);
+    return draftFromBarcodeOnly(label, compressed.file, image);
   } finally {
     preparedRef.current?.dispose();
-    // O WASM do Tesseract é grande. Não mantê-lo vivo entre fotos evita que
-    // o WebView seja morto pelo sistema depois de algumas leituras.
-    void releasePackageOcr().catch(() => {});
   }
 }
 
@@ -927,15 +852,6 @@ export function PorterReception() {
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
       window.removeEventListener("appinstalled", handleInstalled);
-    };
-  }, []);
-
-  // Não aquecemos o Tesseract ao abrir a tela: carregar o WASM consume memória
-  // e já fez o Android descartar o PWA ao voltar da câmera. O worker só é
-  // criado se a leitura na nuvem falhar.
-  useEffect(() => {
-    return () => {
-      void releasePackageOcr().catch(() => {});
     };
   }, []);
 

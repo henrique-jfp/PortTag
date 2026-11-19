@@ -69,9 +69,7 @@ cp -a dist/. "$stage_dir/dist/"
 for required_file in \
   index.html \
   manager.html \
-  porter.html \
-  ocr/worker.min.js \
-  ocr/lang/por.traineddata.gz; do
+  porter.html; do
   if [[ ! -s "$stage_dir/dist/$required_file" ]]; then
     fail "The build is missing $required_file."
   fi
@@ -95,9 +93,7 @@ health_check() {
   for path in \
     / \
     /manager.html \
-    /porter.html \
-    /ocr/worker.min.js \
-    /ocr/lang/por.traineddata.gz; do
+    /porter.html; do
     curl --fail --silent --show-error --max-time 15 \
       --output /dev/null "$site_origin$path" || return 1
   done

@@ -169,11 +169,12 @@ A função `manage-manager` exige JWT válido e perfil de Super Admin; a chave
 equivalente em `porter.html`, com usuário `porter-*@porter.invalid`.
 
 O app do Porteiro é mobile-first: tira a foto com a câmera do celular e comprime
-a imagem antes do processamento. A leitura da etiqueta é tentada primeiro na
-nuvem, com Vision + regras + Groq, e sugere destinatário, unidade, empresa e rastreio;
-se a nuvem falhar ou não estiver configurada, o app usa OCR local como fallback.
-O código de barras é lido da foto original em paralelo com a IA e, quando bate
-com um formato conhecido, prevalece sobre rastreio e empresa sugeridos pela IA.
+a imagem antes do processamento. A leitura da etiqueta é feita na nuvem, com
+Vision + regras + Groq, e sugere destinatário, unidade, empresa e rastreio. Não
+existe leitura de texto no aparelho: se a nuvem falhar ou não estiver configurada, o aparelho lê só
+o código de barras da foto original e o porteiro preenche unidade, morador e
+endereço manualmente. Quando o código bate com um formato conhecido, ele
+prevalece sobre rastreio e empresa sugeridos pela IA.
 Confirme o apartamento e informe o nome do entregador; empresa e código de
 rastreio são opcionais se não forem detectados. Ao confirmar que recebeu o volume
 do entregador, o porteiro pode marcar o aviso ao morador: a mensagem é preparada
@@ -251,14 +252,14 @@ Invoke-RestMethod -Method Post `
 Depois de trocar qualquer segredo, **republique as funções** (`supabase functions
 deploy extract-package-label` e `supabase functions deploy label-lab`). As duas
 usam o mesmo `parser.ts`/`carrier.ts`, mas são bundles separados; redeployar só
-uma deixa o laboratório desatualizado. Se o app cair em "Leitura no aparelho (modo
-offline)", confira em **Diagnóstico da leitura**; o log da função registra
+uma deixa o laboratório desatualizado. Se o app mostrar "Leitura na nuvem
+indisponível", confira em **Diagnóstico da leitura**; o log da função registra
 `credencial da Vision ausente` quando o segredo não chegou íntegro.
 
 Também funciona `VISION_API_KEY` (chave de API simples) no lugar do JSON da
 service account. Sem nenhuma das duas, a função responde `503` com
-`fallback: true` e o app cai para o Tesseract local. Se `GROQ_API_KEY` faltar,
-o app funciona só com regras — o recebimento não para.
+`fallback: true`, o app lê apenas o código de barras e pede preenchimento manual.
+Se `GROQ_API_KEY` faltar, o app funciona só com regras — o recebimento não para.
 
 O caminho antigo com Gemini fica disponível para comparação A/B:
 `supabase secrets set OCR_ENGINE=gemini GEMINI_API_KEY=SUA_CHAVE_AQUI`. Para

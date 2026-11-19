@@ -18,40 +18,12 @@ type NativeBarcodeDetectorConstructor = {
   getSupportedFormats(): Promise<string[]>;
 };
 
-type OcrWorker = Awaited<ReturnType<typeof import("tesseract.js").createWorker>>;
-type TesseractModule = typeof import("tesseract.js");
-type PageSegMode = NonNullable<
-  NonNullable<Parameters<OcrWorker["setParameters"]>[0]>["tessedit_pageseg_mode"]
->;
-type OcrProgressListener = (status: string, progress: number) => void;
-
-type WordBox = {
-  text: string;
-  confidence: number;
-  bbox: { x0: number; y0: number; x1: number; y1: number };
-};
-
-type OcrBlock = {
-  paragraphs?: Array<{
-    lines?: Array<{ words?: WordBox[] }>;
-  }>;
-};
-
-export type ImageRect = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
 export type PreparedPackageImage = {
   /** Cópia reduzida, usada para localizar a etiqueta e ler códigos. */
   preview: HTMLCanvasElement;
   /** Dimensões na resolução original do arquivo. */
   width: number;
   height: number;
-  /** Recorta da resolução original, não da cópia reduzida. */
-  drawRegion(rect: ImageRect, targetLongEdge: number): HTMLCanvasElement;
   dispose(): void;
 };
 
@@ -70,14 +42,8 @@ export type LabelReadResult = {
   cropped: boolean;
   /** CEPs que apareceram no texto, na passada numérica ou nos códigos. */
   postalCodes: string[];
-  /** Falha do OCR. O código de barras e o texto parcial continuam válidos. */
+  /** Falha da leitura na nuvem. O código de barras continua válido. */
   error?: unknown;
-};
-
-export type LabelReadOptions = {
-  expectedCep?: string;
-  /** Códigos já lidos na foto original; evita decodificar o mesmo canvas de novo. */
-  barcodeValues?: string[];
 };
 
 const courierNames = [
@@ -109,31 +75,8 @@ const courierNames = [
   ["gfl", "GFL"],
 ] as const;
 
-/** Cópia usada para localizar a etiqueta. Pequena de propósito: é rápida. */
+/** Cópia usada para ler os códigos de barras. Pequena de propósito: é rápida. */
 const previewDimension = 1600;
-/**
- * Resolução final do recorte entregue ao Tesseract. 2000 px custava 7 s por
- * passada em celular e não lia melhor: etiqueta térmica tem traço grosso e o
- * que atrapalha é ruído, não falta de pixel.
- */
-const cropLongEdge = 1600;
-/** Ampliar demais só engrossa o serrilhado da impressão térmica. */
-const maximumUpscale = 1.8;
-/**
- * Orçamento de tempo para as passadas extras. O porteiro está com o pacote na
- * mão: melhor devolver o que já foi lido do que segurar a fila.
- */
-const optionalPassBudgetMs = 12000;
-const minimumWordConfidence = 30;
-const minimumWordsForCrop = 6;
-const minimumTextLength = 40;
-const minimumCropArea = 0.08;
-const maximumCropArea = 0.92;
-
-const progressListeners = new Set<OcrProgressListener>();
-let workerPromise: Promise<OcrWorker> | null = null;
-let ocrWorker: OcrWorker | null = null;
-let tesseractModule: TesseractModule | null = null;
 
 function normalizeText(value: string) {
   return value
@@ -141,14 +84,6 @@ function normalizeText(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/\s+/g, " ");
-}
-
-function normalizeLine(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
 }
 
 function extractKnownTrackingCode(value: string) {
@@ -279,61 +214,6 @@ function getNativeBarcodeDetector() {
   ).BarcodeDetector;
 }
 
-async function getTesseractModule() {
-  if (!tesseractModule) {
-    tesseractModule = await import("tesseract.js");
-  }
-  return tesseractModule;
-}
-
-async function getOcrWorker() {
-  if (!workerPromise) {
-    workerPromise = (async () => {
-      const { createWorker, OEM, PSM } = await getTesseractModule();
-      const worker = await createWorker("por", OEM.LSTM_ONLY, {
-        workerPath: "/ocr/worker.min.js",
-        langPath: "/ocr/lang",
-        corePath: "/ocr/core",
-        gzip: true,
-        cacheMethod: "readOnly",
-        logger: ({ status, progress }) => {
-          // O progresso do reconhecimento é reportado por readPackageLabel,
-          // que conhece cada passada. Aqui importa a inicialização do worker.
-          if (status === "recognizing text") return;
-          for (const listener of progressListeners) {
-            listener("Preparando o leitor local de etiquetas...", progress);
-          }
-        },
-      });
-
-      try {
-        await worker.setParameters({
-          tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-          preserve_interword_spaces: "1",
-          user_defined_dpi: "300",
-        });
-        ocrWorker = worker;
-        return worker;
-      } catch (error) {
-        await worker.terminate();
-        throw error;
-      }
-    })().catch((error: unknown) => {
-      workerPromise = null;
-      throw error;
-    });
-  }
-
-  return workerPromise;
-}
-
-/** Aquece o worker local enquanto o porteiro ainda está escolhendo a foto. */
-export function warmPackageOcr() {
-  void getOcrWorker().catch(() => {
-    // Se não houver memória/cache, o fallback tenta de novo quando precisar.
-  });
-}
-
 function createCanvas(width: number, height: number) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -370,134 +250,6 @@ function rotateCanvas(source: HTMLCanvasElement, degrees: number) {
   context.translate(canvas.width / 2, canvas.height / 2);
   context.rotate((degrees * Math.PI) / 180);
   context.drawImage(source, -source.width / 2, -source.height / 2);
-  return canvas;
-}
-
-function otsuThreshold(gray: Uint8ClampedArray) {
-  const histogram = new Uint32Array(256);
-  for (let index = 0; index < gray.length; index += 1) {
-    histogram[gray[index]] += 1;
-  }
-
-  const total = gray.length;
-  let sum = 0;
-  for (let level = 0; level < 256; level += 1) sum += level * histogram[level];
-
-  let sumBackground = 0;
-  let weightBackground = 0;
-  let bestVariance = 0;
-  let threshold = 128;
-
-  for (let level = 0; level < 256; level += 1) {
-    weightBackground += histogram[level];
-    if (weightBackground === 0) continue;
-
-    const weightForeground = total - weightBackground;
-    if (weightForeground === 0) break;
-
-    sumBackground += level * histogram[level];
-    const meanBackground = sumBackground / weightBackground;
-    const meanForeground = (sum - sumBackground) / weightForeground;
-    const variance =
-      weightBackground *
-      weightForeground *
-      (meanBackground - meanForeground) ** 2;
-
-    if (variance > bestVariance) {
-      bestVariance = variance;
-      threshold = level;
-    }
-  }
-
-  return threshold;
-}
-
-/**
- * Limiar adaptativo por integral image: compensa reflexo no plástico e sombra
- * nos cantos, que a binarização global (Otsu) transforma em borrão.
- */
-function adaptiveThreshold(
-  gray: Uint8ClampedArray,
-  width: number,
-  height: number,
-  output: Uint8ClampedArray,
-) {
-  const stride = width + 1;
-  const integral = new Uint32Array(stride * (height + 1));
-
-  for (let y = 0; y < height; y += 1) {
-    let rowSum = 0;
-    const rowOffset = (y + 1) * stride;
-    const previousRow = y * stride;
-    for (let x = 0; x < width; x += 1) {
-      rowSum += gray[y * width + x];
-      integral[rowOffset + x + 1] = integral[previousRow + x + 1] + rowSum;
-    }
-  }
-
-  const radius = Math.max(8, Math.round(Math.min(width, height) / 32));
-  const bias = 10;
-
-  for (let y = 0; y < height; y += 1) {
-    const top = Math.max(0, y - radius);
-    const bottom = Math.min(height - 1, y + radius);
-    const topOffset = top * stride;
-    const bottomOffset = (bottom + 1) * stride;
-
-    for (let x = 0; x < width; x += 1) {
-      const left = Math.max(0, x - radius);
-      const right = Math.min(width - 1, x + radius);
-      const area = (right - left + 1) * (bottom - top + 1);
-
-      const sum =
-        integral[bottomOffset + right + 1] -
-        integral[topOffset + right + 1] -
-        integral[bottomOffset + left] +
-        integral[topOffset + left];
-
-      output[y * width + x] = gray[y * width + x] < sum / area - bias ? 0 : 255;
-    }
-  }
-}
-
-type BinarizationMode = "adaptive" | "otsu";
-
-function binarizeCanvas(source: HTMLCanvasElement, mode: BinarizationMode) {
-  const canvas = createCanvas(source.width, source.height);
-  const context = canvasContext(canvas);
-  context.drawImage(source, 0, 0);
-
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const pixels = imageData.data;
-  const pixelCount = canvas.width * canvas.height;
-  const gray = new Uint8ClampedArray(pixelCount);
-
-  for (let index = 0, pixel = 0; pixel < pixelCount; index += 4, pixel += 1) {
-    gray[pixel] =
-      (pixels[index] * 299 +
-        pixels[index + 1] * 587 +
-        pixels[index + 2] * 114) /
-      1000;
-  }
-
-  const output = new Uint8ClampedArray(pixelCount);
-  if (mode === "otsu") {
-    const threshold = otsuThreshold(gray);
-    for (let pixel = 0; pixel < pixelCount; pixel += 1) {
-      output[pixel] = gray[pixel] < threshold ? 0 : 255;
-    }
-  } else {
-    adaptiveThreshold(gray, canvas.width, canvas.height, output);
-  }
-
-  for (let index = 0, pixel = 0; pixel < pixelCount; index += 4, pixel += 1) {
-    const value = output[pixel];
-    pixels[index] = value;
-    pixels[index + 1] = value;
-    pixels[index + 2] = value;
-  }
-
-  context.putImageData(imageData, 0, 0);
   return canvas;
 }
 
@@ -568,31 +320,6 @@ export async function preparePackageImage(
     preview,
     width,
     height,
-    drawRegion(rect, targetLongEdge) {
-      const scale = Math.min(
-        maximumUpscale,
-        targetLongEdge / Math.max(rect.width, rect.height, 1),
-      );
-      const canvas = createCanvas(
-        Math.max(1, Math.round(rect.width * scale)),
-        Math.max(1, Math.round(rect.height * scale)),
-      );
-      const cropContext = canvasContext(canvas);
-      cropContext.imageSmoothingEnabled = true;
-      cropContext.imageSmoothingQuality = "high";
-      cropContext.drawImage(
-        source.element,
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        0,
-        0,
-        canvas.width,
-        canvas.height,
-      );
-      return canvas;
-    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -1092,462 +819,33 @@ export async function readPackageCodes(canvas: HTMLCanvasElement) {
   return [];
 }
 
-function collectWords(blocks: OcrBlock[] | null) {
-  const words: WordBox[] = [];
-  for (const block of blocks ?? []) {
-    for (const paragraph of block.paragraphs ?? []) {
-      for (const line of paragraph.lines ?? []) {
-        for (const word of line.words ?? []) {
-          if (word.text.trim()) words.push(word);
-        }
-      }
-    }
-  }
-  return words;
-}
-
-type PassResult = {
-  text: string;
-  words: WordBox[];
-  durationMs: number;
-};
-
-async function runOcrPass(
-  worker: OcrWorker,
-  image: HTMLCanvasElement,
-  options: { pass: string; psm: PageSegMode; whitelist?: string; words?: boolean },
-): Promise<PassResult> {
-  const startedAt = performance.now();
-  await worker.setParameters({
-    tessedit_pageseg_mode: options.psm,
-    tessedit_char_whitelist: options.whitelist ?? "",
-    preserve_interword_spaces: "1",
-    user_defined_dpi: "300",
-  });
-
-  const { data } = await worker.recognize(
-    image,
-    {},
-    { text: true, blocks: options.words === true },
-  );
-
-  return {
-    text: (data.text ?? "").trim(),
-    words: options.words === true ? collectWords(data.blocks) : [],
-    durationMs: Math.round(performance.now() - startedAt),
-  };
-}
-
-function recordAttempt(pass: string, result: PassResult): LabelReadAttempt {
-  return {
-    pass,
-    durationMs: result.durationMs,
-    characters: result.text.replace(/\s/g, "").length,
-  };
-}
-
 /**
- * Palavras que formam a etiqueta.
- *
- * O fundo da foto (parede, piso, plástico do pacote) só aparece com confiança
- * baixa. Incluí-lo na caixa fazia o recorte engolir o quadro inteiro: o
- * Tesseract gastava segundos com ruído e o texto saía repetido e sujo.
- *
- * O miolo legível define a etiqueta; dentro dele entra tudo, inclusive as
- * palavras de baixa confiança, que costumam ser o endereço em letra pequena.
- * Se o miolo não representar a maior parte do texto lido, ele não é a etiqueta
- * e vale a união de tudo — melhor recortar errado do que perder o texto.
+ * Resultado de uma leitura sem texto: só o código de barras foi reconhecido.
+ * A nuvem é a única fonte automática de CEP, logradouro, número e nome.
  */
-function confidentWords(words: WordBox[]) {
-  const readable = words.filter(
-    (word) => word.text.replace(/[^\p{L}\p{N}]/gu, "").length >= 2,
-  );
-
-  let core = readable.filter((word) => word.confidence >= 60);
-  if (core.length < minimumWordsForCrop) {
-    core = readable.filter((word) => word.confidence >= 45);
-  }
-  if (core.length < minimumWordsForCrop) {
-    core = readable.filter(
-      (word) => word.confidence >= minimumWordConfidence,
-    );
-  }
-  if (core.length < minimumWordsForCrop) return core;
-
-  let x0 = Number.POSITIVE_INFINITY;
-  let y0 = Number.POSITIVE_INFINITY;
-  let x1 = Number.NEGATIVE_INFINITY;
-  let y1 = Number.NEGATIVE_INFINITY;
-  for (const word of core) {
-    x0 = Math.min(x0, word.bbox.x0);
-    y0 = Math.min(y0, word.bbox.y0);
-    x1 = Math.max(x1, word.bbox.x1);
-    y1 = Math.max(y1, word.bbox.y1);
-  }
-
-  const padX = Math.max(8, (x1 - x0) * 0.06);
-  const padY = Math.max(8, (y1 - y0) * 0.06);
-  const inside = readable.filter((word) => {
-    const centerX = (word.bbox.x0 + word.bbox.x1) / 2;
-    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
-    return (
-      centerX >= x0 - padX &&
-      centerX <= x1 + padX &&
-      centerY >= y0 - padY &&
-      centerY <= y1 + padY
-    );
-  });
-
-  return inside.length >= readable.length * 0.5 ? inside : readable;
-}
-
-/**
- * Região da etiqueta a partir das caixas de palavra do Tesseract. É o que
- * permite recortar da foto original em vez de ler o quadro inteiro reduzido.
- */
-function labelRegion(
-  words: WordBox[],
-  preview: HTMLCanvasElement,
-  sourceWidth: number,
-  sourceHeight: number,
-): ImageRect | null {
-  const useful = confidentWords(words);
-  if (useful.length < minimumWordsForCrop) return null;
-
-  let x0 = Number.POSITIVE_INFINITY;
-  let y0 = Number.POSITIVE_INFINITY;
-  let x1 = Number.NEGATIVE_INFINITY;
-  let y1 = Number.NEGATIVE_INFINITY;
-  for (const word of useful) {
-    x0 = Math.min(x0, word.bbox.x0);
-    y0 = Math.min(y0, word.bbox.y0);
-    x1 = Math.max(x1, word.bbox.x1);
-    y1 = Math.max(y1, word.bbox.y1);
-  }
-
-  const scaleX = sourceWidth / preview.width;
-  const scaleY = sourceHeight / preview.height;
-  const padX = Math.max(14, (x1 - x0) * 0.1);
-  const padY = Math.max(14, (y1 - y0) * 0.1);
-
-  const left = Math.max(0, Math.round((x0 - padX) * scaleX));
-  const top = Math.max(0, Math.round((y0 - padY) * scaleY));
-  const right = Math.min(
-    sourceWidth,
-    Math.round((x1 + padX) * scaleX),
-  );
-  const bottom = Math.min(
-    sourceHeight,
-    Math.round((y1 + padY) * scaleY),
-  );
-
-  const width = right - left;
-  const height = bottom - top;
-  if (width < 40 || height < 40) return null;
-
-  const areaRatio = (width * height) / (sourceWidth * sourceHeight);
-  if (areaRatio < minimumCropArea || areaRatio > maximumCropArea) return null;
-
-  return { x: left, y: top, width, height };
-}
-
-function collectPostalCodes(values: string[]) {
-  const codes = new Set<string>();
-  for (const value of values) {
-    for (const match of value.match(/(?:^|[^\d])\d{5}[\s.-]?\d{3}(?=$|[^\d])/g) ??
-      []) {
-      codes.add(match.replace(/\D/g, ""));
-    }
-  }
-  return codes;
-}
-
-function foundExpectedCep(
-  variants: string[],
-  numericText: string,
+export function barcodeOnlyLabelRead(
   barcodeValues: string[],
-  expectedCep: string,
-) {
-  if (expectedCep.length !== 8) return false;
-  return collectPostalCodes([
-    ...variants,
-    numericText,
-    ...barcodeValues,
-  ]).has(expectedCep);
-}
-
-/**
- * Escolhe a melhor leitura e só completa o que faltar nela.
- *
- * Antes as passadas eram concatenadas: a mesma etiqueta aparecia três vezes no
- * texto final, cada vez com erros diferentes, e a âncora do destinatário podia
- * cair na cópia errada. Agora a passada mais informativa é a base e as outras
- * só acrescentam linha que a base não tem.
- */
-function mergeTextVariants(variants: string[]) {
-  const unique = variants.filter((variant) => variant.trim().length > 0);
-  if (!unique.length) return "";
-
-  const score = (text: string) => {
-    const tokens = normalizeLine(text).match(/[a-z0-9]{3,}/g) ?? [];
-    // CEP vale muito mais que uma palavra: é ele que confirma o endereço.
-    return tokens.length + collectPostalCodes([text]).size * 25;
+  detail: string,
+): LabelReadResult {
+  return {
+    text: "",
+    numericText: "",
+    barcodeValues,
+    attempts: [],
+    durationMs: 0,
+    cropped: false,
+    postalCodes: [],
+    error: new Error(detail),
   };
-  const ordered = [...unique].sort((left, right) => score(right) - score(left));
-
-  const lines: string[] = [];
-  const seen = new Set<string>();
-  const knownTokens = new Set<string>();
-
-  const push = (rawLine: string) => {
-    const line = rawLine.replace(/\s+/g, " ").trim();
-    if (line.replace(/[^\p{L}\p{N}]/gu, "").length < 2) return false;
-
-    const key = normalizeLine(line);
-    if (seen.has(key)) return false;
-
-    seen.add(key);
-    lines.push(line);
-    for (const token of key.match(/[a-z0-9]{3,}/g) ?? []) knownTokens.add(token);
-    return true;
-  };
-
-  const [base, ...rest] = ordered;
-  for (const line of base.split(/\r?\n/)) push(line);
-
-  for (const variant of rest) {
-    for (const line of variant.split(/\r?\n/)) {
-      const key = normalizeLine(line.replace(/\s+/g, " ").trim());
-      if (seen.has(key)) continue;
-
-      const tokens = key.match(/[a-z0-9]{3,}/g) ?? [];
-      if (tokens.length) {
-        const contained =
-          tokens.filter((token) => knownTokens.has(token)).length /
-          tokens.length;
-        // Linha que já está representada na base, só com outro erro de OCR.
-        if (contained >= 0.6) {
-          seen.add(key);
-          continue;
-        }
-      }
-
-      push(line);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Lê a etiqueta em até quatro passadas e para assim que o CEP do condomínio
- * aparece. Uma passada só, no quadro inteiro reduzido, era o motivo de o OCR
- * devolver pouco mais de cem caracteres.
- */
-export async function readPackageLabel(
-  prepared: PreparedPackageImage,
-  options: LabelReadOptions,
-  onProgress: OcrProgressListener,
-): Promise<LabelReadResult> {
-  const startedAt = performance.now();
-  const attempts: LabelReadAttempt[] = [];
-  // Cada passada cria um canvas de até 1600 px. Sem liberar o buffer na hora,
-  // o WebView do Android acumula dezenas de MB e morre ao voltar da câmera.
-  const transientCanvases: HTMLCanvasElement[] = [];
-  const expectedCep = (options.expectedCep ?? "").replace(/\D/g, "");
-  const variants: string[] = [];
-
-  let barcodeValues: string[] = options.barcodeValues ?? [];
-  let numericText = "";
-  let cropped = false;
-  let error: unknown = null;
-
-  try {
-    if (!barcodeValues.length) {
-      onProgress("Lendo QR e códigos de barras...", 0.02);
-      try {
-        barcodeValues = await readPackageCodes(prepared.preview);
-      } catch {
-        // Código de barras é bônus: sem ele seguimos com o texto.
-      }
-    }
-
-    progressListeners.add(onProgress);
-
-    try {
-      const { PSM } = await getTesseractModule();
-      const worker = await getOcrWorker();
-
-      onProgress("Localizando o texto da etiqueta...", 0.12);
-      const layout = await runOcrPass(worker, prepared.preview, {
-        pass: "geral",
-        psm: PSM.SPARSE_TEXT,
-        words: true,
-      });
-      attempts.push(recordAttempt("geral", layout));
-      variants.push(layout.text);
-
-      const region = labelRegion(
-        layout.words,
-        prepared.preview,
-        prepared.width,
-        prepared.height,
-      );
-
-      const elapsedMs = () => performance.now() - startedAt;
-      const confirmed = () =>
-        foundExpectedCep(variants, numericText, barcodeValues, expectedCep);
-
-      if (region) {
-        cropped = true;
-        const crop = prepared.drawRegion(region, cropLongEdge);
-        transientCanvases.push(crop);
-
-        if (!confirmed()) {
-          // Otsu primeiro: a binarização global é limpa e o Tesseract voa
-          // nela. A adaptativa recupera reflexo, mas enche a imagem de ruído
-          // (era ela que levava 7 s por passada e devolvia lixo).
-          onProgress("Recortando e reforçando a leitura...", 0.4);
-          const otsu = binarizeCanvas(crop, "otsu");
-          transientCanvases.push(otsu);
-          const enhanced = await runOcrPass(worker, otsu, {
-            pass: "recorte",
-            psm: PSM.SPARSE_TEXT,
-          });
-          attempts.push(recordAttempt("recorte", enhanced));
-          variants.unshift(enhanced.text);
-
-          // Recorte já lendo bem: a passada adaptativa custa segundos e
-          // devolve quase o mesmo texto. Ela fica reservada para quando a
-          // binarização global não deu conta (reflexo, sombra).
-          const enhancedCharacters = enhanced.text.replace(/\s/g, "").length;
-
-          if (
-            !confirmed() &&
-            enhancedCharacters < 200 &&
-            elapsedMs() < optionalPassBudgetMs
-          ) {
-            onProgress("Tentando com contraste adaptativo...", 0.62);
-            const adaptive = binarizeCanvas(crop, "adaptive");
-            transientCanvases.push(adaptive);
-            const adaptivePass = await runOcrPass(worker, adaptive, {
-              pass: "contraste",
-              psm: PSM.SPARSE_TEXT,
-            });
-            attempts.push(recordAttempt("contraste", adaptivePass));
-            variants.unshift(adaptivePass.text);
-          }
-
-          // A passada só de dígitos existe para salvar um CEP quando o texto
-          // saiu fraco. Com texto bom e sem CEP lido, o CEP provavelmente não
-          // está na etiqueta — e a passada custa segundos.
-          if (
-            !confirmed() &&
-            enhancedCharacters < 200 &&
-            elapsedMs() < optionalPassBudgetMs &&
-            collectPostalCodes(variants).size === 0
-          ) {
-            onProgress("Lendo os números da etiqueta...", 0.8);
-            const digits = await runOcrPass(worker, otsu, {
-              pass: "numeros",
-              psm: PSM.SPARSE_TEXT,
-              whitelist: "0123456789",
-            });
-            attempts.push(recordAttempt("numeros", digits));
-            numericText = digits.text;
-          }
-        }
-
-        if (!barcodeValues.length && elapsedMs() < optionalPassBudgetMs * 2) {
-          try {
-            barcodeValues = await readPackageCodes(crop);
-          } catch {
-            // Sem código legível: o texto continua valendo.
-          }
-        }
-      } else {
-        onProgress("Reforçando a leitura da etiqueta...", 0.4);
-        const binarized = binarizeCanvas(prepared.preview, "adaptive");
-        transientCanvases.push(binarized);
-        const enhanced = await runOcrPass(worker, binarized, {
-          pass: "binarizado",
-          psm: PSM.SPARSE_TEXT,
-        });
-        attempts.push(recordAttempt("binarizado", enhanced));
-        variants.unshift(enhanced.text);
-      }
-
-      let merged = mergeTextVariants(variants);
-
-      // Quase nada lido e nenhum código: provavelmente a foto está deitada.
-      if (
-        merged.replace(/\s/g, "").length < minimumTextLength &&
-        !barcodeValues.length
-      ) {
-        onProgress("Girando a etiqueta e tentando de novo...", 0.9);
-        const sidewaysCanvas = rotateCanvas(prepared.preview, 90);
-        transientCanvases.push(sidewaysCanvas);
-        const sideways = await runOcrPass(worker, sidewaysCanvas, {
-          pass: "girada",
-          psm: PSM.SPARSE_TEXT,
-        });
-        attempts.push(recordAttempt("girada", sideways));
-        variants.unshift(sideways.text);
-        merged = mergeTextVariants(variants);
-      }
-
-      return {
-        text: merged,
-        numericText,
-        barcodeValues,
-        attempts,
-        durationMs: Math.round(performance.now() - startedAt),
-        cropped,
-        postalCodes: [
-          ...collectPostalCodes([merged, numericText, ...barcodeValues]),
-        ],
-      };
-    } catch (ocrError) {
-      error = ocrError;
-      // Terminar o worker obriga a recarregar o WASM na próxima foto. Só vale
-      // a pena quando o erro é de memória; erro de leitura comum não deixa o
-      // worker inutilizável.
-      if (isOcrWorkerMemoryError(ocrError)) {
-        void releasePackageOcr().catch(() => {});
-      }
-
-      const partialText = mergeTextVariants(variants);
-      return {
-        text: partialText,
-        numericText,
-        barcodeValues,
-        attempts,
-        durationMs: Math.round(performance.now() - startedAt),
-        cropped,
-        postalCodes: [
-          ...collectPostalCodes([partialText, numericText, ...barcodeValues]),
-        ],
-        error,
-      };
-    }
-  } finally {
-    progressListeners.delete(onProgress);
-    transientCanvases.forEach(releaseCanvas);
-    prepared.dispose();
-  }
 }
 
 export function buildLabelDiagnostics(
   result: LabelReadResult,
   extra: { cep: string; status: string },
 ) {
-  const passes = result.attempts
-    .map((attempt) => `${attempt.pass}=${attempt.characters}ch/${attempt.durationMs}ms`)
-    .join(" ");
   const lines = [
     `total_ms: ${result.durationMs}`,
-    `recorte: ${result.cropped ? "sim" : "nao"}`,
-    `passadas: ${passes}`,
+    `modo: somente-codigo-de-barras`,
     `cep_esperado: ${extra.cep || "-"}`,
     `ceps_lidos: ${result.postalCodes.join(", ") || "-"}`,
     `verificacao: ${extra.status}`,
@@ -1557,28 +855,11 @@ export function buildLabelDiagnostics(
     result.text,
   ];
 
-  if (result.numericText) {
-    lines.push("", "--- numeros ---", result.numericText);
+  if (result.error) {
+    lines.push("", `erro: ${result.error instanceof Error ? result.error.message : String(result.error)}`);
   }
 
   return lines.join("\n");
-}
-
-export function releasePackageOcr() {
-  const worker = ocrWorker;
-  ocrWorker = null;
-  workerPromise = null;
-  return worker?.terminate() ?? Promise.resolve();
-}
-
-function isOcrWorkerMemoryError(error: unknown) {
-  const message =
-    error instanceof Error
-      ? `${error.name} ${error.message}`
-      : String(error ?? "");
-  return /quota|memory|mem[oó]ria|alloc|insufficient space|no space|out of space/i.test(
-    message,
-  );
 }
 
 export { findResidentUnitCandidates, findUnitCandidates };

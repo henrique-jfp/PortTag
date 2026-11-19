@@ -92,7 +92,7 @@
    valor conferido como substring do OCR. Rastreio e transportadora vêm sempre
    das regras; a decisão de endereço é calculada no servidor. Sem credencial da
    Vision a função responde `503` com `fallback: true` e o app do porteiro
-   continua com o OCR local. Para comparar com o caminho antigo, use
+   o app lê só o código de barras e pede preenchimento manual de unidade, morador e endereço. Para comparar com o caminho antigo, use
    `supabase secrets set OCR_ENGINE=gemini GEMINI_API_KEY=...` e depois remova a
    flag. A chave `service_role` não deve ser adicionada ao frontend.
 
@@ -150,7 +150,7 @@ condomínio.
 Na tela inicial do porteiro, **Importar várias fotos** aceita várias etiquetas
 da galeria de uma vez. O entregador padrão pode ser preenchido antes de
 começar; a empresa é opcional. A fila processa **uma foto por vez**: cada imagem é comprimida uma
-única vez no aparelho, lida pela nuvem com fallback local e salva separadamente
+única vez no aparelho, lida pela nuvem e salva separadamente
 com sua própria foto no Storage. O progresso mostra quantas foram registradas,
 quantas estão na fila, quantas precisam de revisão e quantas falharam. É
 possível cancelar a fila, tentar novamente um item com erro e revisar os itens

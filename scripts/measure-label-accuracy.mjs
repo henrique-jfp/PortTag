@@ -3,7 +3,6 @@
  *
  * Uso:
  *   node scripts/measure-label-accuracy.mjs --dry-run
- *   node scripts/measure-label-accuracy.mjs --mode local --all
  *   GEMINI_API_KEY=... node scripts/measure-label-accuracy.mjs --mode gemini
  *   MEASURE_ACCESS_TOKEN=... MEASURE_CONDOMINIUM_ID=... \
  *     node scripts/measure-label-accuracy.mjs --mode edge
@@ -11,9 +10,7 @@
  * O modo `gemini` chama o Vision diretamente, repetindo o prompt e o schema da
  * Edge Function (supabase/functions/extract-package-label/index.ts). O modo
  * `edge` mede exatamente o que o porteiro recebe, mas exige um JWT de usuário
- * vinculado ao condomínio informado em MEASURE_CONDOMINIUM_ID. O modo `local`
- * mede o OCR do Tesseract já capturado em label-reports/ocr-drafts.json, sem
- * rede e sem cota: é a linha de base do fallback.
+ * vinculado ao condomínio informado em MEASURE_CONDOMINIUM_ID.
  *
  * Nenhuma chave é lida do dataset: segredos vêm só de variáveis de ambiente.
  */
@@ -52,7 +49,7 @@ function parseArgs(argv) {
     const argument = argv[index];
     if (argument === "--help") {
       console.log(
-        "Uso: node scripts/measure-label-accuracy.mjs [--dry-run] [--mode local|gemini|edge] [--limit N] [--only id1,id2] [--all] [--delay-ms N] [--retries N] [--out arquivo.json]",
+        "Uso: node scripts/measure-label-accuracy.mjs [--dry-run] [--mode gemini|edge] [--limit N] [--only id1,id2] [--all] [--delay-ms N] [--retries N] [--out arquivo.json]",
       );
       process.exit(0);
     }
@@ -74,8 +71,8 @@ function parseArgs(argv) {
     if (name === "--out") options.out = value;
     if (name === "--only") options.only = String(value).split(",").filter(Boolean);
   }
-  if (!["local", "gemini", "edge"].includes(options.mode)) {
-    throw new Error("--mode precisa ser local, gemini ou edge.");
+  if (!["gemini", "edge"].includes(options.mode)) {
+    throw new Error("--mode precisa ser gemini ou edge.");
   }
   return options;
 }
@@ -332,28 +329,11 @@ async function readLabelFromEdge(sample, imageBase64, mimeType, settings, env) {
   return normalizeLabel(payload.label);
 }
 
-function readLabelFromDrafts(draft) {
-  if (!draft) throw new Error("rascunho de OCR local ausente");
-  return normalizeLabel({
-    recipient_name: draft.ocrRecipientName,
-    unit_number: draft.ocrUnitNumber,
-    block_name: draft.ocrBlockName,
-    carrier: draft.ocrCarrier,
-    tracking_code: draft.ocrTrackingCode,
-    destination_cep: draft.ocrCep,
-    destination_street: draft.ocrDestinationStreet,
-    destination_number: draft.ocrDestinationNumber,
-  });
-}
-
-function scoreSample(expected, actual, { skipAddressStatus = false } = {}) {
+function scoreSample(expected, actual) {
   const matches = {};
   for (const field of fields) {
     // null no gabarito = campo não conferido pelo humano, não conta como erro.
     if (!(field in expected) || expected[field] === null) continue;
-    // O OCR local não devolve address_status: a checagem de endereço do app é
-    // determinística e é medida nos modos que passam pela Edge Function.
-    if (skipAddressStatus && field === "address_status") continue;
     matches[field] =
       comparable(field, expected[field]) === comparable(field, actual[field]);
   }
@@ -400,17 +380,6 @@ const dataset = JSON.parse(readFileSync(datasetPath, "utf8"));
 const samples = dataset.samples
   .filter((sample) => !options.only.length || options.only.includes(sample.id))
   .slice(0, options.limit || undefined);
-const localDrafts =
-  options.mode === "local"
-    ? new Map(
-        JSON.parse(
-          readFileSync(
-            resolve(root, "scripts/label-reports/ocr-drafts.json"),
-            "utf8",
-          ),
-        ).map((draft) => [draft.id, draft]),
-      )
-    : new Map();
 const env = readEnvFile(envPath);
 // O token pode vir de arquivo temporário fora do repositório, para não aparecer
 // em histórico de comando nem em variáveis impressas.
@@ -494,22 +463,20 @@ for (const [index, sample] of samples.entries()) {
     for (let attempt = 0; attempt <= options.retries; attempt += 1) {
       try {
         actual =
-          options.mode === "local"
-            ? readLabelFromDrafts(localDrafts.get(sample.id))
-            : options.mode === "gemini"
-              ? await readLabelFromGemini(
-                  imageBase64,
-                  mimeType,
-                  entry.datasetExpectedAddress,
-                  settings.apiKey,
-                )
-              : await readLabelFromEdge(
-                  entry,
-                  imageBase64,
-                  mimeType,
-                  settings,
-                  env,
-                );
+          options.mode === "gemini"
+            ? await readLabelFromGemini(
+                imageBase64,
+                mimeType,
+                entry.datasetExpectedAddress,
+                settings.apiKey,
+              )
+            : await readLabelFromEdge(
+                entry,
+                imageBase64,
+                mimeType,
+                settings,
+                env,
+              );
         break;
       } catch (error) {
         const transient = /\b(429|502|503|504|timeout)\b/i.test(
@@ -526,11 +493,7 @@ for (const [index, sample] of samples.entries()) {
       image: sample.image,
       expected: sample.expected,
       actual,
-      matches: sample.expected
-        ? scoreSample(sample.expected, actual, {
-            skipAddressStatus: options.mode === "local",
-          })
-        : undefined,
+      matches: sample.expected ? scoreSample(sample.expected, actual) : undefined,
       latencyMs: Date.now() - started,
     });
   } catch (error) {
@@ -553,7 +516,7 @@ for (const [index, sample] of samples.entries()) {
 
 report.totals = renderSummary(report);
 
-if (!options.dryRun && options.mode !== "local") {
+if (!options.dryRun) {
   const capturedFields = [
     "tracking_code",
     "carrier",
