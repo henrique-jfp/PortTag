@@ -55,11 +55,79 @@ function findTracking(text: string) {
   return { carrier: findCarrierFromName(text), code: "" };
 }
 
-function findCep(text: string) {
-  const match = text.match(/\b\d{5}-?\d{3}\b/);
-  if (!match) return "";
-  const digits = match[0].replace(/\D/g, "");
+/** CEP completo: 8 dígitos, com ou sem hífen. Evita fragmentos de "Order ID". */
+const cepPattern = /\b(?:\d{5}-\d{3}|\d{8})\b/g;
+
+const cepSenderLine =
+  /\b(?:remetente|sender|shipper|ship\s*from|origem|source)\b/i;
+/** Bloco logístico da Amazon e campos de rota não são endereço de entrega. */
+const cepLogisticsLine =
+  /\b(?:cajamar|via\s*de\s*acesso|galp[aã]o|rodovia|rod\.?|km|nts|aft|fc|xfc|xcv|sorter|fulfillment|centro\s*de\s*distribui[çc]ao|oversize|cycle|lrj|cgh|srj|frj)\b/i;
+const cepDestinationLine =
+  /\b(?:cep|endere[çc]o|destino|destinat[aá]ri[oa]|ship\s*to|deliver\s*to|consignat[aá]ri[oa]|cidade\s+de\s+destino)\b/i;
+const cepCountryLine = /\b(?:brasil|brazil)\b/i;
+const cepStateToken =
+  /\b(?:ac|al|ap|am|ba|ce|df|es|go|ma|mt|ms|mg|pa|pb|pr|pe|pi|rj|rn|rs|ro|rr|sc|sp|se|to)\b/i;
+/** Amazon também imprime o CEP de entrega como "R 22041012". */
+const cepShorthandLine = /^\s*r\s*\d{5}-?\d{3}\s*$/i;
+
+function formatCep(raw: string) {
+  const digits = raw.replace(/\D/g, "");
   return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+}
+
+/**
+ * Escolhe o CEP por contexto, nunca pelo primeiro da etiqueta. Etiquetas da
+ * Amazon e do Mercado Livre imprimem o CEP do centro de distribuição antes do
+ * CEP de entrega; o texto do destinatário não basta para separá-los porque
+ * essas etiquetas não trazem o cabeçalho "DESTINATÁRIO".
+ */
+function findCep(text: string, recipientName = "") {
+  const lines = text.split(/\r?\n/);
+  const senderLine = lines.findIndex((line) => cepSenderLine.test(line));
+  const recipientLine = recipientName
+    ? lines.findIndex((line) => line.includes(recipientName))
+    : -1;
+
+  const candidates = lines.flatMap((line, lineIndex) =>
+    Array.from(line.matchAll(cepPattern), (match) => ({
+      value: formatCep(match[0]),
+      line,
+      lineIndex,
+    })),
+  );
+  if (candidates.length === 0) return "";
+
+  const occurrences = new Map<string, number>();
+  for (const candidate of candidates) {
+    occurrences.set(
+      candidate.value,
+      (occurrences.get(candidate.value) ?? 0) + 1,
+    );
+  }
+
+  let best = candidates[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    let score = 0;
+    if (senderLine >= 0 && candidate.lineIndex >= senderLine) score -= 12;
+    if (cepSenderLine.test(candidate.line)) score -= 12;
+    if (cepLogisticsLine.test(candidate.line)) score -= 8;
+    if (cepDestinationLine.test(candidate.line)) score += 6;
+    if (cepCountryLine.test(candidate.line)) score += 4;
+    if (cepStateToken.test(candidate.line)) score += 2;
+    if (cepShorthandLine.test(candidate.line)) score += 3;
+    if (recipientLine >= 0 && candidate.lineIndex > recipientLine) score += 3;
+    score += Math.min(4, ((occurrences.get(candidate.value) ?? 1) - 1) * 2);
+    // Desempate estável quando a etiqueta não tem âncora de destinatário.
+    score += candidate.lineIndex / 1000;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  return best.value;
 }
 
 const addressKeywords =
@@ -230,13 +298,14 @@ export type ParsedLabel = {
 export function parseLabel(text: string): ParsedLabel {
   const tracking = findTracking(text);
   const destination = destinationText(text);
+  const recipientName = findRecipient(destination);
   return {
-    recipient_name: findRecipient(destination),
+    recipient_name: recipientName,
     unit_number: findUnit(destination),
     block_name: findBlock(destination),
     carrier: tracking.carrier,
     tracking_code: tracking.code,
-    destination_cep: findCep(destination),
+    destination_cep: findCep(destination, recipientName),
     destination_street: findStreet(destination),
     destination_number: findStreetNumber(destination),
   };
