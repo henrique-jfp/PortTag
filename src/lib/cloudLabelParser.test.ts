@@ -3,7 +3,7 @@ import {
   destinationText,
   parseLabel,
 } from "../../supabase/functions/extract-package-label/parser";
-import { mercadoLivreLabel } from "./__fixtures__/labels";
+import { amazonLabel, mercadoLivreLabel } from "./__fixtures__/labels";
 
 describe("parser da extração na nuvem", () => {
   it("lê a unidade de 'Complemento: 307' em etiqueta do Mercado Livre", () => {
@@ -49,6 +49,34 @@ describe("parser da extração na nuvem", () => {
 
     expect(parsed.block_name).toBe("1");
     expect(parsed.unit_number).toBe("603");
+  });
+
+  it("não aceita via/acesso/km como nome do destinatário", () => {
+    const amazon = parseLabel(
+      [
+        "DESTINATARIO",
+        "VIA DE ACESSO NORTE KM 0,5",
+        "Nome Sobrenome",
+        "Complemento: 307",
+        "ENDERECO: VIA DE ACESSO NORTE KM 0,5",
+      ].join("\n"),
+    );
+    const semAncora = parseLabel(
+      [
+        "RODOVIA BR 101, KM 12",
+        "VIA DE ACESSO NORTE KM 0,5",
+        "Nome Sobrenome",
+        "Complemento: 307",
+      ].join("\n"),
+    );
+
+    expect(amazon.recipient_name).toBe("Nome Sobrenome");
+    expect(amazon.destination_street).toBe("VIA DE ACESSO NORTE KM");
+    expect(amazon.destination_number).toBe("0");
+    expect(semAncora.recipient_name).toBe("Nome Sobrenome");
+    expect(parseLabel(amazonLabel("22031040")).recipient_name).toBe(
+      "GUILHERME NOGUEIRA COSTA E VALLE",
+    );
   });
 
   it("usa o nome impresso para corrigir a transportadora deduzida do código", () => {

@@ -63,7 +63,13 @@ function findCep(text: string) {
 }
 
 const addressKeywords =
-  /\b(?:rua|r\.|avenida|av\.|travessa|estrada|logradouro|bairro|cep|apto|apartamento|bloco|complemento|remetente|origem|sender|shipper|telefone|celular)\b/i;
+  /\b(?:rua|r\.|avenida|av\.|travessa|estrada|via|acesso|rodovia|rod\.|km|pra[çc]a|logradouro|bairro|cep|apto|apartamento|bloco|complemento|endere[çc]o|remetente|origem|sender|shipper|telefone|celular)\b/i;
+
+/** "Cajamar SP" e "Rio de Janeiro RJ" são linhas de cidade, não de pessoa. */
+const cityStateLine = new RegExp(
+  "\\b(?:brasil|brazil|ac|al|ap|am|ba|ce|df|es|go|ma|mt|ms|mg|pa|pb|pr|pe|pi|rj|rn|rs|ro|rr|sc|sp|se|to)\\b$",
+  "i",
+);
 
 function cleanRecipient(candidate: string) {
   const name = candidate
@@ -74,7 +80,7 @@ function cleanRecipient(candidate: string) {
     .replace(/^\s*(?:nome|cliente)\s*[:-]\s*/i, "")
     .replace(/\([^)]*\)/g, "")
     .replace(
-      /\s+(?:rua|avenida|av\.|travessa|estrada|logradouro|bairro|cep|apto|apartamento|bloco|complemento|endereco)\b.*$/i,
+      /\s+(?:rua|avenida|av\.|travessa|estrada|via|acesso|rodovia|rod\.|km|logradouro|bairro|cep|apto|apartamento|bloco|complemento|endere[çc]o)\b.*$/i,
       "",
     )
     .replace(/\s+\d.*$/, "")
@@ -83,6 +89,7 @@ function cleanRecipient(candidate: string) {
   const tokens = name.split(" ").filter(Boolean);
   if (tokens.length < 2 || tokens.length > 8 || /\d/.test(name)) return "";
   if (addressKeywords.test(name.toLowerCase())) return "";
+  if (cityStateLine.test(name)) return "";
   return name;
 }
 
@@ -142,13 +149,13 @@ function findBlock(text: string) {
 }
 
 function findStreetLine(text: string) {
-  return text
-    .split(/\r?\n/)
-    .find((candidate) =>
-      /\b(?:rua|avenida|av\.|travessa|estrada|r\.?|endere[çc]o)\b/i.test(
-        candidate,
-      ),
-    );
+  const lines = text.split(/\r?\n/);
+  // "Endereço:", "Rua" etc. são âncoras fortes e vêm primeiro: no Mercado Livre
+  // a rodovia do VENDEDOR aparece acima do endereço do destinatário.
+  const strong =
+    /\b(?:rua|avenida|av\.|travessa|estrada|r\.?|endere[çc]o)\b/i;
+  const weak = /\b(?:via|acesso|rodovia|rod\.?)\b/i;
+  return lines.find((line) => strong.test(line)) ?? lines.find((line) => weak.test(line));
 }
 
 function findStreet(text: string) {
@@ -163,7 +170,7 @@ function findStreet(text: string) {
       .trim();
   }
   const match = line.match(
-    /\b(rua|avenida|av\.|travessa|estrada|r\.?)\s+([^\d,\n]+)/i,
+    /\b(rua|avenida|av\.|travessa|estrada|via|acesso|rodovia|rod\.?|r\.?)\s+([^\d,\n]+)/i,
   );
   if (!match) return "";
   return `${match[1].replace(/\./g, "")} ${match[2].trim()}`
@@ -176,7 +183,7 @@ function findStreetNumber(text: string) {
   const line = findStreetLine(text);
   if (!line) return "";
   const afterStreet = line.replace(
-    /^.*?\b(?:rua|avenida|av\.|travessa|estrada|r\.?)\b[^0-9]*/i,
+    /^.*?\b(?:rua|avenida|av\.|travessa|estrada|via|acesso|rodovia|rod\.?|r\.?)\b[^0-9]*/i,
     "",
   );
   const match = afterStreet.match(/\b(\d+[a-z]?)\b/i);
