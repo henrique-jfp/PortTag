@@ -58,6 +58,7 @@ import {
   clearReceptionDraft,
   dataUrlToFile,
   fileToDataUrl,
+  hasReceptionDraftContent,
   loadReceptionDraft,
   saveReceptionDraft,
   type DraftUnit,
@@ -1130,7 +1131,11 @@ export function PorterReception() {
     if (!draftReady.current) return;
     const timer = window.setTimeout(() => {
       void buildDraftRef.current().then((draft) => {
-        if (draft) return saveReceptionDraft(draft);
+        if (!draft) return;
+        if (!hasReceptionDraftContent(draft)) {
+          return clearReceptionDraft(draft.condominiumId);
+        }
+        return saveReceptionDraft(draft);
       });
     }, 400);
     return () => window.clearTimeout(timer);
@@ -1519,6 +1524,12 @@ export function PorterReception() {
   });
 
   async function restoreDraft(draft: ReceptionDraft) {
+    if (!hasReceptionDraftContent(draft)) {
+      // Rascunho vazio deixado pelo autosave anterior: nada para retomar.
+      await clearReceptionDraft(draft.condominiumId);
+      draftReady.current = true;
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     const rawView = params.get("view");
     setActiveView(

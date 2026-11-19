@@ -341,6 +341,17 @@ function createCanvas(width: number, height: number) {
   return canvas;
 }
 
+/**
+ * Zerar width/height libera o buffer de pixels do canvas imediatamente.
+ * No Android WebView, esperar o GC entre fotos era suficiente para o sistema
+ * matar a aba ao voltar da câmera.
+ */
+function releaseCanvas(canvas: HTMLCanvasElement | null | undefined) {
+  if (!canvas) return;
+  canvas.width = 0;
+  canvas.height = 0;
+}
+
 function canvasContext(canvas: HTMLCanvasElement) {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) {
@@ -586,6 +597,7 @@ export async function preparePackageImage(
       if (disposed) return;
       disposed = true;
       source.dispose();
+      releaseCanvas(preview);
     },
   };
 }
@@ -654,12 +666,13 @@ export async function compressPackagePhoto(
     file,
     file.size > 800_000 ? longEdge : undefined,
   );
+  let canvas: HTMLCanvasElement | null = null;
   try {
     const scale = Math.min(
       1,
       longEdge / Math.max(source.width, source.height, 1),
     );
-    const canvas = createCanvas(
+    canvas = createCanvas(
       Math.max(1, Math.round(source.width * scale)),
       Math.max(1, Math.round(source.height * scale)),
     );
@@ -687,6 +700,7 @@ export async function compressPackagePhoto(
     };
   } finally {
     source.dispose();
+    releaseCanvas(canvas);
   }
 }
 
@@ -1337,6 +1351,9 @@ export async function readPackageLabel(
 ): Promise<LabelReadResult> {
   const startedAt = performance.now();
   const attempts: LabelReadAttempt[] = [];
+  // Cada passada cria um canvas de até 1600 px. Sem liberar o buffer na hora,
+  // o WebView do Android acumula dezenas de MB e morre ao voltar da câmera.
+  const transientCanvases: HTMLCanvasElement[] = [];
   const expectedCep = (options.expectedCep ?? "").replace(/\D/g, "");
   const variants: string[] = [];
 
@@ -1384,6 +1401,7 @@ export async function readPackageLabel(
       if (region) {
         cropped = true;
         const crop = prepared.drawRegion(region, cropLongEdge);
+        transientCanvases.push(crop);
 
         if (!confirmed()) {
           // Otsu primeiro: a binarização global é limpa e o Tesseract voa
@@ -1391,6 +1409,7 @@ export async function readPackageLabel(
           // (era ela que levava 7 s por passada e devolvia lixo).
           onProgress("Recortando e reforçando a leitura...", 0.4);
           const otsu = binarizeCanvas(crop, "otsu");
+          transientCanvases.push(otsu);
           const enhanced = await runOcrPass(worker, otsu, {
             pass: "recorte",
             psm: PSM.SPARSE_TEXT,
@@ -1410,6 +1429,7 @@ export async function readPackageLabel(
           ) {
             onProgress("Tentando com contraste adaptativo...", 0.62);
             const adaptive = binarizeCanvas(crop, "adaptive");
+            transientCanvases.push(adaptive);
             const adaptivePass = await runOcrPass(worker, adaptive, {
               pass: "contraste",
               psm: PSM.SPARSE_TEXT,
@@ -1447,11 +1467,12 @@ export async function readPackageLabel(
         }
       } else {
         onProgress("Reforçando a leitura da etiqueta...", 0.4);
-        const enhanced = await runOcrPass(
-          worker,
-          binarizeCanvas(prepared.preview, "adaptive"),
-          { pass: "binarizado", psm: PSM.SPARSE_TEXT },
-        );
+        const binarized = binarizeCanvas(prepared.preview, "adaptive");
+        transientCanvases.push(binarized);
+        const enhanced = await runOcrPass(worker, binarized, {
+          pass: "binarizado",
+          psm: PSM.SPARSE_TEXT,
+        });
         attempts.push(recordAttempt("binarizado", enhanced));
         variants.unshift(enhanced.text);
       }
@@ -1464,11 +1485,12 @@ export async function readPackageLabel(
         !barcodeValues.length
       ) {
         onProgress("Girando a etiqueta e tentando de novo...", 0.9);
-        const sideways = await runOcrPass(
-          worker,
-          rotateCanvas(prepared.preview, 90),
-          { pass: "girada", psm: PSM.SPARSE_TEXT },
-        );
+        const sidewaysCanvas = rotateCanvas(prepared.preview, 90);
+        transientCanvases.push(sidewaysCanvas);
+        const sideways = await runOcrPass(worker, sidewaysCanvas, {
+          pass: "girada",
+          psm: PSM.SPARSE_TEXT,
+        });
         attempts.push(recordAttempt("girada", sideways));
         variants.unshift(sideways.text);
         merged = mergeTextVariants(variants);
@@ -1510,6 +1532,7 @@ export async function readPackageLabel(
     }
   } finally {
     progressListeners.delete(onProgress);
+    transientCanvases.forEach(releaseCanvas);
     prepared.dispose();
   }
 }

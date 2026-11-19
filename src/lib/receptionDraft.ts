@@ -46,6 +46,37 @@ export type ReceptionDraft = {
   signature: string;
 };
 
+/**
+ * Um rascunho só vale avisar ao porteiro quando há algo para retomar. O
+ * autosave dispara ao abrir a tela; sem esta checagem ele gravava um rascunho
+ * vazio e o aviso aparecia em toda abertura do app.
+ */
+export function hasReceptionDraftContent(draft: ReceptionDraft) {
+  return Boolean(
+    draft.labelPhoto ||
+      draft.damagePhoto ||
+      draft.unitId ||
+      draft.readUnitNumber ||
+      draft.recipientName ||
+      draft.company ||
+      draft.trackingCode ||
+      draft.deliveryPerson ||
+      draft.addressVerification ||
+      draft.lastLabelRead ||
+      draft.ocrMessage ||
+      draft.isDamaged ||
+      draft.collectionBaseId ||
+      draft.collectionSelectionOverride?.length ||
+      draft.collectionName ||
+      draft.porterConfirmed ||
+      draft.hasSignature ||
+      draft.notifyOnReceive ||
+      draft.duplicateWarning ||
+      draft.mismatchAcknowledged ||
+      draft.unitCandidates?.length,
+  );
+}
+
 const DB_NAME = "porttag-reception";
 const STORE = "drafts";
 const DB_VERSION = 1;
