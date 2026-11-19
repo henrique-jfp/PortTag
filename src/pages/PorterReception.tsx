@@ -214,6 +214,10 @@ function signatureDataUrl(canvas: HTMLCanvasElement) {
  * à fila de importação. A foto comprimida vai só para a leitura e é descartada
  * depois; nenhuma imagem da etiqueta é enviada ao Storage.
  */
+/** Espelha as âncoras de unidade do parser da nuvem, inclusive "complemento". */
+const unitAnchorPattern =
+  /\b(?:apto|apartamento|apt|ap|depto|departamento|unidade|casa|complemento|comlemento|complemto|complmento|compl)\.?\s*[:#=-]?\s*([0-9]+[a-z]?)/i;
+
 type PackageDraft = {
   /** Arquivo original, guardado para permitir nova tentativa de leitura. */
   source: File;
@@ -221,6 +225,8 @@ type PackageDraft = {
   file: File;
   unitId: string;
   unitCandidates: Unit[];
+  /** Número lido na etiqueta (inclusive "Complemento: 307"), mesmo sem match. */
+  readUnitNumber?: string;
   recipientName: string;
   recipientIsResident: boolean;
   company: string;
@@ -354,6 +360,7 @@ function draftFromAi(
     file,
     unitId: ai.unitId,
     unitCandidates: ai.unitCandidates,
+    readUnitNumber: ai.unitNumber,
     recipientName: detectedRecipient,
     recipientIsResident: false,
     company: carrier,
@@ -464,6 +471,9 @@ function draftFromLocalOcr(
     file,
     unitId: candidates.length === 1 ? candidates[0].id : "",
     unitCandidates: candidates,
+    readUnitNumber:
+      `${destinationText}\n${recognizedText}`.match(unitAnchorPattern)?.[1]?.toUpperCase() ??
+      "",
     recipientName: detectedRecipientName,
     recipientIsResident: false,
     company: detectedCompany,
@@ -748,6 +758,7 @@ export function PorterReception() {
   const [ocrMessage, setOcrMessage] = useState("");
   const [unitCandidates, setUnitCandidates] = useState<Unit[]>([]);
   const [unitId, setUnitId] = useState("");
+  const [readUnitNumber, setReadUnitNumber] = useState("");
   const [deliveryPerson, setDeliveryPerson] = useState("");
   const [company, setCompany] = useState("");
   const [trackingCode, setTrackingCode] = useState("");
@@ -1424,6 +1435,7 @@ export function PorterReception() {
     setOcrMessage("");
     setUnitCandidates([]);
     setUnitId("");
+    setReadUnitNumber("");
     setCompany("");
     setTrackingCode("");
     setTrackingCodeDetected(false);
@@ -1445,6 +1457,7 @@ export function PorterReception() {
     setPreviewUrl(preview);
     setUnitCandidates(draft.unitCandidates);
     setUnitId(draft.unitId);
+    setReadUnitNumber(draft.readUnitNumber ?? "");
     setDeliveryPerson(draft.deliveryPerson || lastDeliveryPerson);
     setCompany(draft.company);
     setTrackingCode(draft.trackingCode);
@@ -1474,6 +1487,7 @@ export function PorterReception() {
       labelPhoto: file ? await fileToDataUrl(file) : "",
       unitId,
       unitCandidates: unitCandidates as DraftUnit[],
+      readUnitNumber,
       recipientName,
       recipientNameDetected,
       recipientIsResident,
@@ -1516,6 +1530,7 @@ export function PorterReception() {
       (draft.unitCandidates ?? []) as unknown as Unit[],
     );
     setUnitId(draft.unitId);
+    setReadUnitNumber(draft.readUnitNumber ?? "");
     setRecipientName(draft.recipientName);
     setRecipientNameDetected(draft.recipientNameDetected);
     setRecipientIsResident(draft.recipientIsResident);
@@ -2564,6 +2579,23 @@ export function PorterReception() {
                             ))}
                           </optgroup>
                         </select>
+                        {readUnitNumber && unitCandidates.length === 0 && (
+                          <p className="porter-error" role="alert">
+                            A etiqueta indica o apartamento {readUnitNumber}
+                            {lastLabelRead?.numericText
+                              ? ` (CEP ${lastLabelRead.numericText})`
+                              : ""}
+                            , mas esse número não está no cadastro dos blocos
+                            deste porteiro. Confira a etiqueta e selecione o
+                            apartamento manualmente.
+                          </p>
+                        )}
+                        {readUnitNumber && unitCandidates.length > 1 && (
+                          <small>
+                            A etiqueta indica o apartamento {readUnitNumber};
+                            escolha a unidade correta nas sugestões acima.
+                          </small>
+                        )}
                         {unitCandidates.length === 1 && (
                           <small>Apartamento reconhecido. Confira antes de salvar.</small>
                         )}

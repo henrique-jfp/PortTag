@@ -21,6 +21,8 @@ export type ReceptionDraft = {
   labelPhoto: string;
   unitId: string;
   unitCandidates: DraftUnit[];
+  /** Opcional para não invalidar rascunhos salvos antes desta versão. */
+  readUnitNumber?: string;
   recipientName: string;
   recipientNameDetected: boolean;
   recipientIsResident: boolean;
