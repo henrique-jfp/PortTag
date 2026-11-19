@@ -301,6 +301,7 @@ export function ManagerLedger() {
                   initialFilters={notebookPreset?.filters}
                   presetLabel={notebookPreset?.label ?? ""}
                   onClearPreset={() => setNotebookPreset(null)}
+                  allowReceiptPrint
                 />
               )}
               {notebookTab === "audit" && activeBuildingId && (

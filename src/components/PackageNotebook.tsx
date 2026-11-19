@@ -56,12 +56,14 @@ export function PackageNotebook({
   initialFilters,
   presetLabel = "",
   onClearPreset,
+  allowReceiptPrint = false,
 }: {
   buildings: NotebookBuilding[];
   forceBuildingList?: boolean;
   initialFilters?: PackageFilters;
   presetLabel?: string;
   onClearPreset?: () => void;
+  allowReceiptPrint?: boolean;
 }) {
   const [buildingId, setBuildingId] = useState("");
   const [filters, setFilters] = useState<PackageFilters>(initialFilters ?? {});
@@ -804,16 +806,18 @@ export function PackageNotebook({
                             </ol>
                           </div>
 
-                          <button
-                            className="notebook-print-button"
-                            type="button"
-                            disabled={printLoadingId === selectedRecord.id}
-                            onClick={() => void preparePrint(selectedRecord)}
-                          >
-                            {printLoadingId === selectedRecord.id
-                              ? "Preparando comprovante..."
-                              : "Imprimir / Gerar Comprovante"}
-                          </button>
+                          {allowReceiptPrint && (
+                            <button
+                              className="notebook-print-button"
+                              type="button"
+                              disabled={printLoadingId === selectedRecord.id}
+                              onClick={() => void preparePrint(selectedRecord)}
+                            >
+                              {printLoadingId === selectedRecord.id
+                                ? "Preparando comprovante..."
+                                : "Imprimir / Gerar Comprovante"}
+                            </button>
+                          )}
 
                           {selectedRecord.is_damaged &&
                             selectedRecord.receipt_path &&
@@ -888,7 +892,7 @@ export function PackageNotebook({
         </section>
       </div>
 
-      {printRecord && (
+      {allowReceiptPrint && printRecord && (
         <section className="notebook-print" aria-label="Comprovante da encomenda">
           <header className="notebook-print-header">
             <div>
