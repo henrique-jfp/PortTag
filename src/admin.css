@@ -450,7 +450,152 @@
   outline-offset: 2px;
 }
 
+.dashboard .admin-form-group {
+  grid-column: 1 / -1;
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: var(--admin-surface);
+}
+
+.dashboard .admin-form-group h3 {
+  margin: 0 0 2px;
+  color: var(--admin-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.dashboard .admin-form-group-hint {
+  margin: 0 0 14px;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.dashboard .admin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.dashboard .admin-form-footer {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 10px;
+}
+
+.dashboard .admin-condominium-list {
+  display: grid;
+  gap: 10px;
+}
+
+.dashboard .admin-condominium-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: var(--admin-surface);
+}
+
+.dashboard .admin-condominium-info {
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.dashboard .admin-condominium-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard .admin-condominium-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--admin-primary-soft);
+  color: var(--admin-primary);
+}
+
+.dashboard .admin-condominium-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.dashboard .admin-condominium-info p {
+  margin: 5px 0 0;
+  color: var(--admin-muted);
+  font-size: 13px;
+}
+
+.dashboard .admin-condominium-meta {
+  font-size: 12px;
+}
+
+.dashboard .admin-status-badge {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dashboard .admin-status-badge.is-active {
+  background: #e7f7ed;
+  color: #176b36;
+}
+
+.dashboard .admin-status-badge.is-inactive {
+  background: #f2f4f7;
+  color: #667085;
+}
+
+.dashboard .admin-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashboard .admin-card-actions .secondary-button.button-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 36px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--admin-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.dashboard .admin-card-actions .secondary-button.button-link:hover {
+  border-color: #b9c9ea;
+  background: var(--admin-primary-soft);
+}
+
 @media (max-width: 760px) {
+  .dashboard .admin-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard .admin-form-grid .form-field-wide {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard .admin-condominium-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .dashboard .admin-context-bar {
     align-items: flex-start;
     flex-direction: column;

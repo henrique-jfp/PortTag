@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { ArrowUpRight, Building2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -399,234 +400,254 @@ export function Dashboard() {
               className="condominium-form"
               onSubmit={handleSubmit}
             >
-              <label className="form-field form-field-wide">
-                Nome do condomínio
-                <input
-                  required
-                  value={form.name}
-                  onChange={(event) =>
-                    setForm({ ...form, name: event.target.value })
-                  }
-                />
-              </label>
+              <section className="admin-form-group" aria-label="Identificação">
+                <h3>Identificação</h3>
+                <div className="admin-form-grid">
+                  <label className="form-field form-field-wide">
+                    Nome do condomínio
+                    <input
+                      required
+                      value={form.name}
+                      onChange={(event) =>
+                        setForm({ ...form, name: event.target.value })
+                      }
+                    />
+                  </label>
+                </div>
+              </section>
 
-              <label className="form-field">
-                CEP
-                <input
-                  required
-                  autoComplete="postal-code"
-                  inputMode="numeric"
-                  value={form.cep}
-                  onChange={(event) => {
-                    const cep = event.target.value;
-                    setCepLookupStatus(
-                      cep.replace(/\D/g, "").length === 8 ? "loading" : "idle",
-                    );
-                    setForm((current) => {
-                      const replaceAddress =
-                        current.cep.replace(/\D/g, "").length === 8 &&
-                        current.cep !== cep;
-                      return {
-                        ...current,
-                        cep,
-                        ...(replaceAddress
-                          ? {
-                              street: "",
-                              neighborhood: "",
-                              city: "",
-                              state: "",
-                            }
-                          : {}),
-                      };
-                    });
-                  }}
-                />
-                <span className="field-hint" aria-live="polite">
-                  {cepLookupStatus === "loading" &&
-                    "Buscando endereço pelo CEP..."}
-                  {cepLookupStatus === "success" &&
-                    "Endereço preenchido; confira os dados."}
-                  {cepLookupStatus === "not-found" &&
-                    "CEP não encontrado. Preencha o endereço manualmente."}
-                  {cepLookupStatus === "error" &&
-                    "Não foi possível consultar o CEP. Preencha o endereço manualmente."}
-                </span>
-              </label>
+              <section className="admin-form-group" aria-label="Endereço">
+                <h3>Endereço</h3>
+                <p className="admin-form-group-hint">
+                  CEP, rua e número são conferidos na validação da etiqueta.
+                </p>
+                <div className="admin-form-grid">
+                  <label className="form-field">
+                    CEP
+                    <input
+                      required
+                      autoComplete="postal-code"
+                      inputMode="numeric"
+                      value={form.cep}
+                      onChange={(event) => {
+                        const cep = event.target.value;
+                        setCepLookupStatus(
+                          cep.replace(/\D/g, "").length === 8 ? "loading" : "idle",
+                        );
+                        setForm((current) => {
+                          const replaceAddress =
+                            current.cep.replace(/\D/g, "").length === 8 &&
+                            current.cep !== cep;
+                          return {
+                            ...current,
+                            cep,
+                            ...(replaceAddress
+                              ? {
+                                  street: "",
+                                  neighborhood: "",
+                                  city: "",
+                                  state: "",
+                                }
+                              : {}),
+                          };
+                        });
+                      }}
+                    />
+                    <span className="field-hint" aria-live="polite">
+                      {cepLookupStatus === "loading" &&
+                        "Buscando endereço pelo CEP..."}
+                      {cepLookupStatus === "success" &&
+                        "Endereço preenchido; confira os dados."}
+                      {cepLookupStatus === "not-found" &&
+                        "CEP não encontrado. Preencha o endereço manualmente."}
+                      {cepLookupStatus === "error" &&
+                        "Não foi possível consultar o CEP. Preencha o endereço manualmente."}
+                    </span>
+                  </label>
 
-              <label className="form-field form-field-wide">
-                Rua ou avenida
-                <input
-                  required
-                  autoComplete="address-line1"
-                  value={form.street}
-                  onChange={(event) =>
-                    setForm({ ...form, street: event.target.value })
-                  }
-                />
-              </label>
+                  <label className="form-field form-field-wide">
+                    Rua ou avenida
+                    <input
+                      required
+                      autoComplete="address-line1"
+                      value={form.street}
+                      onChange={(event) =>
+                        setForm({ ...form, street: event.target.value })
+                      }
+                    />
+                  </label>
 
-              <label className="form-field">
-                Número
-                <input
-                  required
-                  autoComplete="address-line2"
-                  value={form.addressNumber}
-                  onChange={(event) =>
-                    setForm({ ...form, addressNumber: event.target.value })
-                  }
-                />
-              </label>
+                  <label className="form-field">
+                    Número
+                    <input
+                      required
+                      autoComplete="address-line2"
+                      value={form.addressNumber}
+                      onChange={(event) =>
+                        setForm({ ...form, addressNumber: event.target.value })
+                      }
+                    />
+                  </label>
 
-              <label className="form-field">
-                Bairro
-                <input
-                  required
-                  autoComplete="address-level3"
-                  value={form.neighborhood}
-                  onChange={(event) =>
-                    setForm({ ...form, neighborhood: event.target.value })
-                  }
-                />
-              </label>
+                  <label className="form-field">
+                    Bairro
+                    <input
+                      required
+                      autoComplete="address-level3"
+                      value={form.neighborhood}
+                      onChange={(event) =>
+                        setForm({ ...form, neighborhood: event.target.value })
+                      }
+                    />
+                  </label>
 
-              <label className="form-field">
-                Cidade
-                <input
-                  required
-                  autoComplete="address-level2"
-                  value={form.city}
-                  onChange={(event) =>
-                    setForm({ ...form, city: event.target.value })
-                  }
-                />
-              </label>
+                  <label className="form-field">
+                    Cidade
+                    <input
+                      required
+                      autoComplete="address-level2"
+                      value={form.city}
+                      onChange={(event) =>
+                        setForm({ ...form, city: event.target.value })
+                      }
+                    />
+                  </label>
 
-              <label className="form-field">
-                Estado (UF)
-                <input
-                  required
-                  minLength={2}
-                  maxLength={2}
-                  autoComplete="address-level1"
-                  value={form.state}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      state: event.target.value.toUpperCase(),
-                    })
-                  }
-                />
-              </label>
+                  <label className="form-field">
+                    Estado (UF)
+                    <input
+                      required
+                      minLength={2}
+                      maxLength={2}
+                      autoComplete="address-level1"
+                      value={form.state}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          state: event.target.value.toUpperCase(),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              </section>
 
               {!editingCondominiumId && (
-                <fieldset className="form-field form-field-wide choice-field">
-                  <legend>Este edifício possui blocos?</legend>
-                  <div className="choice-options">
-                    <label>
+              <section className="admin-form-group" aria-label="Blocos">
+                <h3>Blocos</h3>
+                <p className="admin-form-group-hint">
+                  Defina agora o primeiro bloco; os demais podem ser adicionados depois.
+                </p>
+                <div className="admin-form-grid">
+                  <fieldset className="form-field form-field-wide choice-field">
+                    <legend>Este edifício possui blocos?</legend>
+                    <div className="choice-options">
+                      <label>
+                        <input
+                          type="radio"
+                          name="hasBlocks"
+                          checked={!form.hasBlocks}
+                          onChange={() =>
+                            setForm((current) => ({
+                              ...current,
+                              hasBlocks: false,
+                              blockCount: "0",
+                              initialBlockName: "",
+                            }))
+                          }
+                        />
+                        Não
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="hasBlocks"
+                          checked={form.hasBlocks}
+                          onChange={() =>
+                            setForm((current) => ({
+                              ...current,
+                              hasBlocks: true,
+                              blockCount:
+                                current.blockCount === "0"
+                                  ? "1"
+                                  : current.blockCount,
+                            }))
+                          }
+                        />
+                        Sim
+                      </label>
+                    </div>
+                  </fieldset>
+
+                  {form.hasBlocks && (
+                  <>
+                    <label className="form-field">
+                      Quantos blocos existem?
                       <input
-                        type="radio"
-                        name="hasBlocks"
-                        checked={!form.hasBlocks}
-                        onChange={() =>
+                        required
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={form.blockCount}
+                        onChange={(event) =>
                           setForm((current) => ({
                             ...current,
-                            hasBlocks: false,
-                            blockCount: "0",
-                            initialBlockName: "",
+                            blockCount: event.target.value,
                           }))
                         }
                       />
-                      Não
                     </label>
-                    <label>
+
+                    <label className="form-field">
+                      Qual bloco será cadastrado primeiro?
                       <input
-                        type="radio"
-                        name="hasBlocks"
-                        checked={form.hasBlocks}
-                        onChange={() =>
+                        required
+                        placeholder="Ex.: A, Bloco 1, Torre Sul"
+                        value={form.initialBlockName}
+                        onChange={(event) =>
                           setForm((current) => ({
                             ...current,
-                            hasBlocks: true,
-                            blockCount:
-                              current.blockCount === "0"
-                                ? "1"
-                                : current.blockCount,
+                            initialBlockName: event.target.value,
                           }))
                         }
                       />
-                      Sim
                     </label>
-                  </div>
-                </fieldset>
+                  </>
+                  )}
+                </div>
+              </section>
               )}
 
-              {!editingCondominiumId && form.hasBlocks && (
-                <>
-                  <label className="form-field">
-                    Quantos blocos existem?
-                    <input
-                      required
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={form.blockCount}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          blockCount: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-
-                  <label className="form-field">
-                    Qual bloco será cadastrado primeiro?
-                    <input
-                      required
-                      placeholder="Ex.: A, Bloco 1, Torre Sul"
-                      value={form.initialBlockName}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          initialBlockName: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <p className="field-hint form-field-wide">
-                    Os outros blocos poderão ser adicionados depois.
+              <div className="admin-form-footer">
+                {formError && (
+                  <p className="feedback-message feedback-error" role="alert">
+                    {formError}
                   </p>
-                </>
-              )}
-
-              {formError && (
-                <p className="feedback-message feedback-error" role="alert">
-                  {formError}
-                </p>
-              )}
-              {successMessage && (
-                <p className="feedback-message feedback-success" role="status">
-                  {successMessage}
-                </p>
-              )}
-
-              <div className="form-actions">
-                <button className="primary-button" disabled={saving}>
-                  {saving
-                    ? "Salvando..."
-                    : editingCondominiumId
-                      ? "Salvar alterações"
-                      : "Cadastrar condomínio"}
-                </button>
-                {editingCondominiumId && (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={handleCancelEdit}
-                  >
-                    Cancelar
-                  </button>
                 )}
+                {successMessage && (
+                  <p className="feedback-message feedback-success" role="status">
+                    {successMessage}
+                  </p>
+                )}
+
+                <div className="form-actions">
+                  <button className="primary-button" disabled={saving}>
+                    {saving
+                      ? "Salvando..."
+                      : editingCondominiumId
+                        ? "Salvar alterações"
+                        : "Cadastrar condomínio"}
+                  </button>
+                  {editingCondominiumId && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={handleCancelEdit}
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                </div>
               </div>
             </form>
           </section>
@@ -650,60 +671,67 @@ export function Dashboard() {
                 Nenhum condomínio cadastrado ainda.
               </p>
             ) : (
-              <div className="table-scroll">
-                <table className="condominium-table">
-                  <thead>
-                    <tr>
-                      <th>Condomínio</th>
-                      <th>Cidade</th>
-                      <th>Blocos</th>
-                      <th>Status</th>
-                      <th>Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {condominiums.map((condominium) => (
-                      <tr key={condominium.id}>
-                        <td>{condominium.name}</td>
-                        <td>
-                          {condominium.city}, {condominium.state}
-                        </td>
-                        <td>{condominium.block_count}</td>
-                        <td>
+              <div className="admin-condominium-list">
+                {condominiums.map((condominium) => (
+                  <article
+                    className="admin-condominium-card"
+                    key={condominium.id}
+                  >
+                    <div className="admin-condominium-info">
+                      <div className="admin-condominium-heading">
+                        <span className="admin-condominium-icon" aria-hidden="true">
+                          <Building2 size={18} />
+                        </span>
+                        <h3>{condominium.name}</h3>
+                        <span
+                          className={`admin-status-badge${
+                            condominium.status === "active"
+                              ? " is-active"
+                              : " is-inactive"
+                          }`}
+                        >
                           {condominium.status === "active" ? "Ativo" : "Inativo"}
-                        </td>
-                        <td className="table-actions">
-                          <button
-                            className="text-button"
-                            type="button"
-                            onClick={() =>
-                              handleEditCondominium(condominium)
-                            }
-                          >
-                            Editar
-                          </button>
-                          <Link
-                            className="text-button"
-                            to={`/condominiums/${condominium.id}/units`}
-                          >
-                            Blocos, unidades e equipe
-                          </Link>
-                          <button
-                            className="text-button danger-text-button"
-                            type="button"
-                            onClick={() => {
-                              setDeleteTarget(condominium);
-                              setDeleteConfirmation("");
-                              setDeleteError("");
-                            }}
-                          >
-                            Excluir
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </span>
+                      </div>
+                      <p>
+                        {condominium.city}, {condominium.state} ·{" "}
+                        {condominium.street
+                          ? `${condominium.street}, ${condominium.number ?? "s/n"}`
+                          : "Endereço não informado"}
+                      </p>
+                      <p className="admin-condominium-meta">
+                        {condominium.block_count} bloco(s)
+                        {condominium.cep ? ` · CEP ${condominium.cep}` : ""}
+                      </p>
+                    </div>
+                    <div className="admin-card-actions">
+                      <Link
+                        className="secondary-button button-link"
+                        to={`/condominiums/${condominium.id}/units`}
+                      >
+                        Abrir <ArrowUpRight size={15} aria-hidden="true" />
+                      </Link>
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => handleEditCondominium(condominium)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        className="text-button danger-text-button"
+                        type="button"
+                        onClick={() => {
+                          setDeleteTarget(condominium);
+                          setDeleteConfirmation("");
+                          setDeleteError("");
+                        }}
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  </article>
+                ))}
               </div>
             )}
           </section>
