@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
+import { ChevronDown } from "lucide-react";
 import { CondominiumOperators } from "./CondominiumOperators";
 import { ConfirmationDialog } from "../components/ConfirmationDialog";
 import { UnitResidentsPanel } from "../components/UnitResidentsPanel";
@@ -55,6 +56,8 @@ export function CondominiumUnits() {
   const [savingBatch, setSavingBatch] = useState(false);
   const [managementTab, setManagementTab] = useState<"units" | "team">("units");
   const [unitMode, setUnitMode] = useState<"single" | "batch">("single");
+  const [unitSearch, setUnitSearch] = useState("");
+  const [collapsedFloors, setCollapsedFloors] = useState<string[]>([]);
   const [deleteUnitTarget, setDeleteUnitTarget] = useState<Unit | null>(null);
 
   useEffect(() => {
@@ -403,7 +406,24 @@ export function CondominiumUnits() {
   const displayedUnits = blocks.length
     ? units.filter((unit) => unit.block_id === selectedBlockId)
     : units;
-  const floorGroups = groupUnitsByFloor(displayedUnits);
+  const normalizedUnitSearch = unitSearch.trim().toLocaleLowerCase("pt-BR");
+  const filteredUnits = normalizedUnitSearch
+    ? displayedUnits.filter((unit) =>
+        unit.unit_number.toLocaleLowerCase("pt-BR").includes(normalizedUnitSearch),
+      )
+    : displayedUnits;
+  const floorGroups = groupUnitsByFloor(filteredUnits);
+  const allFloorsCollapsed =
+    floorGroups.length > 0 &&
+    floorGroups.every((group) => collapsedFloors.includes(group.key));
+
+  function toggleFloor(key: string) {
+    setCollapsedFloors((current) =>
+      current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [...current, key],
+    );
+  }
 
   let batchPreview = "";
   try {
