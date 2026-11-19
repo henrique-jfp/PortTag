@@ -2054,11 +2054,41 @@ export function PorterReception() {
         return;
       }
 
+      // Canal automático: dispara Edge Function em background
+      if (notification.channel === "whatsapp" && notification.status === "pending") {
+        setNotificationMessage("Enviando aviso automático ao morador...");
+        try {
+          const { data: sendResult, error: sendError } =
+            await supabase.functions.invoke("send-package-notification", {
+              body: { notificationId: notification.id },
+            });
+          if (sendError || sendResult?.status === "failed") {
+            // Falha no envio automático: oferece fallback manual
+            const link = whatsappLink(notification.recipient, notification.message);
+            setNotificationMessage(
+              "Envio automático falhou. Clique abaixo para enviar manualmente:",
+            );
+            setNotificationLink(link);
+          } else {
+            setNotificationMessage("✅ Morador avisado automaticamente pelo WhatsApp!");
+          }
+        } catch {
+          // Fallback manual se a Edge Function não estiver disponível
+          const link = whatsappLink(notification.recipient, notification.message);
+          setNotificationMessage(
+            "Envio automático indisponível. Clique abaixo para enviar manualmente:",
+          );
+          setNotificationLink(link);
+        }
+      } else {
+        // Canal manual: abre wa.me como antes
+        const link = whatsappLink(notification.recipient, notification.message);
+        setNotificationMessage("Aviso registrado. Abrindo o WhatsApp...");
+        setNotificationLink(link);
+        window.open(link, "_blank", "noopener,noreferrer");
+      }
+
       await reloadPackages();
-      const link = whatsappLink(notification.recipient, notification.message);
-      setNotificationMessage("Aviso registrado. Abrindo o WhatsApp...");
-      setNotificationLink(link);
-      window.open(link, "_blank", "noopener,noreferrer");
     } catch (error) {
       setPageError(
         error instanceof Error
@@ -3559,7 +3589,7 @@ export function PorterReception() {
                           onClick={() => void notifyPackage(item.id)}
                         >
                           {notifyingId === item.id
-                            ? "Abrindo o WhatsApp..."
+                            ? "Enviando..."
                             : item.last_notified_at
                               ? "Avisar novamente"
                               : "Avisar morador"}

@@ -5,6 +5,7 @@ import {
   ClipboardList,
   LayoutDashboard,
   LogOut,
+  MessageCircle,
   ShieldCheck,
   Users,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import { ManagerPortersPanel } from "../components/manager/ManagerPortersPanel";
 import { ManagerReportsPanel } from "../components/manager/ManagerReportsPanel";
 import { ManagerResidentsPanel } from "../components/manager/ManagerResidentsPanel";
 import { ManagerStructurePanel } from "../components/manager/ManagerStructurePanel";
+import { WhatsAppSettings } from "../components/WhatsAppSettings";
 import { supabase } from "../lib/supabase";
 
 type Condominium = {
@@ -33,7 +35,8 @@ type Section =
   | "reports"
   | "residents"
   | "porters"
-  | "structure";
+  | "structure"
+  | "whatsapp";
 
 type NotebookTab = "records" | "audit";
 type StructureTab = "address" | "units";
@@ -45,6 +48,7 @@ const sections: { id: Section; label: string; icon: typeof LayoutDashboard }[] =
   { id: "residents", label: "Moradores", icon: Users },
   { id: "porters", label: "Porteiros", icon: ShieldCheck },
   { id: "structure", label: "Estrutura", icon: Building2 },
+  { id: "whatsapp", label: "WhatsApp", icon: MessageCircle },
 ];
 
 /**
@@ -184,6 +188,7 @@ export function ManagerLedger() {
     section === "porters" ||
     section === "reports" ||
     section === "structure" ||
+    section === "whatsapp" ||
     (section === "notebook" && notebookTab === "audit");
 
   return (
@@ -367,6 +372,13 @@ export function ManagerLedger() {
           {section === "reports" && activeBuildingId && (
             <ManagerReportsPanel
               key={activeBuildingId}
+              condominiumId={activeBuildingId}
+            />
+          )}
+
+          {section === "whatsapp" && activeBuildingId && (
+            <WhatsAppSettings
+              key={`${activeBuildingId}-whatsapp`}
               condominiumId={activeBuildingId}
             />
           )}

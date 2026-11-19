@@ -156,6 +156,8 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 23. `supabase/migrations/20261119140000_label_lab_console.sql`
 24. `supabase/migrations/20261119150000_fix_label_lab_storage_deletion.sql`
 25. `supabase/migrations/20261119160000_delete_label_lab_ruleset.sql`
+26. `supabase/migrations/20261119170000_label_lab_active_rules.sql`
+27. `supabase/migrations/20261119200000_condominium_whatsapp_evolution.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o

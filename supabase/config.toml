@@ -24,3 +24,10 @@ verify_jwt = false
 
 [functions.admin-label-lab]
 verify_jwt = true
+
+[functions.manage-condominium-whatsapp]
+verify_jwt = true
+
+[functions.send-package-notification]
+verify_jwt = true
+

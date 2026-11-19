@@ -619,3 +619,136 @@
     max-width: none;
   }
 }
+
+
+/* ── WhatsApp Settings ─────────────────────────────────────────────── */
+
+.manager-whatsapp-settings {
+  max-width: 600px;
+  padding: 1.25rem;
+}
+
+.manager-whatsapp-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.manager-whatsapp-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.manager-whatsapp-status {
+  margin-bottom: 1rem;
+}
+
+.manager-whatsapp-status p {
+  margin: 0.5rem 0 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #666);
+}
+
+.manager-whatsapp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.manager-whatsapp-connected {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.manager-whatsapp-connecting {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.manager-whatsapp-disconnected {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.manager-whatsapp-qr {
+  text-align: center;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.manager-whatsapp-qr img {
+  max-width: 260px;
+  width: 100%;
+  image-rendering: pixelated;
+}
+
+.manager-whatsapp-qr small {
+  display: block;
+  margin-top: 0.75rem;
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.manager-whatsapp-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.manager-whatsapp-test {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.manager-whatsapp-test input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.manager-whatsapp-disconnect {
+  color: #dc2626 !important;
+  font-size: 0.8rem;
+}
+
+.manager-primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: #25d366;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.manager-primary-button:hover:not(:disabled) {
+  background: #20bd5a;
+}
+
+.manager-primary-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
