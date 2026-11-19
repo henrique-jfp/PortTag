@@ -623,3 +623,329 @@
     flex: 1;
   }
 }
+
+/* Central do Label Lab */
+.dashboard .lab-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.dashboard .lab-card {
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: var(--admin-surface);
+}
+
+.dashboard .lab-card h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.dashboard .lab-hint {
+  margin: 4px 0 12px;
+  color: var(--admin-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dashboard .lab-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.dashboard .lab-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #e8eefb;
+  color: var(--admin-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.dashboard .lab-preview {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  margin-bottom: 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.dashboard .lab-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.dashboard .lab-results h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.dashboard .lab-result {
+  padding: 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.dashboard .lab-result-ok {
+  border-left: 4px solid #2e8b57;
+}
+
+.dashboard .lab-result-error {
+  border-left: 4px solid #b42318;
+}
+
+.dashboard .lab-result > header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.dashboard .lab-result > header span {
+  color: var(--admin-muted);
+}
+
+.dashboard .lab-field-grid,
+.dashboard .lab-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.dashboard .lab-field-grid div,
+.dashboard .lab-details div {
+  min-width: 0;
+}
+
+.dashboard .lab-field-grid dt,
+.dashboard .lab-details dt {
+  color: var(--admin-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dashboard .lab-field-grid dd,
+.dashboard .lab-details dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.dashboard .lab-suggestions {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--admin-border);
+}
+
+.dashboard .lab-suggestions h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.dashboard .lab-suggestion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.dashboard .lab-suggestion + .lab-suggestion {
+  border-top: 1px solid #edf0f6;
+}
+
+.dashboard .lab-suggestion code,
+.dashboard .lab-table code,
+.dashboard .lab-artifact code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.dashboard .lab-suggestion p {
+  margin: 2px 0 0;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.dashboard .lab-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.dashboard .lab-toolbar .form-field {
+  flex: 1 1 180px;
+  margin-top: 0;
+}
+
+.dashboard .lab-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.dashboard .lab-rule-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dashboard .lab-rule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.dashboard .lab-rule-row + .lab-rule-row {
+  border-top: 1px solid #edf0f6;
+}
+
+.dashboard .lab-rule-row .form-field {
+  margin-top: 0;
+}
+
+.dashboard .lab-table-wrap {
+  overflow-x: auto;
+  margin-top: 14px;
+}
+
+.dashboard .lab-table-wrap h3 {
+  font-size: 15px;
+}
+
+.dashboard .lab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dashboard .lab-table th,
+.dashboard .lab-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--admin-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.dashboard .lab-table th {
+  color: var(--admin-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dashboard .lab-status {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dashboard .lab-status-ok {
+  background: #e7f6ed;
+  color: #1b7a45;
+}
+
+.dashboard .lab-status-error {
+  background: #fdeceb;
+  color: #a32121;
+}
+
+.dashboard .lab-version-list {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.dashboard .lab-version {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dashboard .lab-version:hover {
+  border-color: #b9c9ea;
+  background: var(--admin-primary-soft);
+}
+
+.dashboard .lab-version-active {
+  border-color: var(--admin-primary);
+  background: var(--admin-primary-soft);
+}
+
+.dashboard .lab-version small {
+  grid-column: 1 / -1;
+  color: var(--admin-muted);
+}
+
+.dashboard .lab-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 10px;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dashboard .lab-artifact {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #bfe6cf;
+  border-radius: 10px;
+  background: #f4fbf6;
+}
+
+.dashboard .lab-artifact p {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .dashboard .lab-grid,
+  .dashboard .lab-rule-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard .lab-rule-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

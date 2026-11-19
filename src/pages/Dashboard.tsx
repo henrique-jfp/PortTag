@@ -353,6 +353,9 @@ export function Dashboard() {
               >
                 Caderno
               </button>
+              <Link className="secondary-button button-link" to="/label-lab">
+                Label Lab
+              </Link>
               <a className="secondary-button button-link" href="/porter.html">
                 App Porteiro
               </a>

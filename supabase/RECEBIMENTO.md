@@ -55,6 +55,17 @@
     retenção em `label_lab_settings` e a auditoria `label_lab_audit`. Nenhuma
     policy concede escrita a `anon` ou `authenticated`; somente o Super Admin
     lê as tabelas e as Edge Functions escrevem com `service_role`.
+    Depois aplique `20261119140000_label_lab_console.sql`: cria
+    `label_lab_rulesets` (versões `draft`, `approved`, `published` e
+    `superseded`, com regras, regressão, artefato, checksum e amostras de
+    origem), amplia as ações em `label_lab_audit` e adiciona as RPCs
+    `enqueue_label_lab_manual_sample`, `discard_label_lab_sample`,
+    `save_label_lab_ruleset`, `approve_label_lab_ruleset` e
+    `publish_label_lab_ruleset`. Aprovar apenas registra o aceite com o texto
+    `APROVAR` e a regressão verde. Publicar exige `PUBLICAR` e a
+    exclusão/sanitização das amostras usadas pela RPC
+    `purge_label_lab_samples_for_ruleset`, reexecutada para cobrir amostras que
+    entraram depois. Nenhuma regra altera CEP, logradouro ou número.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
@@ -117,6 +128,13 @@
    `service_role` em `src/` ou no repositório. O envio da amostra acontece
    depois do OCR, sem segunda leitura de imagem, e falhas de rede são
    ignoradas pelo app.
+
+   A Central do Label Lab usa esse mesmo `LABEL_LAB_SECRET` e a Edge Function
+   `admin-label-lab`, que exige JWT e perfil de Super Admin:
+
+   ```powershell
+   supabase functions deploy admin-label-lab
+   ```
 
    As funções `manage-porter` e `manage-manager` verificam a sessão no servidor.
    `manage-manager` exige perfil Super Admin; `manage-porter` aceita também o
@@ -330,6 +348,45 @@ select public.update_label_lab_settings(
 A limpeza apaga o arquivo do bucket, zera `ocr_text`, rastreio, resultado
 parseado, diagnóstico e análise, e grava apenas metadados em
 `label_lab_audit`. Fotos órfãs (upload concluído sem tarefa persistida) também
-são reconciliadas. A publicação de regex continua dependendo de aprovação
-explícita, teste de regressão e artefato versionado; este pipeline apenas
-prepara e conserva a evidência por tempo limitado.
+são reconciliadas. Este pipeline apenas prepara e conserva a evidência por
+tempo limitado; a publicação de regex depende da Central do Label Lab,
+descrita abaixo.
+
+## Central do Label Lab
+
+A Central fica no app Super Admin: o atalho **Label Lab** no painel abre
+`/label-lab` (em `index.html`). A tela importa até 6 fotos e envia cada uma à
+Edge Function `admin-label-lab`. **Analisar** mostra o OCR e as sugestões sem
+guardar nada; **Salvar como amostra** grava a imagem no bucket privado
+`label-lab-private` e cria a tarefa na fila. As amostras vindas do porteiro
+também aparecem na lista e podem ser reanalisadas ou descartadas.
+
+O fluxo de calibração é: analisar → incluir sugestões no editor de regex →
+criar casos de regressão a partir das amostras → **Testar** (a regex roda
+contra o OCR salvo e já grava um rascunho) → **Salvar rascunho** → **Aprovar**
+→ **Publicar**. **Aprovar** exige o texto `APROVAR` e a regressão verde, apenas
+registrando o aceite. **Publicar** exige `PUBLICAR` e a exclusão/sanitização das
+amostras usadas por `purge_label_lab_samples_for_ruleset`, reexecutada para
+cobrir amostras que entraram depois; o artefato JSON versionado fica disponível
+para download. Nenhuma regra altera CEP, logradouro ou número — a decisão de
+endereço continua determinística no banco.
+
+`admin-label-lab` roda com `verify_jwt = true`: valida o JWT, exige
+`profiles.is_super_admin`, chama `label-lab` com o segredo já existente
+`LABEL_LAB_SECRET`, lê as fotos do bucket privado e chama as RPCs
+`enqueue_label_lab_manual_sample`, `discard_label_lab_sample`,
+`save_label_lab_ruleset`, `approve_label_lab_ruleset` e
+`publish_label_lab_ruleset`. Nenhum segredo é exposto ao frontend. A coleta e a
+limpeza automática seguem nos schedules já publicados; não crie segredos nem
+jobs novos.
+
+### Publicar
+
+1. Aplique a migration `20261119140000_label_lab_console.sql` no SQL Editor e
+   execute `supabase functions deploy admin-label-lab`.
+2. Mantenha `LABEL_LAB_SECRET`, `LABEL_LAB_WORKER_SECRET`,
+   `LABEL_LAB_CLEANUP_SECRET` e os schedules `process-label-lab-queue` e
+   `cleanup-label-lab` como estão.
+3. Antes de publicar o frontend, rode `npm test`, `npm run lint` e
+   `npm run build`. Após commit/push, publique as páginas com o script
+   `scripts/deploy-pvserver.sh` descrito no README.

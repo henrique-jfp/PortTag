@@ -149,6 +149,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 20. `supabase/migrations/20261118180000_package_drawer_pagination.sql`
 21. `supabase/migrations/20261119120000_manager_administration.sql`
 22. `supabase/migrations/20261119130000_label_lab_collection.sql`
+23. `supabase/migrations/20261119140000_label_lab_console.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -164,6 +165,49 @@ A migração 22 cria o bucket privado `label-lab-private`, a fila
 pode consultar essas tabelas, e a escrita acontece nas Edge Functions. A coleta
 pode ser desativada sem redeploy com
 `select public.update_label_lab_settings(p_collection_enabled => false);`.
+
+A migração 23 cria `label_lab_rulesets`, que versiona regras nos estados
+`draft`, `approved`, `published` e `superseded` e guarda a regressão, o
+artefato, o checksum e as amostras de origem. Ela amplia as ações registradas
+em `label_lab_audit` e adiciona as RPCs `enqueue_label_lab_manual_sample`,
+`discard_label_lab_sample`, `save_label_lab_ruleset`,
+`approve_label_lab_ruleset` e `publish_label_lab_ruleset`. A aprovação apenas
+registra o aceite com o texto `APROVAR` e a regressão verde. A publicação pede
+`PUBLICAR`, exige a exclusão/sanitização das amostras usadas por
+`purge_label_lab_samples_for_ruleset` — a purga é reexecutada para cobrir
+amostras que entraram depois. As regras nunca tocam CEP, logradouro ou número:
+a decisão de endereço permanece determinística no servidor.
+
+### Central do Label Lab
+
+O atalho **Label Lab** no painel do Super Admin abre `/label-lab` (em
+`index.html`). A tela importa até 6 fotos: **Analisar** mostra o OCR e as
+sugestões sem guardar nada, e **Salvar como amostra** envia a imagem ao bucket
+privado e à fila. As amostras coletadas pelo porteiro também aparecem na lista
+e podem ser reanalisadas ou descartadas.
+
+Para calibrar, adicione sugestões ao editor de regex, crie casos de regressão
+a partir das amostras, rode **Testar**, salve o rascunho, aprove e publique.
+**Aprovar** pede o texto `APROVAR` e a regressão verde, apenas registrando o
+aceite. **Publicar** pede `PUBLICAR`, exige a exclusão/sanitização das amostras
+usadas por `purge_label_lab_samples_for_ruleset` (a purga é reexecutada para
+alcançar amostras que entraram depois) e disponibiliza o artefato JSON
+versionado para download. Nenhuma regra publicada altera CEP, logradouro ou
+número.
+
+A Edge Function `admin-label-lab` (`verify_jwt = true`) valida o JWT, exige
+`profiles.is_super_admin`, chama `label-lab` com o segredo já existente
+`LABEL_LAB_SECRET`, lê as fotos do bucket privado e chama as RPCs; nenhum
+segredo chega ao frontend. Para implantar, aplique a migration
+`20261119140000_label_lab_console.sql` e publique a função:
+
+```powershell
+supabase functions deploy admin-label-lab
+```
+
+Mantenha os schedules e o `LABEL_LAB_SECRET` atuais — nenhum segredo novo é
+necessário. Antes de publicar o frontend (com o script `deploy-pvserver.sh`
+acima, após commit/push), rode `npm test`, `npm run lint` e `npm run build`.
 
 Crie e confirme a conta responsável pela plataforma em Supabase
 Authentication > Users. Promova somente essa conta no SQL Editor, substituindo

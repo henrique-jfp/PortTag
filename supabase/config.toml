@@ -21,3 +21,6 @@ verify_jwt = false
 
 [functions.cleanup-label-lab]
 verify_jwt = false
+
+[functions.admin-label-lab]
+verify_jwt = true

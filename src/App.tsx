@@ -10,6 +10,12 @@ const CondominiumUnits = lazy(() =>
   })),
 );
 
+const LabelLab = lazy(() =>
+  import("./pages/LabelLab").then((module) => ({
+    default: module.LabelLab,
+  })),
+);
+
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
 
@@ -57,6 +63,21 @@ export default function App() {
               }
             >
               <CondominiumUnits />
+            </Suspense>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/label-lab"
+        element={
+          <ProtectedRoute>
+            <Suspense
+              fallback={
+                <div className="loading-screen">Carregando Label Lab...</div>
+              }
+            >
+              <LabelLab />
             </Suspense>
           </ProtectedRoute>
         }
