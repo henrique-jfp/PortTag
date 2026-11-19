@@ -2449,6 +2449,10 @@ export function PorterReception() {
                     <Camera size={22} aria-hidden="true" />
                     <span>Tirar foto</span>
                   </button>
+                  <p className="field-hint">
+                    Na câmera, toque na etiqueta para focar e segure firme. Lente
+                    limpa e boa luz evitam leitura embaçada.
+                  </p>
                   {!units.length && (
                     <p className="porter-error">
                       Não há apartamentos ativos vinculados ao seu bloco.

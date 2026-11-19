@@ -250,12 +250,16 @@ Deno.serve(async (request: Request) => {
     ocrWords = read.words;
     ocrMs = read.durationMs;
   } catch (error) {
-    console.error(
-      "extract-package-label: falha na Vision",
-      error instanceof Error ? error.message : String(error),
-    );
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("extract-package-label: falha na Vision", detail);
+    const quotaExhausted = /Cota da Vision esgotada/i.test(detail);
     return respond(
-      { error: "Não foi possível ler a etiqueta na nuvem.", fallback: true },
+      {
+        error: quotaExhausted
+          ? "Cota da Vision esgotada. Ative o faturamento no Google Cloud."
+          : "Não foi possível ler a etiqueta na nuvem.",
+        fallback: true,
+      },
       502,
     );
   }
@@ -263,16 +267,20 @@ Deno.serve(async (request: Request) => {
   // 1º voto: regras determinísticas. Rastreio e transportadora ficam aqui para
   // sempre — o LLM erra esses dois campos e não é determinístico.
   const rules = parseLabel(ocrText);
-  const preliminary = labelFrom(rules, expectedAddress);
   const groqKey = (Deno.env.get("GROQ_API_KEY") ?? "").trim();
   const remainingMs = requestBudgetMs - (Date.now() - requestStartedAt);
+  // A IA entra só quando falta campo. Um CEP divergente é decisão determinística:
+  // chamar o LLM só porque o endereço é de outro prédio custava ~2 s e não
+  // mudava o resultado — o endereço nunca é decidido pela IA.
   const needsAi =
     ocrText.length >= 20 &&
     Boolean(groqKey) &&
     remainingMs >= 800 &&
     (!rules.recipient_name ||
       !rules.unit_number ||
-      preliminary.status !== "verified");
+      !rules.destination_cep ||
+      !rules.destination_street ||
+      !rules.destination_number);
 
   const diagnostics: Record<string, unknown> = {
     engine: needsAi ? "vision+regras+groq" : "vision+regras",

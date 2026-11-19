@@ -193,6 +193,14 @@ export async function readLabelText(
   if (!response.ok) {
     const status = response.status;
     const message = (payload as { error?: { message?: string } })?.error?.message;
+    if (
+      status === 429 ||
+      /resource_exhausted|quota|rate limit/i.test(message ?? "")
+    ) {
+      throw new Error(
+        "Cota da Vision esgotada. Ative o faturamento no Google Cloud.",
+      );
+    }
     throw new Error(`Vision respondeu ${status}${message ? `: ${message}` : ""}`);
   }
 
@@ -201,7 +209,14 @@ export async function readLabelText(
   }).responses?.[0];
   if (!result) throw new Error("Vision não devolveu resposta.");
   const error = result.error as { message?: string } | undefined;
-  if (error?.message) throw new Error(`Vision: ${error.message}`);
+  if (error?.message) {
+    if (/resource_exhausted|quota|rate limit/i.test(error.message)) {
+      throw new Error(
+        "Cota da Vision esgotada. Ative o faturamento no Google Cloud.",
+      );
+    }
+    throw new Error(`Vision: ${error.message}`);
+  }
 
   const annotation = (result.fullTextAnnotation ?? {}) as {
     text?: string;
