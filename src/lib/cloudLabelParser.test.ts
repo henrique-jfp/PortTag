@@ -132,6 +132,21 @@ describe("parser da extração na nuvem", () => {
     expect(parseLabel(mercadoLivreLabel).destination_cep).toBe("22260-040");
   });
 
+  it("lê transportadora e código de entrega de etiqueta Shippify", () => {
+    const parsed = parseLabel(
+      [
+        "TRANSP: SHIPPIFY TECNOLOGIA LTDA",
+        "REMETENTE",
+        "R GENERAL POLIDORO, 113",
+        "CODIGO DE ENTREGA",
+        "048888",
+      ].join("\n"),
+    );
+
+    expect(parsed.carrier).toBe("Shippify");
+    expect(parsed.tracking_code).toBe("048888");
+  });
+
   it("usa o nome impresso para corrigir a transportadora deduzida do código", () => {
     const jadlog = parseLabel(
       "jadlog\nDESTINATARIO\nNome Sobrenome\n18250937612",

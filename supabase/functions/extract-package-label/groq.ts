@@ -16,7 +16,7 @@ const systemPrompt = [
   '- unit_number é só o número da unidade (ex.: "901", "102B", "Cobertura 1"). block_name é o bloco/torre (ex.: "A", "Bloco 2").',
   "- destination_cep deve conter somente dígitos.",
   "- destination_street é o logradouro, sem o número. destination_number é o número do imóvel.",
-  '- carrier deve ser uma destas opções: "Correios", "Amazon", "Shopee", "Anjun", "J&T Express", "iMile", "Mercado Livre", "unknown".',
+  '- carrier deve ser uma destas opções: "Correios", "Amazon", "Shopee", "Anjun", "J&T Express", "iMile", "Mercado Livre", "Jadlog", "Total Express", "Shippify", "unknown".',
   "- Só identifique a transportadora pelo nome impresso ou pelo formato do rastreio. Na dúvida, use \"unknown\".",
   "- Se o texto tiver mais de um endereço (remetente e destinatário), escolha o do destinatário.",
 ].join("\n");

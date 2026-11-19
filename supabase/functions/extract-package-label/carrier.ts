@@ -13,6 +13,7 @@ export const carrierValues = [
   "Mercado Livre",
   "Jadlog",
   "Total Express",
+  "Shippify",
   "unknown",
 ] as const;
 

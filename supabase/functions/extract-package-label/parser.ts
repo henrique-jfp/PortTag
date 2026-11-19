@@ -8,6 +8,9 @@
  */
 
 const trackingPatterns: Array<[string, RegExp]> = [
+  // Regra publicada no Label Lab v1 (artefato label-lab-rules/v1): o código de
+  // entrega de 6 dígitos vem logo depois de "CODIGO DE ENTREGA".
+  ["Shippify", /CODIGO DE ENTREGA\s*(\d{6})/i],
   ["Correios", /\b[A-Z]{2}[\s-]*\d{3}[\s-]*\d{3}[\s-]*\d{3}[\s-]*[A-Z]{2}\b/i],
   ["Amazon", /\bTBR[\s-]*\d{9,12}\b/i],
   ["Amazon", /\bAMZC[\s-]*\d{9}[\s-]*[A-Z]{2}\b/i],
@@ -33,6 +36,8 @@ const carrierNamePatterns: Array<[string, RegExp]> = [
   ["Mercado Livre", /\b(?:mercado\s*livre|meli|ml)\b/i],
   ["Jadlog", /\bjadlog\b/i],
   ["Total Express", /\btotal\s*express\b/i],
+  // Mesma regra publicada no Label Lab v1: "TRANSP: SHIPPIFY TECNOLOGIA LTDA".
+  ["Shippify", /TRANSP:\s*SHIPPIFY\b/i],
 ];
 
 function findCarrierFromName(text: string) {
@@ -48,7 +53,9 @@ function findTracking(text: string) {
     if (match) {
       return {
         carrier: findCarrierFromName(text) || carrier,
-        code: match[0].replace(/[\s-]/g, "").toUpperCase(),
+        // Regras com grupo de captura devolvem só o valor desejado, sem o
+        // rótulo ("CODIGO DE ENTREGA 048888" -> "048888").
+        code: (match[1] ?? match[0]).replace(/[\s-]/g, "").toUpperCase(),
       };
     }
   }

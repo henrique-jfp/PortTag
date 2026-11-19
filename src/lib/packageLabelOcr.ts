@@ -69,6 +69,7 @@ const courierNames = [
   ["cainiao", "Cainiao"],
   ["aliexpress", "AliExpress"],
   ["anjun", "Anjun"],
+  ["shippify", "Shippify"],
   ["pegaki", "Pegaki"],
   ["kangu", "Kangu"],
   ["braspress", "Braspress"],
@@ -109,7 +110,7 @@ function isOrderIdLine(line: string) {
 }
 
 const trackingLabelPattern =
-  /\b(?:c[oó]digo\s+de\s+(?:rastreio|rastreamento)|rastreio|rastreamento|tracking(?:\s*(?:code|number|id|no))?|awb)\b\s*[:#-]?\s*/i;
+  /\b(?:c[oó]digo\s+de\s+(?:rastreio|rastreamento|entrega)|rastreio|rastreamento|tracking(?:\s*(?:code|number|id|no))?|awb)\b\s*[:#-]?\s*/i;
 
 export function extractTrackingCode(value: string) {
   const lines = value.split(/\r?\n/).map((line) => line.trim());
@@ -127,6 +128,12 @@ export function extractTrackingCode(value: string) {
     const nextLine = lines[lineIndex + 1] ?? "";
     for (const candidate of [valueAfterLabel, nextLine]) {
       if (!candidate || isOrderIdLine(candidate)) continue;
+      // Etiquetas Shippify (regra publicada no Label Lab v1) imprimem um
+      // "CODIGO DE ENTREGA" de 6 dígitos, abaixo do rótulo.
+      if (/c[oó]digo\s+de\s+entrega/i.test(labelMatch[0])) {
+        const deliveryCode = candidate.match(/\b\d{6}\b/);
+        if (deliveryCode) return deliveryCode[0];
+      }
       const knownCode = extractKnownTrackingCode(candidate);
       if (knownCode) return knownCode;
       const numericCode = candidate.match(/\b\d{10,20}\b/);

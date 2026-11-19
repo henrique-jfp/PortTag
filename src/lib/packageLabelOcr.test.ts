@@ -38,6 +38,10 @@ describe("código de rastreio", () => {
   it("não confunde o Order ID da Amazon com rastreio", () => {
     expect(extractTrackingCode("Order ID: 702-5292765-3347456")).toBe("");
   });
+
+  it("lê o código de entrega de 6 dígitos das etiquetas Shippify", () => {
+    expect(extractTrackingCode("CODIGO DE ENTREGA\n048888")).toBe("048888");
+  });
 });
 
 describe("código de barras", () => {
@@ -97,6 +101,14 @@ describe("transportadora", () => {
 
   it("identifica o Mercado Livre pelo texto da etiqueta", () => {
     expect(detectDeliveryCompany("Mercado Livre Envios")).toBe("Mercado Livre");
+  });
+
+  it("identifica a Shippify pelo cabeçalho TRANSP da etiqueta", () => {
+    expect(
+      detectDeliveryCompany(
+        "TRANSP: SHIPPIFY TECNOLOGIA LTDA\nCODIGO DE ENTREGA\n048888",
+      ),
+    ).toBe("Shippify");
   });
 });
 
