@@ -5,6 +5,47 @@ import { PackageNotebook, type NotebookBuilding } from "../components/PackageNot
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
 
+type AccessDuration =
+  | "none"
+  | "7d"
+  | "14d"
+  | "1m"
+  | "3m"
+  | "6m"
+  | "1y";
+
+const accessDurationOptions: { value: AccessDuration; label: string }[] = [
+  { value: "none", label: "Sem expiração" },
+  { value: "7d", label: "7 dias" },
+  { value: "14d", label: "14 dias" },
+  { value: "1m", label: "1 mês" },
+  { value: "3m", label: "3 meses" },
+  { value: "6m", label: "6 meses" },
+  { value: "1y", label: "1 ano" },
+];
+
+function accessDurationLabel(value: string | null): string {
+  return (
+    accessDurationOptions.find((option) => option.value === value)?.label ??
+    "Não informado"
+  );
+}
+
+function accessExpiryLabel(expiresAt: string | null): string {
+  if (!expiresAt) return "Sem expiração";
+  const date = new Date(expiresAt);
+  if (Number.isNaN(date.getTime())) return "Data inválida";
+  return date.toLocaleString("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+function isCondominiumExpired(condominium: Condominium): boolean {
+  if (!condominium.access_expires_at) return false;
+  return new Date(condominium.access_expires_at).getTime() <= Date.now();
+}
+
 type Condominium = {
   id: string;
   name: string;
@@ -16,6 +57,8 @@ type Condominium = {
   state: string;
   block_count: number;
   status: "active" | "inactive";
+  access_expires_at: string | null;
+  access_duration: string | null;
   created_at: string;
 };
 
@@ -40,6 +83,7 @@ type CondominiumForm = {
   hasBlocks: boolean;
   blockCount: string;
   initialBlockName: string;
+  accessDuration: AccessDuration;
 };
 
 const emptyForm: CondominiumForm = {
@@ -53,6 +97,7 @@ const emptyForm: CondominiumForm = {
   blockCount: "0",
   hasBlocks: false,
   initialBlockName: "",
+  accessDuration: "none",
 };
 
 export function Dashboard() {
@@ -73,6 +118,10 @@ export function Dashboard() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [renewingCondominiumId, setRenewingCondominiumId] = useState("");
+  const [renewDuration, setRenewDuration] = useState<AccessDuration>("1m");
+  const [renewing, setRenewing] = useState(false);
+  const [renewError, setRenewError] = useState("");
   const [notebookOpen, setNotebookOpen] = useState(false);
 
   useEffect(() => {
@@ -110,7 +159,7 @@ export function Dashboard() {
       const { data, error: condominiumsError } = await supabase
         .from("condominiums")
         .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, created_at",
+          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
         )
         .order("created_at", { ascending: false });
 
@@ -219,6 +268,7 @@ export function Dashboard() {
             p_initial_block_name: form.hasBlocks
               ? form.initialBlockName.trim()
               : null,
+            p_access_duration: form.accessDuration,
           });
 
       if (error) {
@@ -237,7 +287,7 @@ export function Dashboard() {
       const { data, error: condominiumsError } = await supabase
         .from("condominiums")
         .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, created_at",
+          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
         )
         .order("created_at", { ascending: false });
 
@@ -270,6 +320,11 @@ export function Dashboard() {
       state: condominium.state,
       hasBlocks: condominium.block_count > 0,
       blockCount: String(condominium.block_count),
+      accessDuration: accessDurationOptions.some(
+        (option) => option.value === condominium.access_duration,
+      )
+        ? (condominium.access_duration as AccessDuration)
+        : "none",
     });
     document
       .getElementById("condominium-form")
@@ -323,6 +378,44 @@ export function Dashboard() {
       setDeleteError(`Não foi possível excluir o condomínio. ${message}`);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function handleRenewAccess() {
+    if (!renewingCondominiumId) return;
+
+    setRenewing(true);
+    setRenewError("");
+    try {
+      const { error } = await supabase.rpc("update_condominium_access", {
+        p_condominium_id: renewingCondominiumId,
+        p_access_duration: renewDuration,
+      });
+      if (error) {
+        setRenewError(error.message);
+        return;
+      }
+
+      const { data, error: listError } = await supabase
+        .from("condominiums")
+        .select(
+          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
+        )
+        .order("created_at", { ascending: false });
+      if (listError) {
+        setListError(listError.message);
+        return;
+      }
+      setListError("");
+      setCondominiums(data ?? []);
+      setSuccessMessage("Prazo de acesso atualizado.");
+      setRenewingCondominiumId("");
+    } catch (error) {
+      setRenewError(
+        error instanceof Error ? error.message : "Falha inesperada.",
+      );
+    } finally {
+      setRenewing(false);
     }
   }
 
@@ -636,6 +729,38 @@ export function Dashboard() {
               </section>
               )}
 
+              {!editingCondominiumId && (
+                <section className="admin-form-group" aria-label="Prazo de acesso">
+                  <h3>Prazo de acesso</h3>
+                  <p className="admin-form-group-hint">
+                    Defina por quanto tempo o síndico e o porteiro poderão usar o
+                    aplicativo. A contagem começa na confirmação do cadastro e
+                    pode ser renovada depois na lista de condomínios.
+                  </p>
+                  <div className="admin-form-grid">
+                    <label className="form-field form-field-wide">
+                      Duração do acesso
+                      <select
+                        required
+                        value={form.accessDuration}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            accessDuration: event.target.value as AccessDuration,
+                          }))
+                        }
+                      >
+                        {accessDurationOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </section>
+              )}
+
               <div className="admin-form-footer">
                 {formError && (
                   <p className="feedback-message feedback-error" role="alert">
@@ -721,6 +846,60 @@ export function Dashboard() {
                         {condominium.block_count} bloco(s)
                         {condominium.cep ? ` · CEP ${condominium.cep}` : ""}
                       </p>
+                      <p className="admin-condominium-meta">
+                        Acesso: {accessDurationLabel(condominium.access_duration)} ·{" "}
+                        {accessExpiryLabel(condominium.access_expires_at)}
+                        {isCondominiumExpired(condominium) && (
+                          <strong className="access-expired-label"> · Vencido</strong>
+                        )}
+                      </p>
+                      {renewingCondominiumId === condominium.id && (
+                        <div className="renew-access-form">
+                          {renewError && (
+                            <p className="feedback-message feedback-error" role="alert">
+                              {renewError}
+                            </p>
+                          )}
+                          <label className="form-field">
+                            Novo prazo
+                            <select
+                              value={renewDuration}
+                              onChange={(event) =>
+                                setRenewDuration(
+                                  event.target.value as AccessDuration,
+                                )
+                              }
+                            >
+                              {accessDurationOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <div className="form-actions">
+                            <button
+                              className="primary-button"
+                              type="button"
+                              disabled={renewing}
+                              onClick={() => void handleRenewAccess()}
+                            >
+                              {renewing ? "Salvando..." : "Aplicar prazo"}
+                            </button>
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              disabled={renewing}
+                              onClick={() => {
+                                setRenewingCondominiumId("");
+                                setRenewError("");
+                              }}
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div className="admin-card-actions">
                       <Link
@@ -729,6 +908,23 @@ export function Dashboard() {
                       >
                         Abrir <ArrowUpRight size={15} aria-hidden="true" />
                       </Link>
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => {
+                          setRenewingCondominiumId(condominium.id);
+                          setRenewDuration(
+                            accessDurationOptions.some(
+                              (option) => option.value === condominium.access_duration,
+                            )
+                              ? (condominium.access_duration as AccessDuration)
+                              : "1m",
+                          );
+                          setRenewError("");
+                        }}
+                      >
+                        Renovar prazo
+                      </button>
                       <button
                         className="text-button"
                         type="button"

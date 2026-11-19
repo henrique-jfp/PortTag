@@ -22,6 +22,26 @@ function respond(body: Record<string, unknown>, status = 200) {
   });
 }
 
+// service_role ignora RLS; a RPC confere prazo/status do condomínio no banco
+// antes de permitir criar ou reativar o vínculo do síndico.
+async function condominiumAccessError(
+  serviceClient: ReturnType<typeof createClient>,
+  condominiumId: string,
+): Promise<{ error: string; status: number } | null> {
+  const { data, error } = await serviceClient.rpc("condominium_access_is_active", {
+    p_condominium_id: condominiumId,
+  });
+  if (error) return { error: error.message, status: 500 };
+  if (data !== true) {
+    return {
+      error:
+        "O prazo de acesso deste condomínio venceu ou o condomínio está inativo. Entre em contato com o suporte técnico para regularizar.",
+      status: 403,
+    };
+  }
+  return null;
+}
+
 function randomIndex(maxExclusive: number) {
   const range = 0x1_0000_0000;
   const limit = Math.floor(range / maxExclusive) * maxExclusive;
@@ -151,6 +171,8 @@ Deno.serve(async (request: Request) => {
     if (!condominium || condominium.status !== "active") {
       return respond({ error: "Condomínio ativo não encontrado." }, 404);
     }
+    const accessError = await condominiumAccessError(serviceClient, condominiumId);
+    if (accessError) return respond({ error: accessError.error }, accessError.status);
 
     const password = createTemporaryPassword();
     const { data: createdUser, error: createUserError } =
@@ -220,6 +242,14 @@ Deno.serve(async (request: Request) => {
     }
     if (input.action === "activate" && membership.status === "active") {
       return respond({ error: "Este síndico já está ativo." }, 409);
+    }
+
+    if (input.action === "activate") {
+      const accessError = await condominiumAccessError(
+        serviceClient,
+        membership.condominium_id,
+      );
+      if (accessError) return respond({ error: accessError.error }, accessError.status);
     }
 
     const { data: authUser, error: authUserError } =

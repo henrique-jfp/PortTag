@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { AccessExpiredNotice } from "../components/AccessExpiredNotice";
 import { Pagination } from "../components/Pagination";
 import { PackageNotebook } from "../components/PackageNotebook";
 import {
@@ -85,9 +86,17 @@ type Condominium = {
   block_count: number;
   cep: string;
   street: string;
+  status: "active" | "inactive";
+  access_expires_at: string | null;
   // Pode vir nulo do banco; a verificação de endereço normaliza antes de usar.
   address_number: string | null;
 };
+
+function condominiumAccessExpired(condominium: Condominium): boolean {
+  if (condominium.status !== "active") return true;
+  if (!condominium.access_expires_at) return false;
+  return new Date(condominium.access_expires_at).getTime() <= Date.now();
+}
 
 type Block = {
   id: string;
@@ -726,6 +735,9 @@ export function PorterReception() {
   const [loading, setLoading] = useState(true);
   const [account, setAccount] = useState<PorterAccount | null>(null);
   const [condominium, setCondominium] = useState<Condominium | null>(null);
+  const [condominiumAccessBlocked, setCondominiumAccessBlocked] =
+    useState(false);
+  const [supportNoticeOpen, setSupportNoticeOpen] = useState(false);
   const [activeView, setActiveView] = useState<PorterView>(
     getPorterViewFromLocation,
   );
@@ -804,6 +816,7 @@ export function PorterReception() {
     null,
   );
   const bulkCancelled = useRef(false);
+  const accessBlockedRef = useRef(false);
   const unitDetailsRequest = useRef(0);
   const draftReady = useRef(false);
   const buildDraftRef = useRef<() => Promise<ReceptionDraft | null>>(
@@ -954,7 +967,9 @@ export function PorterReception() {
   useEffect(() => {
     function handlePopState() {
       const params = new URLSearchParams(window.location.search);
-      const view = getPorterViewFromLocation();
+      const requestedView = getPorterViewFromLocation();
+      const view = accessBlockedRef.current ? "home" : requestedView;
+      if (view !== requestedView) setSupportNoticeOpen(true);
       setActiveView(view);
       if (view === "pending") setPendingPage(1);
       setCollectionBaseId(params.get("collect") ?? "");
@@ -1010,7 +1025,9 @@ export function PorterReception() {
       const [condominiumResult, assignmentResult] = await Promise.all([
         supabase
           .from("condominiums")
-          .select("id, name, block_count, cep, street, address_number")
+          .select(
+            "id, name, block_count, cep, street, address_number, status, access_expires_at",
+          )
           .eq("id", porterData.condominium_id)
           .maybeSingle(),
         supabase
@@ -1028,6 +1045,23 @@ export function PorterReception() {
       }
       if (!condominiumResult.data) {
         setPageError("Condomínio não encontrado.");
+        setLoading(false);
+        return;
+      }
+
+      // Com o acesso bloqueado a RLS não devolve blocos/unidades; mesmo assim o
+      // porteiro precisa ver a tela inicial com o aviso de suporte.
+      if (condominiumAccessExpired(condominiumResult.data)) {
+        accessBlockedRef.current = true;
+        setCondominium(condominiumResult.data);
+        setCondominiumAccessBlocked(true);
+        const homeUrl = new URL(window.location.href);
+        homeUrl.searchParams.delete("view");
+        homeUrl.searchParams.delete("collect");
+        window.history.replaceState({ porterView: "home" }, "", homeUrl);
+        setActiveView("home");
+        setBlocks([]);
+        setUnits([]);
         setLoading(false);
         return;
       }
@@ -1071,6 +1105,7 @@ export function PorterReception() {
               assignedBlockIds.includes(unit.block_id ?? ""),
             )
           : unitsResult.data ?? [];
+      accessBlockedRef.current = false;
       setCondominium(condominiumResult.data);
       setBlocks(blocksResult.data ?? []);
       setUnits(allowedUnits);
@@ -1197,6 +1232,10 @@ export function PorterReception() {
   }
 
   function navigateToView(view: PorterView, replace = false) {
+    if (condominiumAccessBlocked && view !== "home") {
+      setSupportNoticeOpen(true);
+      return;
+    }
     if (view === activeView) return;
     const url = new URL(window.location.href);
     if (view === "home") {
@@ -1231,6 +1270,10 @@ export function PorterReception() {
   }
 
   function openCollection(packageRecord: PackageRecord) {
+    if (condominiumAccessBlocked) {
+      setSupportNoticeOpen(true);
+      return;
+    }
     const candidates = pendingPackages.filter(
       (item) =>
         item.unit_number === packageRecord.unit_number &&
@@ -1253,11 +1296,19 @@ export function PorterReception() {
   }
 
   function openCamera() {
+    if (condominiumAccessBlocked) {
+      setSupportNoticeOpen(true);
+      return;
+    }
     setPageError("");
     imageInput.current?.click();
   }
 
   async function showUnitDetails(unit: Unit) {
+    if (condominiumAccessBlocked) {
+      setSupportNoticeOpen(true);
+      return;
+    }
     const requestId = ++unitDetailsRequest.current;
     if (!account) return;
     setUnitSearchQuery(unit.unit_number);
@@ -2424,6 +2475,16 @@ export function PorterReception() {
 
         {activeView === "home" && (
           <>
+            {condominiumAccessBlocked && (
+              <section className="porter-card porter-access-blocked" role="status">
+                <h2>Acesso bloqueado</h2>
+                <p>
+                  O prazo de acesso do condomínio venceu ou foi suspenso. Entre
+                  em contato com o suporte técnico para regularizar. Nenhuma
+                  operação de portaria pode ser feita até lá.
+                </p>
+              </section>
+            )}
             <section className="porter-card porter-receive-card">
               {!file && (
                 <div className="porter-home-hero-heading">
@@ -2447,7 +2508,7 @@ export function PorterReception() {
                     className="porter-camera-button"
                     type="button"
                     onClick={openCamera}
-                    disabled={!units.length}
+                    disabled={!units.length && !condominiumAccessBlocked}
                   >
                     <Camera size={22} aria-hidden="true" />
                     <span>Tirar foto</span>
@@ -2458,7 +2519,9 @@ export function PorterReception() {
                   </p>
                   {!units.length && (
                     <p className="porter-error">
-                      Não há apartamentos ativos vinculados ao seu bloco.
+                      {condominiumAccessBlocked
+                        ? "Acesso suspenso. Fale com o suporte técnico."
+                        : "Não há apartamentos ativos vinculados ao seu bloco."}
                     </p>
                   )}
                 </>
@@ -3624,6 +3687,11 @@ export function PorterReception() {
           </section>
         )}
       </div>
+
+      <AccessExpiredNotice
+        open={supportNoticeOpen}
+        onClose={() => setSupportNoticeOpen(false)}
+      />
     </main>
   );
 }

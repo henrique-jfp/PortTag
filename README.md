@@ -158,6 +158,8 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 25. `supabase/migrations/20261119160000_delete_label_lab_ruleset.sql`
 26. `supabase/migrations/20261119170000_label_lab_active_rules.sql`
 27. `supabase/migrations/20261119200000_condominium_whatsapp_evolution.sql`
+28. `supabase/migrations/20261119210000_condominium_access_duration.sql`
+29. `supabase/migrations/20261119220000_residents_import.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -185,6 +187,27 @@ registra o aceite com o texto `APROVAR` e a regressão verde. A publicação ped
 `purge_label_lab_samples_for_ruleset` — a purga é reexecutada para cobrir
 amostras que entraram depois. As regras nunca tocam CEP, logradouro ou número:
 a decisão de endereço permanece determinística no servidor.
+
+A migração 28 adiciona o prazo de acesso por condomínio. No cadastro do
+condomínio, o Super Admin escolhe entre **7 dias**, **14 dias**, **1 mês**,
+**3 meses**, **6 meses**, **1 ano** e **sem expiração** (`7d`, `14d`, `1m`,
+`3m`, `6m`, `1y` e `none` na RPC). A data é calculada no banco a partir de
+`now()`; o app nunca envia data de expiração. A renovação é exclusiva do Super
+Admin (`update_condominium_access`), que também pode devolver o prazo para
+"sem expiração". Com o prazo vencido ou o condomínio inativo, síndico e
+porteiro ficam presos à tela inicial, com aviso para contatar o suporte técnico:
+a checagem está no banco (`condominium_access_is_active`, usada por
+`is_condominium_admin` e `can_access_condominium_block`) e nas Edge Functions
+`manage-manager` e `manage-porter`, não apenas na interface. O Super Admin
+continua com acesso irrestrito.
+
+A migração 29 cria a RPC `import_condominium_residents`, usada pela importação
+de planilha de moradores no cadastro de estrutura. Ela aceita unidade, bloco
+(opcional), nome e WhatsApp, resolve o bloco pelo nome (sem diferenciar
+maiúsculas), cria unidades ausentes apenas quando a opção estiver marcada e
+ignora moradores repetidos na mesma unidade. A operação é atômica: um erro em
+qualquer linha cancela o lote. A importação está disponível para o Síndico e
+para o Super Admin, nunca para o Porteiro.
 
 ### Central do Label Lab
 
@@ -294,7 +317,12 @@ em CSV, **Moradores** filtra unidades sem WhatsApp cadastrado e **Porteiros**
 mostra o último registro de cada operador. **Estrutura** reúne **Dados e
 Endereço** e **Blocos e Unidades**; ao alterar o endereço, o painel pede
 confirmação explícita porque ele alimenta a conferência determinística das
-etiquetas. Nenhuma dessas melhorias exige migration adicional.
+etiquetas. Em **Blocos e Unidades**, Síndico e Super Admin podem importar uma
+planilha de moradores pela RPC `import_condominium_residents` (o Porteiro não
+tem essa opção): informe unidade, bloco quando houver, nome e WhatsApp; as
+unidades ausentes só entram se a opção correspondente estiver marcada e os
+contatos repetidos são ignorados. O resultado informa unidades criadas,
+moradores criados e duplicatas ignoradas.
 
 A retirada é registrada pelo porteiro após confirmação presencial do morador.
 Para confirmar a retirada, o morador assina na tela do celular e o porteiro

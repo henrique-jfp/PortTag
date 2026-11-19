@@ -3202,3 +3202,56 @@ button.overview-stat:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Aviso de prazo vencido (Super Admin / Síndico / Porteiro) */
+
+.access-block-backdrop {
+  z-index: 30;
+}
+
+.access-block-dialog {
+  text-align: center;
+}
+
+.access-block-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: #fff4e5;
+  color: #b54708;
+}
+
+.access-block-hint {
+  margin: -8px 0 20px;
+  color: #697386;
+  font-size: 13px;
+}
+
+.access-expired-label {
+  color: #b42318;
+}
+
+.renew-access-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  background: #f9fafb;
+}
+
+.access-blocked-card {
+  border-left: 4px solid #b42318;
+}
+
+.porter-access-blocked {
+  border-left: 4px solid #b42318;
+}
+
+.porter-access-blocked h2 {
+  margin-top: 0;
+}

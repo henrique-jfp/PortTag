@@ -10,6 +10,7 @@ import {
   Users,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { AccessExpiredNotice } from "../components/AccessExpiredNotice";
 import { ManagerDashboard, type PackageFilterPreset } from "../components/ManagerDashboard";
 import { PackageNotebook, type NotebookBuilding } from "../components/PackageNotebook";
 import { ManagerCondominiumPanel } from "../components/manager/ManagerCondominiumPanel";
@@ -27,7 +28,15 @@ type Condominium = {
   city: string;
   state: string;
   block_count: number;
+  status: "active" | "inactive";
+  access_expires_at: string | null;
 };
+
+function isCondominiumExpired(condominium: Condominium): boolean {
+  if (condominium.status !== "active") return true;
+  if (!condominium.access_expires_at) return false;
+  return new Date(condominium.access_expires_at).getTime() <= Date.now();
+}
 
 type Section =
   | "overview"
@@ -68,6 +77,10 @@ export function ManagerLedger() {
   const [structureTab, setStructureTab] = useState<StructureTab>("address");
   const [selectedBuildingId, setSelectedBuildingId] = useState("");
   const [pageError, setPageError] = useState("");
+  const [expiredByBuilding, setExpiredByBuilding] = useState<
+    Record<string, boolean>
+  >({});
+  const [supportNoticeOpen, setSupportNoticeOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -98,8 +111,7 @@ export function ManagerLedger() {
       if (superAdmin) {
         const { data, error } = await supabase
           .from("condominiums")
-          .select("id, name, city, state, block_count")
-          .eq("status", "active")
+          .select("id, name, city, state, block_count, status, access_expires_at")
           .order("name");
         if (!active) return;
         if (error) setPageError(error.message);
@@ -124,9 +136,8 @@ export function ManagerLedger() {
         if (ids.length) {
           const { data, error } = await supabase
             .from("condominiums")
-            .select("id, name, city, state, block_count")
+            .select("id, name, city, state, block_count, status, access_expires_at")
             .in("id", ids)
-            .eq("status", "active")
             .order("name");
           if (!active) return;
           if (error) setPageError(error.message);
@@ -134,6 +145,14 @@ export function ManagerLedger() {
         }
       }
 
+      setExpiredByBuilding(
+        Object.fromEntries(
+          condominiums.map((condominium) => [
+            condominium.id,
+            isCondominiumExpired(condominium),
+          ]),
+        ),
+      );
       setBuildings(
         condominiums.map((condominium) => ({
           id: condominium.id,
@@ -167,7 +186,18 @@ export function ManagerLedger() {
     }
   }
 
+  const activeBuildingId =
+    buildings.find((building) => building.id === selectedBuildingId)?.id ??
+    buildings[0]?.id ??
+    "";
+  const accessBlocked =
+    !isSuperAdmin && Boolean(expiredByBuilding[activeBuildingId]);
+
   function openSection(id: Section) {
+    if (accessBlocked && id !== "overview") {
+      setSupportNoticeOpen(true);
+      return;
+    }
     setSection(id);
     if (id === "notebook") {
       setNotebookPreset(null);
@@ -179,10 +209,6 @@ export function ManagerLedger() {
     return <div className="loading-screen">Carregando caderno...</div>;
   }
 
-  const activeBuildingId =
-    buildings.find((building) => building.id === selectedBuildingId)?.id ??
-    buildings[0]?.id ??
-    "";
   const managementSection =
     section === "residents" ||
     section === "porters" ||
@@ -218,6 +244,17 @@ export function ManagerLedger() {
         <p className="feedback-message feedback-error" role="alert">
           {pageError}
         </p>
+      )}
+
+      {accessBlocked && (
+        <section className="welcome-card access-blocked-card" role="status">
+          <h2>Acesso bloqueado</h2>
+          <p>
+            O prazo de acesso do condomínio venceu ou foi suspenso. Entre em
+            contato com o suporte técnico para regularizar. Enquanto isso,
+            apenas esta página inicial permanece disponível.
+          </p>
+        </section>
       )}
 
       {!buildings.length ? (
@@ -266,10 +303,14 @@ export function ManagerLedger() {
             </div>
           )}
 
-          {section === "overview" && (
+          {section === "overview" && !accessBlocked && (
             <ManagerDashboard
               buildings={buildings}
               onOpenPackages={(preset) => {
+                if (accessBlocked) {
+                  setSupportNoticeOpen(true);
+                  return;
+                }
                 setNotebookPreset(preset);
                 setNotebookTab("records");
                 setSection("notebook");
@@ -384,6 +425,11 @@ export function ManagerLedger() {
           )}
         </>
       )}
+
+      <AccessExpiredNotice
+        open={supportNoticeOpen}
+        onClose={() => setSupportNoticeOpen(false)}
+      />
     </main>
   );
 }

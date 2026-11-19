@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ConfirmationDialog } from "../ConfirmationDialog";
+import { ResidentsImportPanel } from "../ResidentsImportPanel";
 import { supabase } from "../../lib/supabase";
 import {
   generateUnitNumbers,
@@ -29,7 +30,7 @@ export function ManagerStructurePanel({
   const [blockCount, setBlockCount] = useState(0);
   const [blockName, setBlockName] = useState("");
   const [savingBlock, setSavingBlock] = useState(false);
-  const [mode, setMode] = useState<"single" | "batch">("single");
+  const [mode, setMode] = useState<"single" | "batch" | "import">("single");
   const [unitNumber, setUnitNumber] = useState("");
   const [selectedBlockId, setSelectedBlockId] = useState("");
   const [unitStatus, setUnitStatus] = useState<"active" | "inactive">("active");
@@ -229,6 +230,22 @@ export function ManagerStructurePanel({
     }
   }
 
+  async function reloadUnits() {
+    const { data, error: refreshError } = await supabase
+      .from("units")
+      .select("id, unit_number, block_id, status")
+      .eq("condominium_id", condominiumId)
+      .order("unit_number");
+    if (refreshError) {
+      feedback(
+        `A importação terminou, mas não foi possível atualizar a lista. ${refreshError.message}`,
+        true,
+      );
+      return;
+    }
+    setUnits(data ?? []);
+  }
+
   async function confirmDeleteUnit() {
     if (!deleteTarget) return;
     setBusy(true);
@@ -344,6 +361,16 @@ export function ManagerStructurePanel({
               >
                 Várias de uma vez
               </button>
+              <button
+                type="button"
+                className={mode === "import" ? "is-active" : ""}
+                onClick={() => {
+                  setMode("import");
+                  resetUnitForm();
+                }}
+              >
+                Importar planilha
+              </button>
             </div>
 
             {mode === "single" ? (
@@ -411,7 +438,7 @@ export function ManagerStructurePanel({
                   )}
                 </div>
               </form>
-            ) : (
+            ) : mode === "batch" ? (
               <form className="manager-form" onSubmit={handleBatch}>
                 <label>
                   Faixa do primeiro andar
@@ -460,6 +487,13 @@ export function ManagerStructurePanel({
                   Exemplo: 101-107 até o andar 9 gera 901-907.
                 </p>
               </form>
+            ) : (
+              <ResidentsImportPanel
+                condominiumId={condominiumId}
+                blocks={blocks}
+                hasBlocks={blockCount > 0}
+                onImported={reloadUnits}
+              />
             )}
           </div>
         </div>

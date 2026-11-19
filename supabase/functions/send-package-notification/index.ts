@@ -41,19 +41,15 @@ Deno.serve(async (req) => {
     return respond({ error: "Configuração do servidor incompleta." }, 500);
   }
 
+  const token = authHeader.replace(/^Bearer\s+/i, "");
   const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
-  });
-
-  const userClient = createClient(supabaseUrl, authHeader.replace("Bearer ", ""), {
-    auth: { autoRefreshToken: false, persistSession: false },
-    global: { headers: { Authorization: authHeader } },
   });
 
   const {
     data: { user },
     error: authError,
-  } = await userClient.auth.getUser();
+  } = await adminClient.auth.getUser(token);
 
   if (authError || !user) {
     return respond({ error: "Faça login para continuar." }, 401);

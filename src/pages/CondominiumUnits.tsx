@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
 import { CondominiumOperators } from "./CondominiumOperators";
 import { ConfirmationDialog } from "../components/ConfirmationDialog";
+import { ResidentsImportPanel } from "../components/ResidentsImportPanel";
 import { UnitResidentsPanel } from "../components/UnitResidentsPanel";
 import { useAuth } from "../contexts/AuthContext";
 import { generateUnitNumbers, parseUnitRange } from "../lib/unitGeneration";
@@ -55,7 +56,9 @@ export function CondominiumUnits() {
   const [lastFloor, setLastFloor] = useState("9");
   const [savingBatch, setSavingBatch] = useState(false);
   const [managementTab, setManagementTab] = useState<"units" | "team">("units");
-  const [unitMode, setUnitMode] = useState<"single" | "batch">("single");
+  const [unitMode, setUnitMode] = useState<"single" | "batch" | "import">(
+    "single",
+  );
   const [unitSearch, setUnitSearch] = useState("");
   const [collapsedFloors, setCollapsedFloors] = useState<string[]>([]);
   const [deleteUnitTarget, setDeleteUnitTarget] = useState<Unit | null>(null);
@@ -361,6 +364,23 @@ export function CondominiumUnits() {
     } finally {
       setSavingBatch(false);
     }
+  }
+
+  async function reloadUnits() {
+    if (!condominiumId) return;
+    const { data, error } = await supabase
+      .from("units")
+      .select("id, unit_number, block_id, status")
+      .eq("condominium_id", condominiumId)
+      .order("unit_number");
+
+    if (error) {
+      setUnitError(
+        `A importação terminou, mas não foi possível atualizar a lista. ${error.message}`,
+      );
+      return;
+    }
+    setUnits(data ?? []);
   }
 
   function requestDeleteUnit(unit: Unit) {
@@ -672,6 +692,14 @@ export function CondominiumUnits() {
               >
                 Em lote
               </button>
+              <button
+                type="button"
+                aria-pressed={unitMode === "import" && !editingUnitId}
+                disabled={Boolean(editingUnitId)}
+                onClick={() => setUnitMode("import")}
+              >
+                Importar planilha
+              </button>
             </div>
 
             <p className="admin-form-context">
@@ -750,7 +778,7 @@ export function CondominiumUnits() {
                   )}
                 </div>
               </form>
-            ) : (
+            ) : unitMode === "batch" ? (
               <form className="inline-form" onSubmit={handleSaveBatch}>
                 <label className="form-field">
                   Faixa no primeiro andar
@@ -796,6 +824,13 @@ export function CondominiumUnits() {
                   </button>
                 </div>
               </form>
+            ) : (
+              <ResidentsImportPanel
+                condominiumId={condominium.id}
+                blocks={blocks}
+                hasBlocks={condominium.block_count > 0 || blocks.length > 0}
+                onImported={reloadUnits}
+              />
             )}
 
           <div className="section-heading units-heading admin-units-heading">

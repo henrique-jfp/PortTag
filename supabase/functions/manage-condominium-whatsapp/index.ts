@@ -48,19 +48,15 @@ Deno.serve(async (req) => {
     return respond({ error: "Configuração do servidor incompleta." }, 500);
   }
 
+  const token = authHeader.replace(/^Bearer\s+/i, "");
   const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
-  });
-
-  const userClient = createClient(supabaseUrl, authHeader.replace("Bearer ", ""), {
-    auth: { autoRefreshToken: false, persistSession: false },
-    global: { headers: { Authorization: authHeader } },
   });
 
   const {
     data: { user },
     error: authError,
-  } = await userClient.auth.getUser();
+  } = await adminClient.auth.getUser(token);
 
   if (authError || !user) {
     return respond({ error: "Faça login para continuar." }, 401);
@@ -78,13 +74,28 @@ Deno.serve(async (req) => {
     return respond({ error: "Condomínio não informado." }, 400);
   }
 
-  // Verifica permissão do usuário para o condomínio
-  const { data: isAdmin, error: adminCheckError } = await adminClient.rpc(
-    "is_condominium_admin",
-    { target_condominium: condominiumId }
-  );
+  // Verifica se o usuário é super admin ou admin ativo deste condomínio
+  const { data: profile } = await adminClient
+    .from("profiles")
+    .select("is_super_admin")
+    .eq("id", user.id)
+    .maybeSingle();
 
-  if (adminCheckError || !isAdmin) {
+  let hasAccess = !!profile?.is_super_admin;
+  if (!hasAccess) {
+    const { data: membership } = await adminClient
+      .from("condominium_users")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("condominium_id", condominiumId)
+      .eq("role", "admin")
+      .eq("status", "active")
+      .maybeSingle();
+
+    hasAccess = !!membership;
+  }
+
+  if (!hasAccess) {
     return respond(
       { error: "Você não tem permissão para gerenciar o WhatsApp deste condomínio." },
       403
@@ -152,7 +163,7 @@ Deno.serve(async (req) => {
 
     if (action === "connect") {
       // 1. Tenta criar ou verificar a instância
-      const createRes = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
+      await fetch(`${EVOLUTION_API_URL}/instance/create`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

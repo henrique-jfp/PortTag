@@ -84,6 +84,24 @@
     se ela falhar, o parser embutido continua valendo. A v1 já publicada é
     migrada automaticamente para a linha ativa. Nenhuma regex altera CEP,
     logradouro ou número.
+    Aplique em seguida `20261119200000_condominium_whatsapp_evolution.sql`:
+    instâncias por condomínio na Evolution API e roteamento das notificações
+    entre envio automático (`whatsapp`) e o link manual (`whatsapp_link`).
+    Depois execute `20261119210000_condominium_access_duration.sql`: cria
+    `condominiums.access_expires_at` e `access_duration`, redefine
+    `is_condominium_admin` e `can_access_condominium_block` para exigirem o
+    prazo ativo e cria `condominium_access_is_active` e
+    `update_condominium_access` (renovação só do Super Admin). As opções são
+    `7d`, `14d`, `1m`, `3m`, `6m`, `1y` e `none`; a expiração é sempre calculada
+    no servidor a partir de `now()`. Por fim, execute
+    `20261119220000_residents_import.sql`, que cria a RPC
+    `import_condominium_residents` para a importação de planilha de moradores.
+    Com o prazo vencido ou o condomínio inativo, síndico e porteiro ficam presos
+    à tela inicial com aviso de contato com o suporte técnico: o bloqueio vale
+    para RLS, RPCs e Edge Functions (`manage-manager` e `manage-porter` devem
+    ser redeployadas), e o Super Admin mantém o acesso. A importação é permitida
+    ao Síndico e ao Super Admin, nunca ao Porteiro; a RPC é atômica e devolve
+    `units_created`, `residents_created` e `duplicates_skipped`.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
