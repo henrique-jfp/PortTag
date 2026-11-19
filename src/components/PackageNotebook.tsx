@@ -196,7 +196,7 @@ export function PackageNotebook({
     );
   }
 
-  if (buildings.length > 1 && !buildingId) {
+  if (!activeBuildingId) {
     return (
       <div className="notebook">
         <section className="notebook-section">
@@ -253,7 +253,7 @@ export function PackageNotebook({
         </p>
       )}
 
-      {buildings.length > 1 && currentBuilding && (
+      {(forceBuildingList || buildings.length > 1) && currentBuilding && (
         <div className="notebook-building-bar">
           <button
             className="notebook-back"
