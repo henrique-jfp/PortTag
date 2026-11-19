@@ -202,12 +202,26 @@ export function LabelLab() {
   );
 
   async function callAdmin<T>(body: Record<string, unknown>): Promise<T> {
-    const { data, error } = await supabase.functions.invoke("admin-label-lab", { body });
-    if (error) throw new Error(error.message);
-    const response = data as Record<string, unknown> | null;
-    if (!response) throw new Error("O laboratório não respondeu.");
-    if (typeof response.error === "string") throw new Error(response.error);
-    return response as T;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 75_000);
+    try {
+      const { data, error } = await supabase.functions.invoke("admin-label-lab", {
+        body,
+        signal: controller.signal,
+      });
+      if (error) throw new Error(error.message);
+      const response = data as Record<string, unknown> | null;
+      if (!response) throw new Error("O laboratório não respondeu.");
+      if (typeof response.error === "string") throw new Error(response.error);
+      return response as T;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new Error("O laboratório demorou para responder. Tente novamente.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }
 
   async function reloadData() {
@@ -643,6 +657,7 @@ export function LabelLab() {
       setSuccessMessage("Amostra, foto e OCR excluídos.");
       await reloadData();
     } catch (error) {
+      setDiscardTarget(null);
       setPageError(error instanceof Error ? error.message : "Falha ao descartar.");
     } finally {
       setBusy("");
