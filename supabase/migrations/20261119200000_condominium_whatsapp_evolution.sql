@@ -67,6 +67,8 @@ declare
   v_porter_name text;
   v_whatsapp text;
   v_recipient_name text;
+  v_unit_label text;
+  v_received_str text;
   v_message text;
   v_notification_id uuid;
   v_has_auto_whatsapp boolean := false;
@@ -143,29 +145,34 @@ begin
     v_target_status := 'manual';
   end if;
 
-  v_message := 'Olá' ||
+  v_unit_label := v_package.unit_number ||
     case
-      when v_recipient_name is not null then ', ' || v_recipient_name
-      else ''
-    end ||
-    '! Sua encomenda para o apartamento ' || v_package.unit_number ||
-    case
-      when v_package.block_name is not null
+      when v_package.block_name is not null and btrim(v_package.block_name) <> ''
         then ' (bloco ' || v_package.block_name || ')'
       else ''
-    end ||
-    ' chegou na portaria do ' || coalesce(v_condominium_name, 'condomínio') ||
-    ' e já pode ser retirada.' ||
-    case
-      when v_package.tracking_code is not null
-        then E'\nRastreio: ' || v_package.tracking_code || '.'
-      else ''
-    end ||
-    case
-      when v_porter_name is not null
-        then E'\nRecebido por ' || v_porter_name || '.'
-      else ''
     end;
+
+  v_received_str := to_char(coalesce(v_package.received_at, now()) at time zone 'America/Sao_Paulo', 'DD/MM/YYYY "às" HH24:MI');
+
+  v_message := '📦 Aviso de recebimento de encomenda' || E'\n\n' ||
+    case
+      when v_recipient_name is not null and btrim(v_recipient_name) <> ''
+        then 'Olá, ' || v_recipient_name || '!'
+      else 'Olá!'
+    end || E'\n\n' ||
+    'Informamos que uma encomenda destinada ao apartamento ' || v_unit_label ||
+    case
+      when v_porter_name is not null and btrim(v_porter_name) <> ''
+        then ' foi recebida pelo porteiro ' || v_porter_name || '.'
+      else ' foi recebida pela portaria.'
+    end || E'\n\n' ||
+    '📋 Detalhes da entrega:' || E'\n' ||
+    '- Empresa: ' || coalesce(nullif(btrim(v_package.sender), ''), 'Não informada') || E'\n' ||
+    '- Código de rastreio: ' || coalesce(nullif(btrim(v_package.tracking_code), ''), 'Não informado') || E'\n' ||
+    '- Recebimento: ' || v_received_str || E'\n\n' ||
+    'Sua encomenda está disponível para retirada na portaria.' || E'\n\n' ||
+    'Atenciosamente,' || E'\n' ||
+    'Portaria do ' || coalesce(v_condominium_name, 'Condomínio') || ' 🏢';
 
   insert into public.package_notifications as new_notification (
     package_id,
@@ -191,9 +198,11 @@ begin
   )
   returning new_notification.id into v_notification_id;
 
-  update public.packages as p
-  set last_notified_at = now()
-  where p.id = v_package.id;
+  if v_target_status = 'manual' then
+    update public.packages as p
+    set last_notified_at = now()
+    where p.id = v_package.id;
+  end if;
 
   return query
     select

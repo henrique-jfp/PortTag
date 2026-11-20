@@ -11,10 +11,33 @@ export type PackageNotificationMessage = {
   unitLabel: string;
   recipientName?: string;
   porterName?: string;
+  company?: string;
   trackingCode?: string;
+  receivedAt?: string | Date;
 };
 
 const brazilCountryCode = "55";
+
+export function formatNotificationDate(dateInput?: string | Date): string {
+  const d =
+    dateInput instanceof Date
+      ? dateInput
+      : dateInput
+        ? new Date(dateInput)
+        : new Date();
+  const safeDate = isNaN(d.getTime()) ? new Date() : d;
+
+  const formatted = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(safeDate);
+
+  return formatted.replace(/,?\s+/, " às ");
+}
 
 /**
  * Texto enviado ao morador. O servidor monta a mesma mensagem na RPC
@@ -26,20 +49,39 @@ export function buildPackageNotificationMessage({
   unitLabel,
   recipientName,
   porterName,
+  company,
   trackingCode,
+  receivedAt,
 }: PackageNotificationMessage) {
   const recipient = recipientName?.trim();
   const porter = porterName?.trim();
-  const tracking = trackingCode?.trim();
+  const tracking = trackingCode?.trim() || "Não informado";
+  const carrier = company?.trim() || "Não informada";
+  const condo = condominiumName?.trim() || "Condomínio";
+  const unit = unitLabel.replace(/^(o\s+)?apartamento\s+/i, "").trim();
   const greeting = recipient ? `Olá, ${recipient}!` : "Olá!";
-  const lines = [
-    `${greeting} Sua encomenda para ${unitLabel} chegou na portaria do ${condominiumName} e já pode ser retirada.`,
-  ];
+  const receivedBy = porter
+    ? `foi recebida pelo porteiro ${porter}.`
+    : "foi recebida pela portaria.";
+  const dateStr = formatNotificationDate(receivedAt);
 
-  if (tracking) lines.push(`Rastreio: ${tracking}.`);
-  if (porter) lines.push(`Recebido por ${porter}.`);
-
-  return lines.join("\n");
+  return [
+    "📦 Aviso de recebimento de encomenda",
+    "",
+    greeting,
+    "",
+    `Informamos que uma encomenda destinada ao apartamento ${unit} ${receivedBy}`,
+    "",
+    "📋 Detalhes da entrega:",
+    `- Empresa: ${carrier}`,
+    `- Código de rastreio: ${tracking}`,
+    `- Recebimento: ${dateStr}`,
+    "",
+    "Sua encomenda está disponível para retirada na portaria.",
+    "",
+    "Atenciosamente,",
+    `Portaria do ${condo} 🏢`,
+  ].join("\n");
 }
 
 /**

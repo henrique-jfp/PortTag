@@ -598,20 +598,33 @@ function collectLabelSampleInBackground(
   }, 0);
 }
 
-function buildWhatsappLink(
-  condominiumName: string,
-  whatsapp: string,
-  unitLabel: string,
-  recipient: string,
-  porterName: string,
-  trackingCode: string,
-) {
+function buildWhatsappLink({
+  condominiumName,
+  whatsapp,
+  unitLabel,
+  recipient,
+  porterName,
+  company,
+  trackingCode,
+  receivedAt,
+}: {
+  condominiumName: string;
+  whatsapp: string;
+  unitLabel: string;
+  recipient?: string;
+  porterName?: string;
+  company?: string;
+  trackingCode?: string;
+  receivedAt?: string | Date;
+}) {
   const message = buildPackageNotificationMessage({
     condominiumName,
     unitLabel,
     recipientName: recipient,
     porterName,
+    company,
     trackingCode,
+    receivedAt,
   });
   return whatsappLink(whatsapp, message);
 }
@@ -707,14 +720,16 @@ async function persistPackage(
   return {
     id: typeof createdPackageId === "string" ? createdPackageId : "",
     whatsappLink: ctx.whatsapp
-      ? buildWhatsappLink(
-          ctx.condominiumName,
-          ctx.whatsapp,
-          `o apartamento ${ctx.unit.unit_number}`,
-          draft.recipientName.trim(),
-          ctx.porterName,
-          trimmedTrackingCode,
-        )
+      ? buildWhatsappLink({
+          condominiumName: ctx.condominiumName,
+          whatsapp: ctx.whatsapp,
+          unitLabel: ctx.unit.unit_number,
+          recipient: draft.recipientName.trim(),
+          porterName: ctx.porterName,
+          company: ctx.company,
+          trackingCode: trimmedTrackingCode,
+          receivedAt: new Date(),
+        })
       : "",
   };
 }
@@ -1434,15 +1449,18 @@ export function PorterReception() {
     unitLabel: string,
     recipient: string,
     trackingCode: string,
+    company?: string,
   ) {
-    return buildWhatsappLink(
-      condominium?.name ?? "condomínio",
+    return buildWhatsappLink({
+      condominiumName: condominium?.name ?? "condomínio",
       whatsapp,
       unitLabel,
       recipient,
-      account?.name ?? "",
+      porterName: account?.name ?? "",
+      company,
       trackingCode,
-    );
+      receivedAt: new Date(),
+    });
   }
 
   function resetReceptionFields() {
@@ -1812,7 +1830,7 @@ export function PorterReception() {
         `Encomenda registrada para o apartamento ${unitNumber}.`,
       );
       // notifyPackage já recarrega a lista; evitar um segundo fetch seguido.
-      if (shouldNotify && result.id) await notifyPackage(result.id);
+      if (shouldNotify && result.id) await notifyPackage(result.id, true);
       else await reloadPackages();
     } catch (error) {
       if (error instanceof DuplicatePackageError) {
@@ -2087,7 +2105,7 @@ export function PorterReception() {
     await reloadPackages();
   }
 
-  async function notifyPackage(packageId: string) {
+  async function notifyPackage(packageId: string, isAutoFromReception = false) {
     setPageError("");
     setNotificationMessage("");
     setNotificationLink("");
@@ -2098,20 +2116,26 @@ export function PorterReception() {
         { p_package_id: packageId },
       );
       if (error) {
-        setPageError(error.message);
+        if (!isAutoFromReception) {
+          setPageError(error.message);
+        }
         return;
       }
       const notification = (
         Array.isArray(data) ? data[0] : data
       ) as PackageNotification | null;
       if (!notification?.recipient || !notification?.message) {
-        setPageError("Não foi possível preparar o aviso ao morador.");
+        if (!isAutoFromReception) {
+          setPageError("Não foi possível preparar o aviso ao morador.");
+        }
         return;
       }
 
       // Canal automático: dispara Edge Function em background
       if (notification.channel === "whatsapp" && notification.status === "pending") {
-        setNotificationMessage("Enviando aviso automático ao morador...");
+        if (!isAutoFromReception) {
+          setNotificationMessage("Enviando aviso automático ao morador...");
+        }
         try {
           const { data: sendResult, error: sendError } =
             await supabase.functions.invoke("send-package-notification", {
@@ -2119,40 +2143,47 @@ export function PorterReception() {
             });
           if (sendError || sendResult?.status === "failed") {
             console.error("send-package-notification error:", sendError, sendResult);
-            // Falha no envio automático: oferece fallback manual
-            const link = whatsappLink(notification.recipient, notification.message);
-            const detail = sendResult?.error ? ` (${sendResult.error})` : "";
-            setNotificationMessage(
-              `Envio automático indisponível${detail}. Clique abaixo para enviar manualmente:`,
-            );
-            setNotificationLink(link);
+            // Oferece fallback manual apenas quando o porteiro clica no botão "Avisar morador"
+            if (!isAutoFromReception) {
+              const link = whatsappLink(notification.recipient, notification.message);
+              const detail = sendResult?.error ? ` (${sendResult.error})` : "";
+              setNotificationMessage(
+                `Envio automático indisponível${detail}. Clique abaixo para enviar manualmente:`,
+              );
+              setNotificationLink(link);
+            }
           } else {
             setNotificationMessage("✅ Morador avisado automaticamente pelo WhatsApp!");
           }
         } catch (err) {
           console.error("send-package-notification exception:", err);
-          // Fallback manual se a Edge Function não estiver disponível
-          const link = whatsappLink(notification.recipient, notification.message);
-          setNotificationMessage(
-            "Envio automático indisponível. Clique abaixo para enviar manualmente:",
-          );
-          setNotificationLink(link);
+          if (!isAutoFromReception) {
+            const link = whatsappLink(notification.recipient, notification.message);
+            setNotificationMessage(
+              "Envio automático indisponível. Clique abaixo para enviar manualmente:",
+            );
+            setNotificationLink(link);
+          }
         }
       } else {
-        // Canal manual: abre wa.me como antes
-        const link = whatsappLink(notification.recipient, notification.message);
-        setNotificationMessage("Aviso registrado. Abrindo o WhatsApp...");
-        setNotificationLink(link);
-        window.open(link, "_blank", "noopener,noreferrer");
+        // Canal manual: abre wa.me se foi acionado manualmente pelo porteiro
+        if (!isAutoFromReception) {
+          const link = whatsappLink(notification.recipient, notification.message);
+          setNotificationMessage("Aviso registrado. Abrindo o WhatsApp...");
+          setNotificationLink(link);
+          window.open(link, "_blank", "noopener,noreferrer");
+        }
       }
 
       await reloadPackages();
     } catch (error) {
-      setPageError(
-        error instanceof Error
-          ? `Não foi possível avisar o morador. ${error.message}`
-          : "Não foi possível avisar o morador.",
-      );
+      if (!isAutoFromReception) {
+        setPageError(
+          error instanceof Error
+            ? `Não foi possível avisar o morador. ${error.message}`
+            : "Não foi possível avisar o morador.",
+        );
+      }
     } finally {
       setNotifyingId("");
     }
@@ -3641,29 +3672,27 @@ export function PorterReception() {
                     </div>
                     {item.status === "received" && (
                       <div className="porter-notify-block">
-                        <small
-                          className={
-                            item.last_notified_at
-                              ? "porter-notify-status porter-notify-status-sent"
-                              : "porter-notify-status porter-notify-status-pending"
-                          }
-                        >
-                          {item.last_notified_at
-                            ? `Morador avisado em ${formatDate(item.last_notified_at)}`
-                            : "Morador ainda não avisado"}
-                        </small>
-                        <button
-                          className="porter-secondary-button"
-                          type="button"
-                          disabled={notifyingId === item.id}
-                          onClick={() => void notifyPackage(item.id)}
-                        >
-                          {notifyingId === item.id
-                            ? "Enviando..."
-                            : item.last_notified_at
-                              ? "Avisar novamente"
-                              : "Avisar morador"}
-                        </button>
+                        {item.last_notified_at ? (
+                          <small className="porter-notify-status porter-notify-status-sent">
+                            ✅ Morador avisado em {formatDate(item.last_notified_at)}
+                          </small>
+                        ) : (
+                          <>
+                            <small className="porter-notify-status porter-notify-status-pending">
+                              Morador ainda não avisado
+                            </small>
+                            <button
+                              className="porter-secondary-button"
+                              type="button"
+                              disabled={notifyingId === item.id}
+                              onClick={() => void notifyPackage(item.id)}
+                            >
+                              {notifyingId === item.id
+                                ? "Enviando..."
+                                : "Avisar morador"}
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                     {item.status === "received" && (
