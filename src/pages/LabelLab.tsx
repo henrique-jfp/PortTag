@@ -224,6 +224,19 @@ export function LabelLab() {
     });
   }, [recipeField, recipeSearch]);
 
+  async function readAdminError(error: unknown): Promise<string> {
+    const context = (error as { context?: Response } | null)?.context;
+    if (context) {
+      try {
+        const payload = (await context.json()) as { error?: unknown };
+        if (typeof payload.error === "string") return payload.error;
+      } catch {
+        // Corpo inválido: mantém a mensagem padrão do transporte.
+      }
+    }
+    return error instanceof Error ? error.message : "Falha no laboratório.";
+  }
+
   async function callAdmin<T>(body: Record<string, unknown>): Promise<T> {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 75_000);
@@ -232,7 +245,7 @@ export function LabelLab() {
         body,
         signal: controller.signal,
       });
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(await readAdminError(error));
       const response = data as Record<string, unknown> | null;
       if (!response) throw new Error("O laboratório não respondeu.");
       if (typeof response.error === "string") throw new Error(response.error);
@@ -254,6 +267,7 @@ export function LabelLab() {
         .select(
           "id, condominium_id, storage_path, status, reasons, carrier_detected, tracking_code, ocr_text, analysis, created_at, condominiums(name)",
         )
+        .is("deleted_at", null)
         .order("created_at", { ascending: false })
         .limit(60),
       supabase

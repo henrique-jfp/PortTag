@@ -366,11 +366,19 @@ Deno.serve(async (request: Request) => {
           }
           const { data: sample, error: sampleError } = await service
             .from("label_lab_queue")
-            .select("id, condominium_id, storage_path, mime_type")
+            .select("id, condominium_id, storage_path, mime_type, deleted_at")
             .eq("id", input.sourceSampleId)
-            .is("deleted_at", null)
             .maybeSingle();
           if (sampleError) return respond({ error: sampleError.message }, 500);
+          if (sample?.deleted_at) {
+            return respond(
+              {
+                error:
+                  "Esta amostra já foi purgada na publicação. Importe a etiqueta novamente.",
+              },
+              410,
+            );
+          }
           if (!sample || !(sample.mime_type in mimeExtensions)) {
             return respond({ error: "Amostra não encontrada." }, 404);
           }
