@@ -160,6 +160,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 27. `supabase/migrations/20261119200000_condominium_whatsapp_evolution.sql`
 28. `supabase/migrations/20261119210000_condominium_access_duration.sql`
 29. `supabase/migrations/20261119220000_residents_import.sql`
+30. `supabase/migrations/20261120140000_preserve_label_lab_ocr.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -183,10 +184,10 @@ em `label_lab_audit` e adiciona as RPCs `enqueue_label_lab_manual_sample`,
 `discard_label_lab_sample`, `save_label_lab_ruleset`,
 `approve_label_lab_ruleset` e `publish_label_lab_ruleset`. A aprovação apenas
 registra o aceite com o texto `APROVAR` e a regressão verde. A publicação pede
-`PUBLICAR`, exige a exclusão/sanitização das amostras usadas por
-`purge_label_lab_samples_for_ruleset` — a purga é reexecutada para cobrir
-amostras que entraram depois. As regras nunca tocam CEP, logradouro ou número:
-a decisão de endereço permanece determinística no servidor.
+`PUBLICAR` e chama internamente `purge_label_lab_samples_for_ruleset`: as fotos
+são apagadas do cofre privado e o OCR das amostras usadas é preservado para
+re-testes de regressão (migração 30). As regras nunca tocam CEP, logradouro ou
+número: a decisão de endereço permanece determinística no servidor.
 
 A migração 28 adiciona o prazo de acesso por condomínio. No cadastro do
 condomínio, o Super Admin escolhe entre **7 dias**, **14 dias**, **1 mês**,
@@ -313,16 +314,18 @@ mantém o caderno e o detalhe de cada pacote traz a linha do tempo e o botão
 para salvar um PDF com condomínio, unidade, rastreio, recebimento, aviso,
 retirada, assinatura e foto da avaria. A aba **Linha do tempo / Auditoria**
 continua com o log imutável de eventos. **Relatórios** exporta o recorte atual
-em CSV, **Moradores** filtra unidades sem WhatsApp cadastrado e **Porteiros**
-mostra o último registro de cada operador. **Estrutura** reúne **Dados e
-Endereço** e **Blocos e Unidades**; ao alterar o endereço, o painel pede
-confirmação explícita porque ele alimenta a conferência determinística das
-etiquetas. Em **Blocos e Unidades**, Síndico e Super Admin podem importar uma
-planilha de moradores pela RPC `import_condominium_residents` (o Porteiro não
-tem essa opção): informe unidade, bloco quando houver, nome e WhatsApp; as
-unidades ausentes só entram se a opção correspondente estiver marcada e os
-contatos repetidos são ignorados. O resultado informa unidades criadas,
-moradores criados e duplicatas ignoradas.
+em CSV e **Porteiros** mostra o último registro de cada operador. **Moradores**
+usa o mesmo gerenciador da aba **Blocos e Unidades** do Super Admin: criação de
+blocos, unidade avulsa, geração em lote, importação de planilha e contatos por
+unidade. **Estrutura** reúne **Dados e Endereço** e **Blocos e Unidades**; ao
+alterar o endereço, o painel pede confirmação explícita porque ele alimenta a
+conferência determinística das etiquetas. Tanto em **Moradores** quanto em
+**Blocos e Unidades**, Síndico e Super Admin podem importar uma planilha de
+moradores pela RPC `import_condominium_residents` (o Porteiro não tem essa
+opção): informe unidade, bloco quando houver, nome e WhatsApp; as unidades
+ausentes só entram se a opção correspondente estiver marcada e os contatos
+repetidos são ignorados. O resultado informa unidades criadas, moradores criados
+e duplicatas ignoradas.
 
 A retirada é registrada pelo porteiro após confirmação presencial do morador.
 Para confirmar a retirada, o morador assina na tela do celular e o porteiro

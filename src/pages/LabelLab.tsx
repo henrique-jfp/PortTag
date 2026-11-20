@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Link } from "react-router-dom";
 import { ConfirmationDialog } from "../components/ConfirmationDialog";
 import { useAuth } from "../contexts/AuthContext";
@@ -36,6 +36,7 @@ type Sample = {
   tracking_code: string | null;
   ocr_text: string | null;
   analysis: Record<string, unknown> | null;
+  deleted_at: string | null;
   created_at: string;
   condominiums: { name: string } | null;
 };
@@ -199,6 +200,7 @@ export function LabelLab() {
   const [recipeField, setRecipeField] = useState<LabelLabField | "">("");
   const [usedRecipes, setUsedRecipes] = useState<string[]>([]);
   const [copiedRecipe, setCopiedRecipe] = useState("");
+  const bootstrappedRef = useRef(false);
 
   const selectedCondominium = useMemo(
     () => condominiums.find((item) => item.id === selectedCondominiumId) ?? null,
@@ -208,9 +210,17 @@ export function LabelLab() {
     () => rulesets.find((item) => item.id === rulesetId) ?? null,
     [rulesets, rulesetId],
   );
+  const activeSamples = useMemo(
+    () => samples.filter((item) => !item.deleted_at),
+    [samples],
+  );
+  const caseSamples = useMemo(
+    () => samples.filter((item) => Boolean(item.ocr_text)),
+    [samples],
+  );
   const selectedSample = useMemo(
-    () => samples.find((item) => item.id === selectedSampleId) ?? null,
-    [samples, selectedSampleId],
+    () => activeSamples.find((item) => item.id === selectedSampleId) ?? null,
+    [activeSamples, selectedSampleId],
   );
   const filteredRecipes = useMemo(() => {
     const term = recipeSearch.trim().toLocaleLowerCase("pt-BR");
@@ -265,9 +275,8 @@ export function LabelLab() {
       supabase
         .from("label_lab_queue")
         .select(
-          "id, condominium_id, storage_path, status, reasons, carrier_detected, tracking_code, ocr_text, analysis, created_at, condominiums(name)",
+          "id, condominium_id, storage_path, status, reasons, carrier_detected, tracking_code, ocr_text, analysis, deleted_at, created_at, condominiums(name)",
         )
-        .is("deleted_at", null)
         .order("created_at", { ascending: false })
         .limit(60),
       supabase
@@ -284,9 +293,19 @@ export function LabelLab() {
     const firstError =
       samplesResult.error ?? rulesetsResult.error ?? auditResult.error;
     if (firstError) throw new Error(firstError.message);
-    setSamples((samplesResult.data ?? []) as unknown as Sample[]);
-    setRulesets((rulesetsResult.data ?? []) as unknown as Ruleset[]);
+    const nextSamples = (samplesResult.data ?? []) as unknown as Sample[];
+    const nextRulesets = (rulesetsResult.data ?? []) as unknown as Ruleset[];
+    setSamples(nextSamples);
+    setRulesets(nextRulesets);
     setAudit((auditResult.data ?? []) as unknown as AuditEntry[]);
+    if (!bootstrappedRef.current) {
+      bootstrappedRef.current = true;
+      const initial =
+        nextRulesets.find((item) => item.status === "published") ??
+        nextRulesets.find((item) => item.status === "approved") ??
+        nextRulesets.find((item) => item.status === "draft");
+      if (initial) applyRulesetSelection(initial, nextSamples);
+    }
   }
 
   useEffect(() => {
@@ -350,7 +369,7 @@ export function LabelLab() {
     if (!selectedSampleId) return () => {
       active = false;
     };
-    const sample = samples.find((item) => item.id === selectedSampleId);
+    const sample = activeSamples.find((item) => item.id === selectedSampleId);
     if (!sample) return () => {
       active = false;
     };
@@ -363,7 +382,7 @@ export function LabelLab() {
     return () => {
       active = false;
     };
-  }, [selectedSampleId, samples]);
+  }, [selectedSampleId, activeSamples]);
 
   function setBusyState(next: string) {
     setBusy(next);
@@ -514,7 +533,7 @@ export function LabelLab() {
       setPageError("Informe o valor esperado do caso.");
       return;
     }
-    const sample = samples.find((item) => item.id === draftCase.sampleId);
+    const sample = caseSamples.find((item) => item.id === draftCase.sampleId);
     setCases((current) => [
       ...current,
       {
@@ -530,7 +549,7 @@ export function LabelLab() {
   }
 
   function applySelectedRule(item: RegressionCase) {
-    const sample = samples.find((sampleItem) => sampleItem.id === item.sampleId);
+    const sample = caseSamples.find((sampleItem) => sampleItem.id === item.sampleId);
     const text = sample?.ocr_text ?? "";
     if (!text) return { value: "", pattern: null };
     return applyLabelLabRule(rules, item.field, text);
@@ -668,7 +687,7 @@ export function LabelLab() {
       setPublishText("");
       setPublishConfirmed(false);
       setSuccessMessage(
-        `Versão v${response.ruleset.version} publicada e ativa no recebimento. Não é preciso baixar o JSON nem fazer deploy. Fotos e OCR das amostras usadas foram excluídos.`,
+        `Versão v${response.ruleset.version} publicada e ativa no recebimento. Não é preciso baixar o JSON nem fazer deploy. As fotos foram excluídas; o OCR foi preservado para re-testes.`,
       );
       selectSample("");
       await reloadData();
@@ -804,18 +823,14 @@ export function LabelLab() {
     }
   }
 
-  function selectRuleset(item: Ruleset) {
+  function applyRulesetSelection(item: Ruleset, availableSamples: Sample[]) {
     setRulesetId(item.id);
     setRules(item.rules ?? emptyLabelLabRules());
-    const storedCases = (item.regression?.cases ?? []) as RegressionCase[];
-    const reusable =
-      item.status === "published" || item.status === "superseded"
-        ? []
-        : storedCases.filter(
-            (entry) =>
-              isLabelLabField(entry.field) &&
-              samples.some((sample) => sample.id === entry.sampleId && sample.ocr_text),
-          );
+    const reusable = ((item.regression?.cases ?? []) as RegressionCase[]).filter(
+      (entry) =>
+        isLabelLabField(entry.field) &&
+        availableSamples.some((sample) => sample.id === entry.sampleId && sample.ocr_text),
+    );
     setCases(reusable);
     setRulesetName(item.name);
     setRulesetDescription(item.description ?? "");
@@ -826,6 +841,10 @@ export function LabelLab() {
     setPublishConfirmed(false);
     setPublishedArtifact(item.status === "published" ? item.artifact : null);
     setPageError("");
+  }
+
+  function selectRuleset(item: Ruleset) {
+    applyRulesetSelection(item, samples);
   }
 
   if (loading) {
@@ -936,13 +955,11 @@ export function LabelLab() {
                 onChange={(event) => selectSample(event.target.value)}
               >
                 <option value="">Nenhuma</option>
-                {samples
-                  .filter((item) => item.status !== "deleted")
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.condominiums?.name ?? "Condomínio"} · {formatDate(item.created_at)}
-                    </option>
-                  ))}
+                {activeSamples.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.condominiums?.name ?? "Condomínio"} · {formatDate(item.created_at)}
+                  </option>
+                ))}
               </select>
             </label>
             {selectedSample ? (
@@ -1070,7 +1087,8 @@ export function LabelLab() {
             número continuam sendo decididos pelo código determinístico. Em rascunho,
             as regex valem só no teste de regressão. Ao publicar, passam a valer
             automaticamente na análise e no OCR do porteiro — sem baixar JSON nem
-            fazer deploy.
+            fazer deploy. Ao abrir, o editor já traz a versão publicada: mantenha
+            as regras existentes e salve como nova versão para acumular regras.
           </p>
         </div>
         <div className="lab-toolbar">
@@ -1169,8 +1187,8 @@ export function LabelLab() {
         <div className="section-heading">
           <h2>3. Teste de regressão</h2>
           <p>
-            Os casos usam o OCR já guardado nas amostras; o texto identificável
-            não é copiado para o rascunho nem para o artefato publicado.
+            Os casos usam o OCR guardado nas amostras, inclusive nas já
+            publicadas; o texto identificável não é copiado para o artefato.
           </p>
         </div>
         <div className="lab-toolbar">
@@ -1183,13 +1201,12 @@ export function LabelLab() {
               }
             >
               <option value="">Selecione</option>
-              {samples
-                .filter((item) => Boolean(item.ocr_text))
-                .map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.condominiums?.name ?? "Condomínio"} · {formatDate(item.created_at)}
-                  </option>
-                ))}
+              {caseSamples.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.condominiums?.name ?? "Condomínio"} · {formatDate(item.created_at)}
+                  {item.deleted_at ? " · OCR preservado" : ""}
+                </option>
+              ))}
             </select>
           </label>
           <label className="form-field">
@@ -1306,7 +1323,8 @@ export function LabelLab() {
           <p>
             Aprovar e publicar são atos separados, com confirmação digitada e
             auditoria. Publicar já ativa as regex no recebimento e exclui as fotos
-            e o OCR das amostras usadas. Versões publicadas antes podem ser
+            das amostras usadas, preservando o OCR para re-testes. Versões
+            publicadas antes podem ser
             reativadas pelo botão da lista; rascunhos descartados podem ser
             excluídos. CEP, logradouro e número nunca são alterados por aqui.
           </p>
@@ -1637,7 +1655,8 @@ export function LabelLab() {
             <p id="activation-description">
               A v{activationTarget.version} ("{activationTarget.name}") volta a valer
               no recebimento na próxima leitura de etiqueta. A versão atual deixa
-              de ser aplicada. Fotos e OCR já foram excluídos na publicação.
+              de ser aplicada. As fotos já foram excluídas na publicação; o OCR
+              continua disponível para os testes de regressão.
             </p>
             <label className="form-field">
               Digite ATIVAR

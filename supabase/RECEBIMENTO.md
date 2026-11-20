@@ -96,6 +96,9 @@
     no servidor a partir de `now()`. Por fim, execute
     `20261119220000_residents_import.sql`, que cria a RPC
     `import_condominium_residents` para a importação de planilha de moradores.
+    Por fim, execute `20261120140000_preserve_label_lab_ocr.sql`: a publicação
+    continua apagando a foto privada, mas preserva o OCR da amostra para que os
+    casos de regressão das versões antigas possam ser re-testados.
     Com o prazo vencido ou o condomínio inativo, síndico e porteiro ficam presos
     à tela inicial com aviso de contato com o suporte técnico: o bloqueio vale
     para RLS, RPCs e Edge Functions (`manage-manager` e `manage-porter` devem
