@@ -108,7 +108,6 @@ export function Dashboard() {
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
   const [listError, setListError] = useState("");
   const [form, setForm] = useState(emptyForm);
-  const [editingCondominiumId, setEditingCondominiumId] = useState<string | null>(null);
   const [cepLookupStatus, setCepLookupStatus] =
     useState<CepLookupStatus>("idle");
   const [saving, setSaving] = useState(false);
@@ -122,6 +121,9 @@ export function Dashboard() {
   const [renewDuration, setRenewDuration] = useState<AccessDuration>("1m");
   const [renewing, setRenewing] = useState(false);
   const [renewError, setRenewError] = useState("");
+  const [togglingCondominiumId, setTogglingCondominiumId] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [statusError, setStatusError] = useState("");
   const [notebookOpen, setNotebookOpen] = useState(false);
 
   useEffect(() => {
@@ -243,33 +245,22 @@ export function Dashboard() {
     setSaving(true);
 
     try {
-      const { error } = editingCondominiumId
-        ? await supabase.rpc("update_condominium", {
-            p_condominium_id: editingCondominiumId,
-            p_name: form.name,
-            p_cep: form.cep,
-            p_street: form.street,
-            p_address_number: form.addressNumber,
-            p_neighborhood: form.neighborhood,
-            p_city: form.city,
-            p_state: form.state,
-          })
-        : await supabase.rpc("create_condominium", {
-            p_name: form.name,
-            p_cep: form.cep,
-            p_street: form.street,
-            p_address_number: form.addressNumber,
-            p_complement: null,
-            p_neighborhood: form.neighborhood,
-            p_city: form.city,
-            p_state: form.state,
-            p_has_blocks: form.hasBlocks,
-            p_block_count: form.hasBlocks ? Number(form.blockCount) : 0,
-            p_initial_block_name: form.hasBlocks
-              ? form.initialBlockName.trim()
-              : null,
-            p_access_duration: form.accessDuration,
-          });
+      const { error } = await supabase.rpc("create_condominium", {
+        p_name: form.name,
+        p_cep: form.cep,
+        p_street: form.street,
+        p_address_number: form.addressNumber,
+        p_complement: null,
+        p_neighborhood: form.neighborhood,
+        p_city: form.city,
+        p_state: form.state,
+        p_has_blocks: form.hasBlocks,
+        p_block_count: form.hasBlocks ? Number(form.blockCount) : 0,
+        p_initial_block_name: form.hasBlocks
+          ? form.initialBlockName.trim()
+          : null,
+        p_access_duration: form.accessDuration,
+      });
 
       if (error) {
         setFormError(error.message);
@@ -277,12 +268,7 @@ export function Dashboard() {
       }
 
       setForm(emptyForm);
-      setEditingCondominiumId(null);
-      setSuccessMessage(
-        editingCondominiumId
-          ? "Condomínio atualizado com sucesso."
-          : "Condomínio cadastrado com sucesso.",
-      );
+      setSuccessMessage("Condomínio cadastrado com sucesso.");
 
       const { data, error: condominiumsError } = await supabase
         .from("condominiums")
@@ -304,39 +290,6 @@ export function Dashboard() {
     } finally {
       setSaving(false);
     }
-  }
-
-  function handleEditCondominium(condominium: Condominium) {
-    setEditingCondominiumId(condominium.id);
-    setCepLookupStatus("idle");
-    setForm({
-      ...emptyForm,
-      name: condominium.name,
-      cep: condominium.cep ?? "",
-      street: condominium.street ?? "",
-      addressNumber: condominium.number ?? "",
-      neighborhood: condominium.neighborhood ?? "",
-      city: condominium.city,
-      state: condominium.state,
-      hasBlocks: condominium.block_count > 0,
-      blockCount: String(condominium.block_count),
-      accessDuration: accessDurationOptions.some(
-        (option) => option.value === condominium.access_duration,
-      )
-        ? (condominium.access_duration as AccessDuration)
-        : "none",
-    });
-    document
-      .getElementById("condominium-form")
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function handleCancelEdit() {
-    setEditingCondominiumId(null);
-    setForm(emptyForm);
-    setFormError("");
-    setSuccessMessage("");
-    setCepLookupStatus("idle");
   }
 
   async function handleDeleteCondominium(
@@ -366,9 +319,6 @@ export function Dashboard() {
       setCondominiums((current) =>
         current.filter((condominium) => condominium.id !== deleteTarget.id),
       );
-      if (editingCondominiumId === deleteTarget.id) {
-        handleCancelEdit();
-      }
       setDeleteTarget(null);
       setDeleteConfirmation("");
       setSuccessMessage("Condomínio excluído.");
@@ -416,6 +366,49 @@ export function Dashboard() {
       );
     } finally {
       setRenewing(false);
+    }
+  }
+
+  async function handleToggleStatus(condominium: Condominium) {
+    const nextStatus = condominium.status === "active" ? "inactive" : "active";
+
+    setTogglingCondominiumId(condominium.id);
+    setStatusError("");
+    setStatusMessage("");
+
+    try {
+      const { error } = await supabase.rpc("set_condominium_status", {
+        p_condominium_id: condominium.id,
+        p_status: nextStatus,
+      });
+      if (error) {
+        setStatusError(error.message);
+        return;
+      }
+
+      const { data, error: listError } = await supabase
+        .from("condominiums")
+        .select(
+          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
+        )
+        .order("created_at", { ascending: false });
+      if (listError) {
+        setListError(listError.message);
+        return;
+      }
+      setListError("");
+      setCondominiums(data ?? []);
+      setStatusMessage(
+        nextStatus === "active"
+          ? `Acesso de ${condominium.name} reativado.`
+          : `Acesso de ${condominium.name} suspenso. Os dados do condomínio foram mantidos.`,
+      );
+    } catch (error) {
+      setStatusError(
+        error instanceof Error ? error.message : "Falha inesperada.",
+      );
+    } finally {
+      setTogglingCondominiumId("");
     }
   }
 
@@ -494,14 +487,12 @@ export function Dashboard() {
           <section className="admin-section">
             <div className="section-heading">
               <div>
-                <h2>
-                  {editingCondominiumId
-                    ? "Editar condomínio"
-                    : "Cadastrar condomínio"}
-                </h2>
+                <h2>Cadastrar condomínio</h2>
                 <p>
                   Cadastre unidades, vincule porteiros e registre os
-                  recebimentos de cada condomínio.
+                  recebimentos de cada condomínio. Nome e endereço são
+                  definitivos após o cadastro; para suspender o acesso sem
+                  excluir os dados, use o botão de status na lista abaixo.
                 </p>
               </div>
             </div>
@@ -643,7 +634,6 @@ export function Dashboard() {
                 </div>
               </section>
 
-              {!editingCondominiumId && (
               <section className="admin-form-group" aria-label="Blocos">
                 <h3>Blocos</h3>
                 <p className="admin-form-group-hint">
@@ -727,9 +717,7 @@ export function Dashboard() {
                   )}
                 </div>
               </section>
-              )}
 
-              {!editingCondominiumId && (
                 <section className="admin-form-group" aria-label="Prazo de acesso">
                   <h3>Prazo de acesso</h3>
                   <p className="admin-form-group-hint">
@@ -759,7 +747,6 @@ export function Dashboard() {
                     </label>
                   </div>
                 </section>
-              )}
 
               <div className="admin-form-footer">
                 {formError && (
@@ -775,21 +762,8 @@ export function Dashboard() {
 
                 <div className="form-actions">
                   <button className="primary-button" disabled={saving}>
-                    {saving
-                      ? "Salvando..."
-                      : editingCondominiumId
-                        ? "Salvar alterações"
-                        : "Cadastrar condomínio"}
+                    {saving ? "Salvando..." : "Cadastrar condomínio"}
                   </button>
-                  {editingCondominiumId && (
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={handleCancelEdit}
-                    >
-                      Cancelar
-                    </button>
-                  )}
                 </div>
               </div>
             </form>
@@ -806,6 +780,16 @@ export function Dashboard() {
             {listError && (
               <p className="feedback-message feedback-error" role="alert">
                 Não foi possível carregar a lista: {listError}
+              </p>
+            )}
+            {statusError && (
+              <p className="feedback-message feedback-error" role="alert">
+                {statusError}
+              </p>
+            )}
+            {statusMessage && (
+              <p className="feedback-message feedback-success" role="status">
+                {statusMessage}
               </p>
             )}
 
@@ -877,6 +861,9 @@ export function Dashboard() {
                               ))}
                             </select>
                           </label>
+                          <p className="field-hint">
+                            Renovar o prazo não reativa um condomínio inativo.
+                          </p>
                           <div className="form-actions">
                             <button
                               className="primary-button"
@@ -926,11 +913,22 @@ export function Dashboard() {
                         Renovar prazo
                       </button>
                       <button
-                        className="text-button"
+                        className={`admin-status-toggle${
+                          condominium.status === "active"
+                            ? " is-active"
+                            : " is-inactive"
+                        }`}
                         type="button"
-                        onClick={() => handleEditCondominium(condominium)}
+                        disabled={togglingCondominiumId === condominium.id}
+                        aria-label={`Acesso de ${condominium.name} ${condominium.status === "active" ? "ativo" : "inativo"}. Clique para alternar.`}
+                        title="Clique para suspender ou reativar o acesso"
+                        onClick={() => void handleToggleStatus(condominium)}
                       >
-                        Editar
+                        {togglingCondominiumId === condominium.id
+                          ? "Salvando..."
+                          : condominium.status === "active"
+                            ? "Ativo"
+                            : "Inativo"}
                       </button>
                       <button
                         className="text-button danger-text-button"

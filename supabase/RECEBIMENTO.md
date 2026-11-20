@@ -102,10 +102,15 @@
     Depois, execute `20261120150000_create_resident_on_package_reception.sql`:
     quando o porteiro confirma que o destinatário é morador do apartamento, cria
     o morador automaticamente na unidade se ainda não constar.
-    Com o prazo vencido ou o condomínio inativo, síndico e porteiro ficam presos
-    à tela inicial com aviso de contato com o suporte técnico: o bloqueio vale
-    para RLS, RPCs e Edge Functions (`manage-manager` e `manage-porter` devem
-    ser redeployadas), e o Super Admin mantém o acesso. A importação é permitida
+    Por fim, execute `20261120160000_set_condominium_status.sql`: cria a RPC
+    `set_condominium_status`, exclusiva do Super Admin, usada pelo botão
+    **Ativo**/**Inativo** no cartão do condomínio. Ela suspende ou reativa o
+    acesso sem apagar nenhum dado; renovar o prazo não reativa um condomínio
+    inativo. Com o prazo vencido ou o condomínio inativo, síndico e porteiro
+    ficam presos à tela inicial com aviso de contato com o suporte técnico: o
+    bloqueio vale para RLS, RPCs e Edge Functions (`manage-manager` e
+    `manage-porter` devem ser redeployadas), e o Super Admin mantém o acesso. A
+    importação é permitida
     ao Síndico e ao Super Admin, nunca ao Porteiro; a RPC é atômica e devolve
     `units_created`, `residents_created` e `duplicates_skipped`.
 2. Gere a versão de produção com `npm run build` e publique as páginas

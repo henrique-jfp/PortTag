@@ -162,6 +162,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 29. `supabase/migrations/20261119220000_residents_import.sql`
 30. `supabase/migrations/20261120140000_preserve_label_lab_ocr.sql`
 31. `supabase/migrations/20261120150000_create_resident_on_package_reception.sql`
+32. `supabase/migrations/20261120160000_set_condominium_status.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -202,6 +203,14 @@ a checagem está no banco (`condominium_access_is_active`, usada por
 `is_condominium_admin` e `can_access_condominium_block`) e nas Edge Functions
 `manage-manager` e `manage-porter`, não apenas na interface. O Super Admin
 continua com acesso irrestrito.
+
+A migração 32 cria `set_condominium_status`, exclusiva do Super Admin, para
+suspender ou reativar o acesso de um condomínio (por exemplo, por
+inadimplência) sem excluir blocos, unidades, moradores, encomendas nem vínculos.
+No painel, o botão **Ativo**/**Inativo** do cartão substituiu **Editar**: nome e
+endereço são definitivos após o cadastro. Inativar já bloqueia síndico e
+porteiro pelas mesmas regras do prazo vencido; renovar o prazo não reativa um
+condomínio inativo, e somente o Super Admin pode reativá-lo.
 
 A migração 29 cria a RPC `import_condominium_residents`, usada pela importação
 de planilha de moradores no cadastro de estrutura. Ela aceita unidade, bloco

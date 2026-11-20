@@ -550,8 +550,48 @@
 }
 
 .dashboard .admin-status-badge.is-inactive {
-  background: #f2f4f7;
-  color: #667085;
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.dashboard .admin-status-toggle {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dashboard .admin-status-toggle::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+
+.dashboard .admin-status-toggle:hover {
+  filter: brightness(0.95);
+}
+
+.dashboard .admin-status-toggle:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.dashboard .admin-status-toggle.is-active {
+  background: #e7f7ed;
+  color: #176b36;
+}
+
+.dashboard .admin-status-toggle.is-inactive {
+  background: #fee4e2;
+  color: #b42318;
 }
 
 .dashboard .admin-card-actions {
