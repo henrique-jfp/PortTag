@@ -789,8 +789,8 @@ export function PorterReception() {
   const [notificationMessage, setNotificationMessage] = useState("");
   const [notifyingId, setNotifyingId] = useState("");
   const [notificationLink, setNotificationLink] = useState("");
-  /** Confirmação do recebimento do entregador feita no ato do cadastro. */
-  const [notifyOnReceive, setNotifyOnReceive] = useState(false);
+  /** Confirmação do recebimento do entregador feita no ato do cadastro (padrão true para aviso automático). */
+  const [notifyOnReceive, setNotifyOnReceive] = useState(true);
   const [duplicateWarning, setDuplicateWarning] = useState("");
   const [collectionBaseId, setCollectionBaseId] = useState("");
   /** null = todos os pacotes do grupo; array = desmarques feitos pelo porteiro. */
@@ -1464,7 +1464,7 @@ export function PorterReception() {
     setDuplicateWarning("");
     setNotificationMessage("");
     setNotificationLink("");
-    setNotifyOnReceive(false);
+    setNotifyOnReceive(true);
     // Campos da retirada também precisam zerar: se sobrarem, o autosave
     // recria um rascunho e o aviso "Continue de onde parou" volta sozinho.
     setCollectionBaseId("");
@@ -1959,6 +1959,9 @@ export function PorterReception() {
         whatsappLink: result.whatsappLink,
       });
       rememberDeliveryPerson(draft.deliveryPerson.trim());
+      if (result.id && whatsapp) {
+        void notifyPackage(result.id);
+      }
     } catch (error) {
       if (error instanceof DuplicatePackageError) {
         updateBulkItem(item.id, {
@@ -2385,7 +2388,7 @@ export function PorterReception() {
     setDuplicateWarning("");
     setNotificationMessage("");
     setNotificationLink("");
-    setNotifyOnReceive(false);
+    setNotifyOnReceive(true);
     setLastLabelRead(null);
     setPageError("");
     setSuccessMessage("");

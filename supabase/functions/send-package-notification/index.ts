@@ -35,9 +35,11 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const authHeader = req.headers.get("Authorization");
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const apiKeyHeader = req.headers.get("apikey") ?? "";
 
-  if (!supabaseUrl || !supabaseServiceKey || !authHeader) {
+  if (!supabaseUrl || !supabaseServiceKey) {
     return respond({ error: "Configuração do servidor incompleta." }, 500);
   }
 
@@ -46,12 +48,18 @@ Deno.serve(async (req) => {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  const {
-    data: { user },
-    error: authError,
-  } = await adminClient.auth.getUser(token);
+  // Aceita autenticação por usuário (JWT) ou anon key autorizada do projeto
+  const isAnon = token === supabaseAnonKey || apiKeyHeader === supabaseAnonKey;
+  let isAuthenticated = isAnon;
 
-  if (authError || !user) {
+  if (!isAuthenticated && token) {
+    const { data: { user }, error: authError } = await adminClient.auth.getUser(token);
+    if (!authError && user) {
+      isAuthenticated = true;
+    }
+  }
+
+  if (!isAuthenticated) {
     return respond({ error: "Faça login para continuar." }, 401);
   }
 
@@ -98,6 +106,7 @@ Deno.serve(async (req) => {
     : `55${recipientDigits}`;
 
   try {
+    console.log(`Enviando mensagem para ${cleanRecipient} via instância ${instance}...`);
     const sendRes = await fetch(`${EVOLUTION_API_URL}/message/sendText/${instance}`, {
       method: "POST",
       headers: {
@@ -119,6 +128,8 @@ Deno.serve(async (req) => {
         errBody?.message ||
         `Erro HTTP ${sendRes.status} na Evolution API`;
 
+      console.error(`Falha no envio Evolution API:`, errorMessage);
+
       await adminClient.rpc("update_package_notification_status", {
         p_notification_id: notificationId,
         p_status: "failed",
@@ -136,6 +147,7 @@ Deno.serve(async (req) => {
 
     const sendData = await sendRes.json();
     const providerMessageId = sendData?.key?.id || null;
+    console.log(`Mensagem enviada com sucesso! Provider ID:`, providerMessageId);
 
     await adminClient.rpc("update_package_notification_status", {
       p_notification_id: notificationId,
@@ -143,6 +155,14 @@ Deno.serve(async (req) => {
       p_provider_message_id: providerMessageId,
       p_error: null,
     });
+
+    // Atualiza packages.last_notified_at
+    if (notification.package_id) {
+      await adminClient
+        .from("packages")
+        .update({ last_notified_at: new Date().toISOString() })
+        .eq("id", notification.package_id);
+    }
 
     return respond({
       success: true,
@@ -152,6 +172,8 @@ Deno.serve(async (req) => {
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Falha na conexão com a Evolution API.";
+
+    console.error(`Exceção ao chamar Evolution API:`, errorMessage);
 
     await adminClient.rpc("update_package_notification_status", {
       p_notification_id: notificationId,
