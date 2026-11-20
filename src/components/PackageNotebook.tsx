@@ -716,8 +716,8 @@ export function PackageNotebook({
                               <dt>Morador do apartamento</dt>
                               <dd>
                                 {selectedRecord.recipient_is_resident
-                                  ? "Confirmado"
-                                  : "Não confirmado"}
+                                  ? "Confirmado (morador da unidade)"
+                                  : "Outro destinatário (não cadastrado como morador)"}
                               </dd>
                             </div>
                             <div>

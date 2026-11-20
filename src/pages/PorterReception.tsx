@@ -2721,32 +2721,6 @@ export function PorterReception() {
                           </small>
                         )}
                       </label>
-                      {selectedUnit &&
-                        selectedUnitContacts.some(
-                          (resident) => resident.whatsapp,
-                        ) && (
-                          <div className="porter-whatsapp-actions">
-                            {selectedUnitContacts
-                              .filter((resident) => resident.whatsapp)
-                              .map((resident) => (
-                                <a
-                                  key={resident.id}
-                                  className="porter-whatsapp-link"
-                                  href={packageWhatsappLink(
-                                    resident.whatsapp as string,
-                                    `o apartamento ${selectedUnit.unit_number}`,
-                                    resident.name ?? "",
-                                    trackingCode,
-                                  )}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  Avisar {resident.name || "morador"} no WhatsApp
-                                </a>
-                              ))}
-                          </div>
-                        )}
-
                       <label>
                         Nome do destinatário
                         <input
@@ -2777,7 +2751,12 @@ export function PorterReception() {
                             setRecipientIsResident(event.target.checked)
                           }
                         />
-                        Confirmo que o destinatário é morador deste apartamento.
+                        <span>
+                          O destinatário é morador deste apartamento.
+                          <small className="porter-checkbox-hint">
+                            Ao marcar, o nome será cadastrado como morador da unidade se ainda não constar.
+                          </small>
+                        </span>
                       </label>
 
                       <label>
@@ -2809,7 +2788,7 @@ export function PorterReception() {
                             setNotifyOnReceive(event.target.checked)
                           }
                         />
-                        Confirmo que recebi a encomenda do entregador e quero avisar o morador no WhatsApp.
+                        Avisar o morador no WhatsApp ao registrar.
                       </label>
 
                       <label>
@@ -3374,10 +3353,9 @@ export function PorterReception() {
                                         <span>Morador: {item.resident_name}</span>
                                       )}
                                       <span>
-                                        Morador do apartamento:{" "}
                                         {item.recipient_is_resident
-                                          ? "confirmado"
-                                          : "não confirmado"}
+                                          ? "Morador da unidade"
+                                          : "Destinatário: outro"}
                                       </span>
                                       {item.sender && <span>Empresa: {item.sender}</span>}
                                       {item.delivery_person && (
@@ -3650,10 +3628,9 @@ export function PorterReception() {
                       )}
                       <span>{item.resident_name || "Morador não cadastrado"}</span>
                       <small>
-                        Morador do apartamento:{" "}
                         {item.recipient_is_resident
-                          ? "confirmado"
-                          : "não confirmado"}
+                          ? "Morador da unidade"
+                          : "Destinatário: outro"}
                       </small>
                       <small>Recebida {formatDate(item.received_at)}</small>
                       {item.sender && <small>{item.sender}</small>}

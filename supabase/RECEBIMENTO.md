@@ -99,6 +99,9 @@
     Por fim, execute `20261120140000_preserve_label_lab_ocr.sql`: a publicação
     continua apagando a foto privada, mas preserva o OCR da amostra para que os
     casos de regressão das versões antigas possam ser re-testados.
+    Depois, execute `20261120150000_create_resident_on_package_reception.sql`:
+    quando o porteiro confirma que o destinatário é morador do apartamento, cria
+    o morador automaticamente na unidade se ainda não constar.
     Com o prazo vencido ou o condomínio inativo, síndico e porteiro ficam presos
     à tela inicial com aviso de contato com o suporte técnico: o bloqueio vale
     para RLS, RPCs e Edge Functions (`manage-manager` e `manage-porter` devem
