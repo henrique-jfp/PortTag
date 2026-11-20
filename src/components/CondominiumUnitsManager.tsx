@@ -41,8 +41,7 @@ export function CondominiumUnitsManager({
   const [savingBlock, setSavingBlock] = useState(false);
   const [unitNumber, setUnitNumber] = useState("");
   const [selectedBlockId, setSelectedBlockId] = useState("");
-  const [unitStatus, setUnitStatus] = useState<"active" | "inactive">("active");
-  const [editingUnitId, setEditingUnitId] = useState<string | null>(null);
+  const [updatingUnitId, setUpdatingUnitId] = useState<string | null>(null);
   const [expandedResidentsUnitId, setExpandedResidentsUnitId] = useState<
     string | null
   >(null);
@@ -140,27 +139,6 @@ export function CondominiumUnitsManager({
     }
   }
 
-  function startEditingUnit(unit: Unit) {
-    setEditingUnitId(unit.id);
-    setUnitNumber(unit.unit_number);
-    setSelectedBlockId(unit.block_id ?? "");
-    setUnitStatus(unit.status);
-    setUnitMode("single");
-    setUnitError("");
-    setUnitSuccess("");
-    document
-      .getElementById("unit-form")
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function cancelUnitEdit() {
-    setEditingUnitId(null);
-    setUnitNumber("");
-    setUnitStatus("active");
-    setUnitError("");
-    setUnitSuccess("");
-  }
-
   async function handleSaveUnit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -171,81 +149,80 @@ export function CondominiumUnitsManager({
     try {
       const number = unitNumber.trim();
       const blockId = selectedBlockId || null;
+      const { data, error } = await supabase.rpc("create_unit", {
+        p_condominium_id: condominiumId,
+        p_block_id: blockId,
+        p_unit_number: number,
+      });
 
-      if (editingUnitId) {
-        const { error } = await supabase.rpc("update_unit", {
-          p_unit_id: editingUnitId,
-          p_block_id: blockId,
-          p_unit_number: number,
-          p_status: unitStatus,
-        });
-
-        if (error) {
-          setUnitError(error.message);
-          return;
-        }
-
-        setUnits((current) =>
-          current
-            .map((unit) =>
-              unit.id === editingUnitId
-                ? {
-                    ...unit,
-                    unit_number: number,
-                    block_id: blockId,
-                    status: unitStatus,
-                  }
-                : unit,
-            )
-            .sort((a, b) =>
-              a.unit_number.localeCompare(b.unit_number, "pt-BR", {
-                numeric: true,
-              }),
-            ),
-        );
-        setUnitSuccess("Unidade atualizada.");
-      } else {
-        const { data, error } = await supabase.rpc("create_unit", {
-          p_condominium_id: condominiumId,
-          p_block_id: blockId,
-          p_unit_number: number,
-        });
-
-        if (error) {
-          setUnitError(error.message);
-          return;
-        }
-        if (!data) {
-          setUnitError("A unidade foi salva, mas a API não retornou o identificador.");
-          return;
-        }
-
-        setUnits((current) =>
-          [...current, {
-            id: data,
-            unit_number: number,
-            block_id: blockId,
-            status: "active" as const,
-          }].sort((a, b) =>
-            a.unit_number.localeCompare(b.unit_number, "pt-BR", {
-              numeric: true,
-            }),
-          ),
-        );
-        setUnitSuccess(
-          `Unidade ${number} cadastrada${blockId ? ` no bloco ${blocks.find((block) => block.id === blockId)?.name ?? ""}` : ""}.`,
-        );
+      if (error) {
+        setUnitError(error.message);
+        return;
+      }
+      if (!data) {
+        setUnitError("A unidade foi salva, mas a API não retornou o identificador.");
+        return;
       }
 
-      setEditingUnitId(null);
+      setUnits((current) =>
+        [...current, {
+          id: data,
+          unit_number: number,
+          block_id: blockId,
+          status: "active" as const,
+        }].sort((a, b) =>
+          a.unit_number.localeCompare(b.unit_number, "pt-BR", {
+            numeric: true,
+          }),
+        ),
+      );
+      setUnitSuccess(
+        `Unidade ${number} cadastrada${blockId ? ` no bloco ${blocks.find((block) => block.id === blockId)?.name ?? ""}` : ""}.`,
+      );
       setUnitNumber("");
-      setUnitStatus("active");
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Falha inesperada.";
       setUnitError(`Não foi possível salvar a unidade. ${message}`);
     } finally {
       setSavingUnit(false);
+    }
+  }
+
+  async function toggleUnitStatus(unit: Unit) {
+    const nextStatus = unit.status === "active" ? "inactive" : "active";
+
+    setUnitError("");
+    setUnitSuccess("");
+    setUpdatingUnitId(unit.id);
+
+    try {
+      const { error } = await supabase.rpc("update_unit", {
+        p_unit_id: unit.id,
+        p_block_id: unit.block_id,
+        p_unit_number: unit.unit_number,
+        p_status: nextStatus,
+      });
+
+      if (error) {
+        setUnitError(`Não foi possível alterar o status. ${error.message}`);
+        return;
+      }
+
+      setUnits((current) =>
+        current.map((item) =>
+          item.id === unit.id ? { ...item, status: nextStatus } : item,
+        ),
+      );
+      setUnitSuccess(
+        `Apartamento ${unit.unit_number} marcado como ${nextStatus === "active" ? "ativo" : "inativo"}.`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Falha inesperada.";
+      setUnitError(`Não foi possível alterar o status. ${message}`);
+    } finally {
+      setUpdatingUnitId(null);
     }
   }
 
@@ -342,7 +319,6 @@ export function CondominiumUnitsManager({
       if (expandedResidentsUnitId === unit.id) {
         setExpandedResidentsUnitId(null);
       }
-      if (editingUnitId === unit.id) cancelUnitEdit();
       setUnitSuccess(`Apartamento ${unit.unit_number} excluído.`);
     } catch (error) {
       const message =
@@ -445,7 +421,6 @@ export function CondominiumUnitsManager({
                   key={block.id}
                   className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
                   type="button"
-                  disabled={Boolean(editingUnitId)}
                   aria-pressed={selectedBlockId === block.id}
                   onClick={() => setSelectedBlockId(block.id)}
                 >
@@ -494,16 +469,8 @@ export function CondominiumUnitsManager({
       <section className="admin-section" id="unit-form">
         <div className="section-heading">
           <div>
-            <h2>
-              {editingUnitId
-                ? `Editar unidade ${unitNumber || ""}`
-                : "Cadastrar unidades"}
-            </h2>
-            <p>
-              {editingUnitId
-                ? "Altere os dados e salve para voltar ao cadastro rápido."
-                : "Unidades podem existir sem moradores cadastrados."}
-            </p>
+            <h2>Cadastrar unidades</h2>
+            <p>Unidades podem existir sem moradores cadastrados.</p>
           </div>
         </div>
 
@@ -514,24 +481,21 @@ export function CondominiumUnitsManager({
         >
           <button
             type="button"
-            aria-pressed={unitMode === "single" || Boolean(editingUnitId)}
-            disabled={Boolean(editingUnitId)}
+            aria-pressed={unitMode === "single"}
             onClick={() => setUnitMode("single")}
           >
             Unidade avulsa
           </button>
           <button
             type="button"
-            aria-pressed={unitMode === "batch" && !editingUnitId}
-            disabled={Boolean(editingUnitId)}
+            aria-pressed={unitMode === "batch"}
             onClick={() => setUnitMode("batch")}
           >
             Em lote
           </button>
           <button
             type="button"
-            aria-pressed={unitMode === "import" && !editingUnitId}
-            disabled={Boolean(editingUnitId)}
+            aria-pressed={unitMode === "import"}
             onClick={() => setUnitMode("import")}
           >
             Importar planilha
@@ -541,7 +505,7 @@ export function CondominiumUnitsManager({
         <p className="admin-form-context">
           Bloco de trabalho:{" "}
           <strong>{selectedBlock?.name ?? "condomínio sem blocos"}</strong>.
-          {unitMode === "batch" && !editingUnitId
+          {unitMode === "batch"
             ? " As unidades geradas serão criadas neste bloco."
             : " Para trocar, selecione outro bloco acima."}
         </p>
@@ -557,7 +521,7 @@ export function CondominiumUnitsManager({
           </p>
         )}
 
-        {unitMode === "single" || editingUnitId ? (
+        {unitMode === "single" ? (
           <form className="inline-form" onSubmit={handleSaveUnit}>
             {blocks.length === 0 && blockCount > 0 && (
               <p className="field-hint">
@@ -574,43 +538,13 @@ export function CondominiumUnitsManager({
               />
             </label>
 
-            {editingUnitId && (
-              <label className="form-field">
-                Status
-                <select
-                  value={unitStatus}
-                  onChange={(event) =>
-                    setUnitStatus(event.target.value as "active" | "inactive")
-                  }
-                >
-                  <option value="active">Ativo</option>
-                  <option value="inactive">Inativo</option>
-                </select>
-              </label>
-            )}
-
             <div className="form-actions">
               <button
                 className="primary-button"
-                disabled={
-                  savingUnit || (blockCount > 0 && blocks.length === 0)
-                }
+                disabled={savingUnit || (blockCount > 0 && blocks.length === 0)}
               >
-                {savingUnit
-                  ? "Salvando..."
-                  : editingUnitId
-                    ? "Salvar alterações"
-                    : "Cadastrar unidade"}
+                {savingUnit ? "Salvando..." : "Cadastrar unidade"}
               </button>
-              {editingUnitId && (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={cancelUnitEdit}
-                >
-                  Cancelar
-                </button>
-              )}
             </div>
           </form>
         ) : unitMode === "batch" ? (
@@ -746,20 +680,22 @@ export function CondominiumUnitsManager({
                       <article className="building-unit" key={unit.id}>
                         <div className="building-unit-heading">
                           <strong>{unit.unit_number}</strong>
-                          <span
-                            className={`unit-status unit-status-${unit.status}`}
+                          <button
+                            className={`unit-status unit-status-toggle unit-status-${unit.status}`}
+                            type="button"
+                            disabled={updatingUnitId === unit.id}
+                            aria-label={`Apartamento ${unit.unit_number} ${unit.status === "active" ? "ativo" : "inativo"}. Clique para alternar.`}
+                            title="Clique para alternar entre ativo e inativo"
+                            onClick={() => void toggleUnitStatus(unit)}
                           >
-                            {unit.status === "active" ? "Ativo" : "Inativo"}
-                          </span>
+                            {updatingUnitId === unit.id
+                              ? "Salvando..."
+                              : unit.status === "active"
+                                ? "Ativo"
+                                : "Inativo"}
+                          </button>
                         </div>
                         <div className="table-actions">
-                          <button
-                            className="text-button unit-action-edit"
-                            type="button"
-                            onClick={() => startEditingUnit(unit)}
-                          >
-                            Editar
-                          </button>
                           <button
                             className="text-button unit-action-residents"
                             type="button"
