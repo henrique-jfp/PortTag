@@ -63,23 +63,45 @@ Deno.serve(async (req) => {
     return respond({ error: "Faça login para continuar." }, 401);
   }
 
-  let body: { notificationId?: string; packageId?: string };
+  let body: Record<string, unknown> = {};
   try {
-    body = await req.json();
+    const rawBody = await req.text();
+    body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
   } catch {
     return respond({ error: "JSON inválido." }, 400);
   }
 
-  const { notificationId } = body;
-  if (!notificationId) {
-    return respond({ error: "notificationId é obrigatório." }, 400);
+  const notificationId =
+    (body.notificationId as string | undefined) ||
+    (body.notification_id as string | undefined);
+  const packageId =
+    (body.packageId as string | undefined) ||
+    (body.package_id as string | undefined);
+
+  let targetNotificationId = notificationId;
+  if (!targetNotificationId && packageId) {
+    const { data: latestNotif } = await adminClient
+      .from("package_notifications")
+      .select("id")
+      .eq("package_id", packageId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestNotif?.id) {
+      targetNotificationId = latestNotif.id;
+    }
+  }
+
+  if (!targetNotificationId) {
+    return respond({ error: "notificationId ou packageId é obrigatório." }, 400);
   }
 
   // Busca a notificação gravada
   const { data: notification, error: notifError } = await adminClient
     .from("package_notifications")
     .select("*, packages(unit_number, block_name, sender, tracking_code)")
-    .eq("id", notificationId)
+    .eq("id", targetNotificationId)
     .single();
 
   if (notifError || !notification) {
@@ -131,7 +153,7 @@ Deno.serve(async (req) => {
       console.error(`Falha no envio Evolution API:`, errorMessage);
 
       await adminClient.rpc("update_package_notification_status", {
-        p_notification_id: notificationId,
+        p_notification_id: targetNotificationId,
         p_status: "failed",
         p_provider_message_id: null,
         p_error: errorMessage,
@@ -150,7 +172,7 @@ Deno.serve(async (req) => {
     console.log(`Mensagem enviada com sucesso! Provider ID:`, providerMessageId);
 
     await adminClient.rpc("update_package_notification_status", {
-      p_notification_id: notificationId,
+      p_notification_id: targetNotificationId,
       p_status: "sent",
       p_provider_message_id: providerMessageId,
       p_error: null,
@@ -176,7 +198,7 @@ Deno.serve(async (req) => {
     console.error(`Exceção ao chamar Evolution API:`, errorMessage);
 
     await adminClient.rpc("update_package_notification_status", {
-      p_notification_id: notificationId,
+      p_notification_id: targetNotificationId,
       p_status: "failed",
       p_provider_message_id: null,
       p_error: errorMessage,

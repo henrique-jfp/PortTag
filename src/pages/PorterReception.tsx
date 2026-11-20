@@ -1801,15 +1801,16 @@ export function PorterReception() {
 
       rememberDeliveryPerson(deliveryPerson.trim());
       if (account) void clearReceptionDraft(account.condominium_id);
-      setSuccessMessage(
-        `Encomenda registrada para o apartamento ${selectedUnit.unit_number}.`,
-      );
 
+      const unitNumber = selectedUnit.unit_number;
       const trimmedDeliveryPerson = deliveryPerson.trim();
       resetReceptionFields();
       clearPreviewUrl();
       setFile(null);
       setDeliveryPerson(trimmedDeliveryPerson || lastDeliveryPerson);
+      setSuccessMessage(
+        `Encomenda registrada para o apartamento ${unitNumber}.`,
+      );
       // notifyPackage já recarrega a lista; evitar um segundo fetch seguido.
       if (shouldNotify && result.id) await notifyPackage(result.id);
       else await reloadPackages();
@@ -2117,16 +2118,19 @@ export function PorterReception() {
               body: { notificationId: notification.id },
             });
           if (sendError || sendResult?.status === "failed") {
+            console.error("send-package-notification error:", sendError, sendResult);
             // Falha no envio automático: oferece fallback manual
             const link = whatsappLink(notification.recipient, notification.message);
+            const detail = sendResult?.error ? ` (${sendResult.error})` : "";
             setNotificationMessage(
-              "Envio automático falhou. Clique abaixo para enviar manualmente:",
+              `Envio automático indisponível${detail}. Clique abaixo para enviar manualmente:`,
             );
             setNotificationLink(link);
           } else {
             setNotificationMessage("✅ Morador avisado automaticamente pelo WhatsApp!");
           }
-        } catch {
+        } catch (err) {
+          console.error("send-package-notification exception:", err);
           // Fallback manual se a Edge Function não estiver disponível
           const link = whatsappLink(notification.recipient, notification.message);
           setNotificationMessage(

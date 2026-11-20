@@ -44,6 +44,7 @@ grant select on public.condominium_whatsapp_instances to authenticated;
 -- Registra o aviso com roteamento inteligente: se a portaria possui WhatsApp automático
 -- conectado e não foi forçado envio manual, agenda como 'whatsapp' ('pending').
 -- Caso contrário, devolve 'whatsapp_link' ('manual') pronto para o wa.me.
+drop function if exists public.register_package_notification(uuid);
 create or replace function public.register_package_notification(
   p_package_id uuid,
   p_force_manual boolean default false
