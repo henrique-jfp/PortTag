@@ -331,8 +331,11 @@ export function CondominiumUnitsManager({
   }
 
   const selectedBlock = blocks.find((block) => block.id === selectedBlockId);
+  const noBlockUnits = units.filter((unit) => unit.block_id === null);
   const displayedUnits = blocks.length
-    ? units.filter((unit) => unit.block_id === selectedBlockId)
+    ? selectedBlockId === ""
+      ? noBlockUnits
+      : units.filter((unit) => unit.block_id === selectedBlockId)
     : units;
   const normalizedUnitSearch = unitSearch.trim().toLocaleLowerCase("pt-BR");
   const filteredUnits = normalizedUnitSearch
@@ -396,7 +399,11 @@ export function CondominiumUnitsManager({
             <span className="admin-context-label">Bloco selecionado</span>
             <span className="admin-context-value">
               {selectedBlock?.name ??
-                (blocks.length ? "Nenhum bloco selecionado" : "Sem blocos")}
+                (blocks.length
+                  ? selectedBlockId === ""
+                    ? "Sem bloco"
+                    : "Nenhum bloco selecionado"
+                  : "Sem blocos")}
               {selectedBlock && (
                 <span className="admin-context-badge">Bloco atual</span>
               )}
@@ -430,6 +437,18 @@ export function CondominiumUnitsManager({
                 </button>
               );
             })}
+            {noBlockUnits.length > 0 && (
+              <button
+                className={`block-choice${selectedBlockId === "" ? " block-choice-active" : ""}`}
+                type="button"
+                aria-pressed={selectedBlockId === ""}
+                onClick={() => setSelectedBlockId("")}
+              >
+                <strong>Sem bloco</strong>
+                <span>{noBlockUnits.length} apartamento(s)</span>
+                {selectedBlockId === "" && <small>Bloco atual</small>}
+              </button>
+            )}
           </div>
         ) : (
           <p className="field-hint">
@@ -504,7 +523,11 @@ export function CondominiumUnitsManager({
 
         <p className="admin-form-context">
           Bloco de trabalho:{" "}
-          <strong>{selectedBlock?.name ?? "condomínio sem blocos"}</strong>.
+          <strong>
+            {selectedBlock?.name ??
+              (blocks.length ? "Sem bloco" : "condomínio sem blocos")}
+          </strong>
+          .
           {unitMode === "batch"
             ? " As unidades geradas serão criadas neste bloco."
             : " Para trocar, selecione outro bloco acima."}
@@ -528,6 +551,12 @@ export function CondominiumUnitsManager({
                 Cadastre ao menos um bloco antes de criar unidades.
               </p>
             )}
+            {blocks.length > 0 && selectedBlockId === "" && (
+              <p className="field-hint">
+                Selecione um bloco para cadastrar novas unidades. As unidades
+                importadas sem bloco aparecem em “Sem bloco”.
+              </p>
+            )}
 
             <label className="form-field">
               Número do apartamento ou sala
@@ -541,7 +570,11 @@ export function CondominiumUnitsManager({
             <div className="form-actions">
               <button
                 className="primary-button"
-                disabled={savingUnit || (blockCount > 0 && blocks.length === 0)}
+                disabled={
+                  savingUnit ||
+                  (blockCount > 0 && blocks.length === 0) ||
+                  (blocks.length > 0 && selectedBlockId === "")
+                }
               >
                 {savingUnit ? "Salvando..." : "Cadastrar unidade"}
               </button>
@@ -584,7 +617,10 @@ export function CondominiumUnitsManager({
             <div className="form-actions">
               <button
                 className="primary-button"
-                disabled={savingBatch || (blockCount > 0 && !selectedBlockId)}
+                disabled={
+                  savingBatch ||
+                  ((blockCount > 0 || blocks.length > 0) && !selectedBlockId)
+                }
               >
                 {savingBatch ? "Cadastrando..." : "Gerar apartamentos"}
               </button>
@@ -595,7 +631,15 @@ export function CondominiumUnitsManager({
             condominiumId={condominiumId}
             blocks={blocks}
             hasBlocks={blockCount > 0 || blocks.length > 0}
-            onImported={() => void reloadUnits()}
+            onImported={(importedRows) => {
+              if (
+                blocks.length > 0 &&
+                importedRows.some((row) => !row.block_name?.trim())
+              ) {
+                setSelectedBlockId("");
+              }
+              void reloadUnits();
+            }}
           />
         )}
 

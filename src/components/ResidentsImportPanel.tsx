@@ -8,6 +8,7 @@ import {
   NO_COLUMN,
   type ResidentColumnMapping,
   type ResidentImportAnalysis,
+  type ResidentImportRow,
   type ResidentImportSource,
 } from "../lib/residentImport";
 import { supabase } from "../lib/supabase";
@@ -16,7 +17,7 @@ type ResidentsImportPanelProps = {
   condominiumId: string;
   blocks: { id: string; name: string }[];
   hasBlocks: boolean;
-  onImported: () => void | Promise<void>;
+  onImported: (rows: readonly ResidentImportRow[]) => void | Promise<void>;
 };
 
 type ImportRpcResult = {
@@ -40,7 +41,7 @@ const MAPPING_FIELDS: {
   {
     key: "block",
     label: "Bloco / Torre",
-    hint: "Opcional. Linhas sem bloco usam o bloco padrão.",
+    hint: "Opcional. Linhas sem bloco ficam sem bloco.",
   },
   {
     key: "name",
@@ -82,12 +83,6 @@ export function ResidentsImportPanel({
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
-
-  const needsFallbackBlock =
-    hasBlocks &&
-    Boolean(
-      analysis?.importableRows.some((row) => !row.block_name?.trim()),
-    );
 
   function resetFile() {
     setFile(null);
@@ -150,6 +145,7 @@ export function ResidentsImportPanel({
   async function handleImport() {
     if (!analysis || analysis.importableRows.length === 0) return;
 
+    const importedRows = analysis.importableRows;
     setImporting(true);
     setError("");
     setSummary("");
@@ -173,7 +169,7 @@ export function ResidentsImportPanel({
           `${result.duplicates_skipped ?? 0} duplicata(s) ignorada(s).`,
       );
       resetFile();
-      await onImported();
+      await onImported(importedRows);
     } catch (cause) {
       setError(errorMessage(cause, "Não foi possível concluir a importação."));
     } finally {
@@ -224,9 +220,8 @@ export function ResidentsImportPanel({
               ))}
             </select>
             <span className="field-hint">
-              {source && mapping.block >= 0
-                ? "Usado apenas nas linhas sem bloco preenchido; as demais usam o bloco da planilha."
-                : "As unidades serão criadas neste bloco."}
+              Opcional. Se preenchido, é usado apenas nas linhas sem bloco; as
+              demais usam o bloco da planilha. Pode ficar em branco.
             </span>
           </div>
         )}
@@ -272,7 +267,6 @@ export function ResidentsImportPanel({
               !analysis ||
               analysis.importableRows.length === 0 ||
               analysis.counts.errors > 0 ||
-              (needsFallbackBlock && !selectedBlockId) ||
               importing
             }
             onClick={() => void handleImport()}
@@ -328,11 +322,6 @@ export function ResidentsImportPanel({
       {error && (
         <p className="feedback-message feedback-error" role="alert">
           {error}
-        </p>
-      )}
-      {needsFallbackBlock && !selectedBlockId && (
-        <p className="feedback-message feedback-error" role="alert">
-          Selecione um bloco padrão para as linhas sem bloco informado.
         </p>
       )}
       {summary && (

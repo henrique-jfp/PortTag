@@ -165,6 +165,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 32. `supabase/migrations/20261120160000_set_condominium_status.sql`
 33. `supabase/migrations/20261120170000_bulk_package_notifications.sql`
 34. `supabase/migrations/20261120180000_reset_condominium_data.sql`
+35. `supabase/migrations/20261121000000_optional_block_import.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -225,8 +226,9 @@ condomínio inativo, e somente o Super Admin pode reativá-lo.
 A migração 29 cria a RPC `import_condominium_residents`, usada pela importação
 de planilha de moradores no cadastro de estrutura. Ela aceita unidade, bloco
 (opcional), nome e WhatsApp, resolve o bloco pelo nome (sem diferenciar
-maiúsculas), cria unidades ausentes apenas quando a opção estiver marcada e
-ignora moradores repetidos na mesma unidade. A operação é atômica: um erro em
+maiúsculas) e aceita linhas sem bloco mesmo em condomínios com blocos. Cria
+unidades ausentes apenas quando a opção estiver marcada e ignora moradores
+repetidos na mesma unidade. A operação é atômica: um erro em
 qualquer linha cancela o lote. A importação está disponível para o Síndico e
 para o Super Admin, nunca para o Porteiro.
 
@@ -346,7 +348,10 @@ opção). A tela lê o arquivo, mostra os cabeçalhos encontrados e pede o
 **mapeamento explícito das colunas**: unidade/apartamento (obrigatório), bloco,
 nome e telefone/WhatsApp (opcionais). O nome das colunas não precisa seguir um
 padrão: a sugestão inicial pode ser trocada antes de gerar a prévia e confirmar
-a importação. As unidades ausentes só entram se a opção correspondente estiver
+a importação. O bloco não é obrigatório — linhas sem bloco criam unidades sem
+bloco mesmo em condomínios que usam blocos; essas unidades aparecem em **Sem
+bloco** no gerenciador e ficam disponíveis aos porteiros com acesso a pelo
+menos um bloco. As unidades ausentes só entram se a opção correspondente estiver
 marcada e os contatos repetidos são ignorados. O resultado informa unidades
 criadas, moradores criados e duplicatas ignoradas.
 

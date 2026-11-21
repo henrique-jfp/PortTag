@@ -1096,8 +1096,10 @@ export function PorterReception() {
       }
       const allowedUnits =
         condominiumResult.data.block_count > 0
-          ? (unitsResult.data ?? []).filter((unit) =>
-              assignedBlockIds.includes(unit.block_id ?? ""),
+          ? (unitsResult.data ?? []).filter(
+              (unit) =>
+                unit.block_id === null ||
+                assignedBlockIds.includes(unit.block_id),
             )
           : unitsResult.data ?? [];
       accessBlockedRef.current = false;

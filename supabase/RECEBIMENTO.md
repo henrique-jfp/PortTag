@@ -128,6 +128,12 @@
     `package-receipts`/`label-lab-private` daquele condomínio, mas mantém o
     cadastro e as regras publicadas. Exige nome exato e aceite do aviso; contas
     de login e a instância externa da Evolution não são removidas.
+    Por fim, execute `20261121000000_optional_block_import.sql`: a RPC
+    `import_condominium_residents` deixa de exigir bloco, mesmo em condomínios
+    que usam blocos. As unidades importadas sem bloco aparecem em **Sem bloco**
+    no gerenciador e ficam visíveis aos porteiros com acesso a pelo menos um
+    bloco. A tela de importação continua permitindo escolher um bloco padrão,
+    mas não o exige mais.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
