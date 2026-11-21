@@ -16,6 +16,7 @@ type Unit = {
   id: string;
   unit_number: string;
   block_id: string | null;
+  floor_label: string | null;
   status: "active" | "inactive";
 };
 
@@ -71,7 +72,7 @@ export function CondominiumUnitsManager({
           .order("name"),
         supabase
           .from("units")
-          .select("id, unit_number, block_id, status")
+          .select("id, unit_number, block_id, floor_label, status")
           .eq("condominium_id", condominiumId)
           .order("unit_number"),
       ]);
@@ -169,6 +170,7 @@ export function CondominiumUnitsManager({
           id: data,
           unit_number: number,
           block_id: blockId,
+          floor_label: null,
           status: "active" as const,
         }].sort((a, b) =>
           a.unit_number.localeCompare(b.unit_number, "pt-BR", {
@@ -285,7 +287,7 @@ export function CondominiumUnitsManager({
         .order("name"),
       supabase
         .from("units")
-        .select("id, unit_number, block_id, status")
+        .select("id, unit_number, block_id, floor_label, status")
         .eq("condominium_id", condominiumId)
         .order("unit_number"),
     ]);

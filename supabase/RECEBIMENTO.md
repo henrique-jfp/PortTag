@@ -141,6 +141,12 @@
     recém-criados. A tela remove o campo **Bloco padrão**: sem bloco na
     planilha, ela pergunta se é prédio de bloco único ou se deve usar **Bloco
     1** como primeiro bloco.
+    Por fim, execute `20261121120000_resident_import_extra_fields.sql`: o
+    mapeamento passa a ser **um campo por coluna da planilha**, com as opções
+    Apartamento/unidade, Bloco, Andar, Morador, Telefone/WhatsApp, E-mail,
+    Observações e Não usar. Repetir **Morador** em várias colunas cria vários
+    moradores no mesmo apartamento. A RPC passa a gravar andar em `units` e
+    e-mail/observações em `unit_residents`, aceitando contato sem nome/telefone.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

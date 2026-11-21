@@ -167,6 +167,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 34. `supabase/migrations/20261120180000_reset_condominium_data.sql`
 35. `supabase/migrations/20261121000000_optional_block_import.sql`
 36. `supabase/migrations/20261121010000_import_creates_blocks.sql`
+37. `supabase/migrations/20261121120000_resident_import_extra_fields.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -345,11 +346,15 @@ alterar o endereço, o painel pede confirmação explícita porque ele alimenta 
 conferência determinística das etiquetas. Tanto em **Moradores** quanto em
 **Blocos e Unidades**, Síndico e Super Admin podem importar uma planilha de
 moradores pela RPC `import_condominium_residents` (o Porteiro não tem essa
-opção). A tela lê o arquivo, mostra os cabeçalhos encontrados e pede o
-**mapeamento explícito das colunas**: unidade/apartamento (obrigatório), bloco,
-nome e telefone/WhatsApp (opcionais). O nome das colunas não precisa seguir um
-padrão: a sugestão inicial pode ser trocada antes de gerar a prévia e confirmar
-a importação. Não existe mais **bloco padrão**: se a coluna de bloco estiver
+opção). A tela lê o arquivo e mostra **um campo de mapeamento por coluna
+encontrada**: se o arquivo tem 9 colunas, aparecem 9 seletores. Para cada um,
+o usuário escolhe o que aquela coluna representa: Apartamento/unidade, Bloco,
+Andar, Morador, Telefone/WhatsApp, E-mail, Observações ou Não usar. Basta
+repetir a opção **Morador** em três colunas para importar três moradores no
+mesmo apartamento; a 1ª coluna de Morador combina com a 1ª de Telefone, E-mail
+e Observações, e assim por diante. O nome das colunas não precisa seguir um
+padrão: a sugestão inicial pode ser trocada antes de gerar a prévia. Não existe
+mais **bloco padrão**: se a coluna de bloco estiver
 mapeada, todos os blocos encontrados (letras ou números) são criados
 automaticamente pela RPC e as unidades são vinculadas a eles. Se a planilha não
 informar bloco, a tela pergunta se o condomínio é de bloco único — nesse caso
@@ -357,8 +362,9 @@ cria só os apartamentos — ou se está sendo cadastrado o primeiro bloco — n
 caso usa **Bloco 1**. As unidades sem bloco aparecem em **Sem bloco** no
 gerenciador e ficam disponíveis aos porteiros com acesso a pelo menos um bloco.
 As unidades ausentes só entram se a opção correspondente estiver marcada e os
-contatos repetidos são ignorados. O resultado informa blocos criados, unidades
-criadas, moradores criados e duplicatas ignoradas.
+contatos repetidos são ignorados. Andar, e-mail e observações informados na
+planilha são gravados. O resultado informa blocos criados, unidades criadas,
+moradores criados e duplicatas ignoradas.
 
 A retirada é registrada pelo porteiro após confirmação presencial do morador.
 Para confirmar a retirada, o morador assina na tela do celular e o porteiro

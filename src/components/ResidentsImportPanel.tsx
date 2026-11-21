@@ -5,8 +5,9 @@ import {
   guessResidentColumnMapping,
   mapResidentRows,
   readResidentFile,
+  RESIDENT_COLUMN_KINDS,
   toRpcResidentRows,
-  NO_COLUMN,
+  type ResidentColumnKind,
   type ResidentColumnMapping,
   type ResidentImportAnalysis,
   type ResidentImportBlockChoice,
@@ -27,30 +28,7 @@ type ImportRpcResult = {
   duplicates_skipped?: number;
 };
 
-const UNIT_FIELD = {
-  key: "unit" as const,
-  label: "Unidade / Apartamento",
-  hint: "Obrigatório. Ex.: 101, Apto 201, Nº do imóvel.",
-  required: true,
-};
-
-const BLOCK_FIELD = {
-  key: "block" as const,
-  label: "Bloco / Torre",
-  hint: "Opcional. Os blocos encontrados são criados automaticamente.",
-  required: false,
-};
-
-const EMPTY_MAPPING: ResidentColumnMapping = {
-  unit: NO_COLUMN,
-  block: NO_COLUMN,
-  names: [],
-  phones: [],
-};
-
-function ensureOneSlot(values: readonly number[]): number[] {
-  return values.length > 0 ? [...values] : [NO_COLUMN];
-}
+const EMPTY_MAPPING: ResidentColumnMapping = [];
 
 function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? `${fallback} ${cause.message}` : fallback;
@@ -73,10 +51,12 @@ export function ResidentsImportPanel({
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
 
+  const hasUnitColumn = mapping.includes("unit");
+  const blockColumnIndex = mapping.findIndex((kind) => kind === "block");
+
   const mappedRows = useMemo(
-    () =>
-      source && mapping.unit >= 0 ? mapResidentRows(source, mapping) : [],
-    [source, mapping],
+    () => (source && hasUnitColumn ? mapResidentRows(source, mapping) : []),
+    [source, mapping, hasUnitColumn],
   );
 
   const effectiveRows = useMemo(
@@ -90,34 +70,35 @@ export function ResidentsImportPanel({
   );
 
   const blockValues = useMemo(() => {
-    if (!source || mapping.block < 0) return [];
+    if (!source || blockColumnIndex < 0) return [];
     const values = new Set<string>();
     source.rows.forEach((row) => {
-      const cell = row[mapping.block];
+      const cell = row[blockColumnIndex];
       const value =
         cell === null || cell === undefined ? "" : String(cell).trim();
       if (value) values.add(value);
     });
     return [...values];
-  }, [source, mapping]);
+  }, [source, blockColumnIndex]);
 
   const emptyBlockRows = useMemo(
     () =>
-      source && mapping.block >= 0
+      source && blockColumnIndex >= 0
         ? source.rows.filter((row) => {
-            const cell = row[mapping.block];
+            const cell = row[blockColumnIndex];
             return !(cell !== null && cell !== undefined && String(cell).trim());
           }).length
         : 0,
-    [source, mapping],
+    [source, blockColumnIndex],
   );
 
   const needsBlockQuestion = Boolean(
-    source && mapping.unit >= 0 && blockValues.length === 0,
+    source && hasUnitColumn && blockValues.length === 0,
   );
 
   const canImport = Boolean(
     analysis &&
+      hasUnitColumn &&
       analysis.importableRows.length > 0 &&
       analysis.counts.errors === 0 &&
       (!needsBlockQuestion || blockChoice !== null),
@@ -158,7 +139,7 @@ export function ResidentsImportPanel({
       setSource(nextSource);
       setMapping(guessResidentColumnMapping(nextSource.headers));
       setSummary(
-        `${nextSource.rows.length} linha(s) encontrada(s). Confira o mapeamento das colunas antes de continuar.`,
+        `${nextSource.rows.length} linha(s) e ${nextSource.headers.length} coluna(s) encontradas. Escolha o que cada coluna representa.`,
       );
     } catch (cause) {
       setSource(null);
@@ -176,47 +157,18 @@ export function ResidentsImportPanel({
     setError("");
   }
 
-  function updateSimpleMapping(field: "unit" | "block", value: string) {
-    setMapping((current) => ({
-      ...current,
-      [field]: Number.parseInt(value, 10),
-    }));
-    invalidatePreview();
-  }
-
-  function updateListMapping(
-    field: "names" | "phones",
-    index: number,
-    value: string,
-  ) {
+  function updateColumnMapping(index: number, value: ResidentColumnKind) {
     setMapping((current) => {
-      const list = ensureOneSlot(current[field]);
-      list[index] = Number.parseInt(value, 10);
-      return { ...current, [field]: list };
-    });
-    invalidatePreview();
-  }
-
-  function addListSlot(field: "names" | "phones") {
-    setMapping((current) => ({
-      ...current,
-      [field]: [...ensureOneSlot(current[field]), NO_COLUMN],
-    }));
-    invalidatePreview();
-  }
-
-  function removeListSlot(field: "names" | "phones", index: number) {
-    setMapping((current) => {
-      const list = ensureOneSlot(current[field]);
-      list.splice(index, 1);
-      return { ...current, [field]: ensureOneSlot(list) };
+      const next = [...current];
+      next[index] = value;
+      return next;
     });
     invalidatePreview();
   }
 
   function chooseBlock(choice: Exclude<ResidentImportBlockChoice, null>) {
     setBlockChoice(choice);
-    if (source && mapping.unit >= 0) {
+    if (source && hasUnitColumn) {
       setAnalysis(
         analyzeResidentImport(
           applyImportBlockChoice(mapResidentRows(source, mapping), choice),
@@ -228,6 +180,10 @@ export function ResidentsImportPanel({
   }
 
   function handlePreview() {
+    if (!hasUnitColumn) {
+      setError("Marque pelo menos uma coluna como Apartamento / unidade.");
+      return;
+    }
     setAnalysis(preview);
     setError("");
     setSummary("");
@@ -275,11 +231,12 @@ export function ResidentsImportPanel({
         <div>
           <h3>Importar planilha de moradores</h3>
           <p>
-            Envie um CSV ou XLSX, analise o arquivo e informe em qual coluna está
-            cada dado. Nada é adivinhado: as sugestões podem ser trocadas antes
-            da importação. Blocos citados na planilha são criados
-            automaticamente. Nome e WhatsApp são opcionais: uma linha sem ambos
-            cria apenas a unidade. O porteiro não faz esse cadastro.
+            Envie um CSV ou XLSX, analise o arquivo e diga o que representa
+            cada coluna. Se o arquivo tiver 9 colunas, você recebe 9 campos
+            para mapear. Repita a opção <strong>Morador</strong> quantos
+            moradores houver no apartamento; o mesmo vale para telefone,
+            e-mail e observações. Blocos citados na planilha são criados
+            automaticamente. O porteiro não faz esse cadastro.
           </p>
         </div>
       </div>
@@ -327,7 +284,7 @@ export function ResidentsImportPanel({
             <button
               className="secondary-button"
               type="button"
-              disabled={mapping.unit < 0 || importing}
+              disabled={!hasUnitColumn || importing}
               onClick={handlePreview}
             >
               Atualizar prévia
@@ -350,159 +307,54 @@ export function ResidentsImportPanel({
             <div>
               <h4>Mapear colunas do arquivo</h4>
               <p>
-                Encontramos {source.headers.length} coluna(s). Escolha em qual
-                coluna está cada informação; apenas a unidade é obrigatória.
-                Se houver Morador 1, Morador 2 etc., adicione uma coluna de
-                morador para cada um. Cada nome é pareado com o telefone da
-                mesma posição.
+                Encontramos {source.headers.length} coluna(s). Escolha abaixo
+                o que cada uma contém. Colunas que não servem para nada ficam
+                em <strong>Não usar</strong>.
               </p>
             </div>
           </div>
-          <div className="resident-import-mapping-grid">
-            {[UNIT_FIELD, BLOCK_FIELD].map((field) => (
-              <label className="form-field" key={field.key}>
-                {field.label}
-                {field.required ? " *" : ""}
+          <div className="resident-import-columns">
+            {source.headers.map((header, index) => (
+              <label className="form-field" key={`column-${index}`}>
+                <span className="resident-import-column-title">
+                  Coluna {index + 1}: {header || "(sem cabeçalho)"}
+                </span>
                 <select
-                  value={mapping[field.key]}
+                  value={mapping[index] ?? "none"}
                   onChange={(event) =>
-                    updateSimpleMapping(field.key, event.target.value)
+                    updateColumnMapping(
+                      index,
+                      event.target.value as ResidentColumnKind,
+                    )
                   }
                   disabled={importing}
                 >
-                  <option value={NO_COLUMN}>Não usar</option>
-                  {source.headers.map((header, index) => (
-                    <option key={`${header}-${index}`} value={index}>
-                      {index + 1}. {header || `(coluna ${index + 1})`}
+                  {RESIDENT_COLUMN_KINDS.map((kind) => (
+                    <option key={kind.value} value={kind.value}>
+                      {kind.label}
                     </option>
                   ))}
                 </select>
-                <span className="field-hint">{field.hint}</span>
               </label>
             ))}
           </div>
-
-          <div className="resident-import-mapping-list">
-            <div className="resident-import-list-heading">
-              <h5>Colunas de morador</h5>
-              <p className="field-hint">
-                Uma linha da planilha pode gerar vários moradores no mesmo
-                apartamento.
-              </p>
-            </div>
-            <div className="resident-import-mapping-grid">
-              {ensureOneSlot(mapping.names).map((value, index) => (
-                <div className="form-field" key={`name-${index}`}>
-                  Nome do morador {mapping.names.length > 1 ? index + 1 : ""}
-                  <div className="mapping-slot-row">
-                    <select
-                      value={value}
-                      onChange={(event) =>
-                        updateListMapping("names", index, event.target.value)
-                      }
-                      disabled={importing}
-                    >
-                      <option value={NO_COLUMN}>Não usar</option>
-                      {source.headers.map((header, headerIndex) => (
-                        <option
-                          key={`${header}-${headerIndex}`}
-                          value={headerIndex}
-                        >
-                          {headerIndex + 1}. {header || `(coluna ${headerIndex + 1})`}
-                        </option>
-                      ))}
-                    </select>
-                    {mapping.names.length > 1 && (
-                      <button
-                        className="icon-button"
-                        type="button"
-                        aria-label={`Remover coluna de morador ${index + 1}`}
-                        title="Remover esta coluna de morador"
-                        disabled={importing}
-                        onClick={() => removeListSlot("names", index)}
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <button
-              className="text-button"
-              type="button"
-              disabled={importing}
-              onClick={() => addListSlot("names")}
-            >
-              + Adicionar outra coluna de morador
-            </button>
-          </div>
-
-          <div className="resident-import-mapping-list">
-            <div className="resident-import-list-heading">
-              <h5>Colunas de telefone / WhatsApp</h5>
-              <p className="field-hint">
-                Opcional. O telefone 1 fica com o morador 1, o 2 com o morador 2
-                e assim por diante.
-              </p>
-            </div>
-            <div className="resident-import-mapping-grid">
-              {ensureOneSlot(mapping.phones).map((value, index) => (
-                <div className="form-field" key={`phone-${index}`}>
-                  Telefone / WhatsApp {mapping.phones.length > 1 ? index + 1 : ""}
-                  <div className="mapping-slot-row">
-                    <select
-                      value={value}
-                      onChange={(event) =>
-                        updateListMapping("phones", index, event.target.value)
-                      }
-                      disabled={importing}
-                    >
-                      <option value={NO_COLUMN}>Não usar</option>
-                      {source.headers.map((header, headerIndex) => (
-                        <option
-                          key={`${header}-${headerIndex}`}
-                          value={headerIndex}
-                        >
-                          {headerIndex + 1}. {header || `(coluna ${headerIndex + 1})`}
-                        </option>
-                      ))}
-                    </select>
-                    {mapping.phones.length > 1 && (
-                      <button
-                        className="icon-button"
-                        type="button"
-                        aria-label={`Remover coluna de telefone ${index + 1}`}
-                        title="Remover esta coluna de telefone"
-                        disabled={importing}
-                        onClick={() => removeListSlot("phones", index)}
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <button
-              className="text-button"
-              type="button"
-              disabled={importing}
-              onClick={() => addListSlot("phones")}
-            >
-              + Adicionar outro telefone / WhatsApp
-            </button>
-          </div>
           <p className="field-hint">
-            Cabeçalhos encontrados:{" "}
-            {source.headers
-              .map((header, index) => `${index + 1}. ${header || "—"}`)
-              .join(" · ")}
+            Repita <strong>Morador</strong> em várias colunas para cadastrar
+            vários moradores no mesmo apartamento. A 1ª coluna de Morador
+            combina com a 1ª de Telefone, E-mail e Observações; a 2ª com a 2ª,
+            e assim por diante. Se mais de uma coluna for marcada como
+            Apartamento, Bloco ou Andar, apenas a primeira será usada.
           </p>
+          {!hasUnitColumn && (
+            <p className="feedback-message feedback-error" role="alert">
+              Marque pelo menos uma coluna como Apartamento / unidade para
+              liberar a prévia e a importação.
+            </p>
+          )}
         </div>
       )}
 
-      {source && mapping.unit >= 0 && blockValues.length > 0 && (
+      {source && blockColumnIndex >= 0 && blockValues.length > 0 && (
         <div className="resident-import-block-info">
           <strong>Blocos encontrados na planilha</strong>
           <p className="field-hint">
@@ -574,9 +426,12 @@ export function ResidentsImportPanel({
               <thead>
                 <tr>
                   <th>Unidade</th>
+                  <th>Andar</th>
                   <th>Bloco</th>
-                  <th>Nome</th>
+                  <th>Morador</th>
                   <th>Telefone</th>
+                  <th>E-mail</th>
+                  <th>Observações</th>
                   <th>Situação</th>
                 </tr>
               </thead>
@@ -587,9 +442,12 @@ export function ResidentsImportPanel({
                       <strong>{row.unit_number || "—"}</strong>
                       <small className="field-hint"> Linha {row.line}</small>
                     </td>
+                    <td>{row.floor_label || "—"}</td>
                     <td>{row.block_name || "—"}</td>
                     <td>{row.name || "—"}</td>
                     <td>{row.whatsapp || "—"}</td>
+                    <td>{row.email || "—"}</td>
+                    <td>{row.notes || "—"}</td>
                     <td>
                       <span className="field-hint">{row.message}</span>
                     </td>

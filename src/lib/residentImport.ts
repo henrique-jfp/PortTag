@@ -3,8 +3,12 @@ export type ResidentImportRow = {
   unit_number: string;
   /** `null` significa que o arquivo não tem coluna de bloco; `''` é uma célula vazia. */
   block_name: string | null;
+  /** Andar informado na planilha, quando houver coluna mapeada. */
+  floor_label: string | null;
   name: string | null;
   whatsapp: string | null;
+  email: string | null;
+  notes: string | null;
 };
 
 export type ResidentImportStatus =
@@ -36,8 +40,11 @@ export type ResidentImportAnalysis = {
 export type ImportResidentRpcRow = {
   unit_number: string;
   block_name: string | null;
+  floor_label: string | null;
   name: string | null;
   whatsapp: string | null;
+  email: string | null;
+  notes: string | null;
 };
 
 /** Arquivo já lido, com os cabeçalhos e as linhas abaixo deles. */
@@ -46,20 +53,40 @@ export type ResidentImportSource = {
   rows: readonly (readonly unknown[])[];
 };
 
-/**
- * Índices das colunas escolhidas; `-1` significa "não usar".
- * `names` e `phones` são listas porque uma mesma linha pode conter Morador 1,
- * Morador 2, Morador 3 etc. e seus respectivos telefones.
- */
-export type ResidentColumnMapping = {
-  unit: number;
-  block: number;
-  names: number[];
-  phones: number[];
-};
+/** O que cada coluna da planilha representa. */
+export type ResidentColumnKind =
+  | "none"
+  | "unit"
+  | "block"
+  | "floor"
+  | "name"
+  | "phone"
+  | "email"
+  | "notes";
 
-export const NO_COLUMN = -1;
+/**
+ * Um item por coluna do arquivo, na mesma ordem dos cabeçalhos.
+ * `unit`, `block` e `floor` usam a primeira coluna marcada. `name`, `phone`,
+ * `email` e `notes` podem se repetir: a coluna 1 de cada tipo forma o primeiro
+ * morador, a coluna 2 forma o segundo, e assim por diante.
+ */
+export type ResidentColumnMapping = ResidentColumnKind[];
+
 export const FIRST_BLOCK_NAME = "Bloco 1";
+
+export const RESIDENT_COLUMN_KINDS: {
+  value: ResidentColumnKind;
+  label: string;
+}[] = [
+  { value: "none", label: "Não usar" },
+  { value: "unit", label: "Apartamento / unidade" },
+  { value: "block", label: "Bloco / torre" },
+  { value: "floor", label: "Andar" },
+  { value: "name", label: "Morador" },
+  { value: "phone", label: "Telefone / WhatsApp" },
+  { value: "email", label: "E-mail" },
+  { value: "notes", label: "Observações" },
+];
 
 /** Resposta da pergunta mostrada quando a planilha não informa bloco. */
 export type ResidentImportBlockChoice = "none" | "first" | null;
@@ -81,29 +108,45 @@ export function applyImportBlockChoice(
   return rows.map((row) => ({ ...row }));
 }
 
-const UNIT_HEADERS = [
-  "apartamento",
-  "ap",
-  "apt",
-  "apto",
-  "unit",
-  "unidade",
-  "unid",
-  "numero",
-  "nro",
-];
-const BLOCK_HEADERS = ["bloco", "torre"];
-const NAME_HEADERS = ["nome", "morador", "responsavel"];
-const PHONE_HEADERS = [
-  "telefone",
-  "celular",
-  "whatsapp",
-  "fone",
-  "telefone whatsapp",
+const COLUMN_ALIASES: { kind: ResidentColumnKind; aliases: string[] }[] = [
+  {
+    kind: "unit",
+    aliases: [
+      "apartamento",
+      "ap",
+      "apt",
+      "apto",
+      "unidade",
+      "unid",
+      "numero",
+      "nro",
+      "n do imovel",
+      "imovel",
+    ],
+  },
+  { kind: "block", aliases: ["bloco", "torre"] },
+  { kind: "floor", aliases: ["andar", "piso"] },
+  { kind: "email", aliases: ["email", "e mail", "correio"] },
+  { kind: "notes", aliases: ["observacao", "observacoes", "obs", "detalhes"] },
+  {
+    kind: "phone",
+    aliases: [
+      "telefone",
+      "telefone whatsapp",
+      "whatsapp",
+      "celular",
+      "fone",
+      "contato",
+    ],
+  },
+  {
+    kind: "name",
+    aliases: ["nome", "morador", "responsavel", "destinatario", "destinataria"],
+  },
 ];
 
 const MISSING_UNIT_MESSAGE =
-  "Não encontramos a coluna de apartamento/unidade no arquivo. Use um cabeçalho como Apartamento, Apto, Unidade ou Número.";
+  "Marque pelo menos uma coluna como Apartamento / unidade antes de continuar.";
 
 function normalizeHeader(value: unknown): string {
   return String(value ?? "")
@@ -111,7 +154,8 @@ function normalizeHeader(value: unknown): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .trim()
+    .replace(/º/g, "o")
+    .replace(/ª/g, "a")
     .replace(/[\s_\-./:]+/g, " ")
     .trim();
 }
@@ -120,58 +164,44 @@ function cellToString(value: unknown): string {
   return value === null || value === undefined ? "" : String(value).trim();
 }
 
-function columnMatches(header: string, aliases: string[]): boolean {
-  return (
-    aliases.includes(header) ||
-    aliases.some((alias) => alias.length > 2 && header.includes(alias))
-  );
-}
-
-function findColumn(
-  headers: string[],
-  aliases: string[],
-  used: Set<number>,
-): number {
-  const exact = headers.findIndex(
-    (header, index) => !used.has(index) && aliases.includes(header),
-  );
-  if (exact >= 0) return exact;
-
-  return headers.findIndex(
-    (header, index) => !used.has(index) && columnMatches(header, aliases),
-  );
-}
-
-function findColumns(
-  headers: string[],
-  aliases: string[],
-  used: Set<number>,
-): number[] {
-  return headers.flatMap((header, index) =>
-    !used.has(index) && columnMatches(header, aliases) ? [index] : [],
-  );
+function guessKind(header: string): ResidentColumnKind {
+  for (const { kind, aliases } of COLUMN_ALIASES) {
+    if (
+      aliases.some(
+        (alias) =>
+          header === alias ||
+          (alias.length > 2 && header.includes(alias)),
+      )
+    ) {
+      return kind;
+    }
+  }
+  return "none";
 }
 
 /**
- * Sugestão inicial de colunas. O usuário pode — e deve, quando a sugestão
- * estiver errada — trocar qualquer uma delas na tela antes de importar.
+ * Sugestão inicial para cada coluna. O usuário pode — e deve, quando a
+ * sugestão estiver errada — trocar qualquer uma delas na tela antes de
+ * importar. Colunas sem sugestão ficam como "Não usar".
  */
 export function guessResidentColumnMapping(
   headers: readonly string[],
 ): ResidentColumnMapping {
-  const normalized = headers.map(normalizeHeader);
-  const used = new Set<number>();
+  return headers.map((header) => guessKind(normalizeHeader(header)));
+}
 
-  const unit = findColumn(normalized, UNIT_HEADERS, used);
-  if (unit >= 0) used.add(unit);
-  const block = findColumn(normalized, BLOCK_HEADERS, used);
-  if (block >= 0) used.add(block);
+function firstColumnOf(
+  mapping: ResidentColumnMapping,
+  kind: ResidentColumnKind,
+): number {
+  return mapping.findIndex((value) => value === kind);
+}
 
-  const names = findColumns(normalized, NAME_HEADERS, used);
-  names.forEach((index) => used.add(index));
-  const phones = findColumns(normalized, PHONE_HEADERS, used);
-
-  return { unit, block, names, phones };
+function columnsOf(
+  mapping: ResidentColumnMapping,
+  kind: ResidentColumnKind,
+): number[] {
+  return mapping.flatMap((value, index) => (value === kind ? [index] : []));
 }
 
 /** Converte as colunas escolhidas nas linhas enviadas para a RPC. */
@@ -182,25 +212,42 @@ export function mapResidentRows(
   const valueAt = (row: readonly unknown[], index: number) =>
     index >= 0 && index < row.length ? cellToString(row[index]) : "";
 
-  return source.rows.flatMap((row) => {
-    const unit_number = valueAt(row, mapping.unit);
-    const block_name = mapping.block >= 0 ? valueAt(row, mapping.block) : null;
-    const residentCount = Math.max(mapping.names.length, mapping.phones.length, 1);
+  const unitIndex = firstColumnOf(mapping, "unit");
+  const blockIndex = firstColumnOf(mapping, "block");
+  const floorIndex = firstColumnOf(mapping, "floor");
+  const nameIndexes = columnsOf(mapping, "name");
+  const phoneIndexes = columnsOf(mapping, "phone");
+  const emailIndexes = columnsOf(mapping, "email");
+  const notesIndexes = columnsOf(mapping, "notes");
+  const residentCount = Math.max(
+    nameIndexes.length,
+    phoneIndexes.length,
+    emailIndexes.length,
+    notesIndexes.length,
+    1,
+  );
 
-    return Array.from({ length: residentCount }, (_, index) => {
-      const nameIndex = mapping.names[index] ?? NO_COLUMN;
-      const phoneIndex = mapping.phones[index] ?? NO_COLUMN;
+  return source.rows.flatMap((row) =>
+    Array.from({ length: residentCount }, (_, index) => {
+      const nameIndex = nameIndexes[index];
+      const phoneIndex = phoneIndexes[index];
+      const emailIndex = emailIndexes[index];
+      const notesIndex = notesIndexes[index];
+
       return {
-        unit_number,
-        block_name,
-        name: nameIndex >= 0 ? valueAt(row, nameIndex) || null : null,
+        unit_number: valueAt(row, unitIndex),
+        block_name: blockIndex >= 0 ? valueAt(row, blockIndex) : null,
+        floor_label: floorIndex >= 0 ? valueAt(row, floorIndex) || null : null,
+        name: nameIndex !== undefined ? valueAt(row, nameIndex) || null : null,
         whatsapp:
-          phoneIndex >= 0
+          phoneIndex !== undefined
             ? normalizePhone(valueAt(row, phoneIndex)) || null
             : null,
+        email: emailIndex !== undefined ? valueAt(row, emailIndex) || null : null,
+        notes: notesIndex !== undefined ? valueAt(row, notesIndex) || null : null,
       };
-    });
-  });
+    }),
+  );
 }
 
 function sourceFromMatrix(
@@ -312,13 +359,13 @@ export async function readResidentFile(file: File): Promise<ResidentImportSource
   );
 }
 
-/** Caminho rápido: lê o arquivo e usa apenas os cabeçalhos reconhecidos. */
+/** Caminho rápido: lê o arquivo e usa apenas as sugestões de cabeçalho. */
 export async function parseResidentFile(
   file: File,
 ): Promise<ResidentImportRow[]> {
   const source = await readResidentFile(file);
   const mapping = guessResidentColumnMapping(source.headers);
-  if (mapping.unit < 0) throw new Error(MISSING_UNIT_MESSAGE);
+  if (!mapping.includes("unit")) throw new Error(MISSING_UNIT_MESSAGE);
   return mapResidentRows(source, mapping);
 }
 
@@ -341,7 +388,18 @@ function duplicateKey(row: ResidentImportRow): string {
     (row.block_name ?? "").trim().toLocaleLowerCase("pt-BR"),
     (row.name ?? "").trim().toLocaleLowerCase("pt-BR"),
     (row.whatsapp ?? "").trim(),
+    (row.email ?? "").trim().toLocaleLowerCase("pt-BR"),
+    (row.notes ?? "").trim().toLocaleLowerCase("pt-BR"),
   ].join("|");
+}
+
+function hasResidentData(row: ResidentImportRow): boolean {
+  return Boolean(
+    row.name?.trim() ||
+      row.whatsapp?.trim() ||
+      row.email?.trim() ||
+      row.notes?.trim(),
+  );
 }
 
 /** Classifica cada linha e devolve contadores para a prévia da importação. */
@@ -371,9 +429,9 @@ export function analyzeResidentImport(
     }
     seen.add(key);
 
-    if (!row.name?.trim() && !row.whatsapp?.trim()) {
+    if (!hasResidentData(row)) {
       analyzedRow.status = "unit-only";
-      analyzedRow.message = "Sem nome e WhatsApp: cria apenas a unidade.";
+      analyzedRow.message = "Sem dados de morador: cria apenas a unidade.";
     }
 
     return analyzedRow;
@@ -386,12 +444,25 @@ export function analyzeResidentImport(
     rows: analyzed,
     importableRows: analyzed
       .filter((row) => row.status === "ready" || row.status === "unit-only")
-      .map(({ unit_number, block_name, name, whatsapp }) => ({
-        unit_number,
-        block_name,
-        name,
-        whatsapp,
-      })),
+      .map(
+        ({
+          unit_number,
+          block_name,
+          floor_label,
+          name,
+          whatsapp,
+          email,
+          notes,
+        }) => ({
+          unit_number,
+          block_name,
+          floor_label,
+          name,
+          whatsapp,
+          email,
+          notes,
+        }),
+      ),
     counts: {
       total: analyzed.length,
       ready: count("ready"),
@@ -409,7 +480,10 @@ export function toRpcResidentRows(
   return rows.map((row) => ({
     unit_number: row.unit_number.trim(),
     block_name: row.block_name?.trim() || null,
+    floor_label: row.floor_label?.trim() || null,
     name: row.name?.trim() || null,
     whatsapp: row.whatsapp?.trim() || null,
+    email: row.email?.trim() || null,
+    notes: row.notes?.trim() || null,
   }));
 }

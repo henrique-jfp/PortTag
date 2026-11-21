@@ -27,7 +27,7 @@ function xlsxFile(name = "moradores.xlsx"): File {
   });
 }
 
-describe("readResidentFile + mapeamento explícito", () => {
+describe("readResidentFile + mapeamento por coluna", () => {
   it("lê CSV pt-BR com BOM, ponto e vírgula e aspas do Excel", async () => {
     const source = await readResidentFile(
       csvFile(
@@ -46,13 +46,16 @@ describe("readResidentFile + mapeamento explícito", () => {
     ]);
 
     const mapping = guessResidentColumnMapping(source.headers);
-    expect(mapping).toEqual({ unit: 0, block: 1, names: [2], phones: [3] });
+    expect(mapping).toEqual(["unit", "block", "name", "phone"]);
     expect(mapResidentRows(source, mapping)).toEqual([
       {
         unit_number: "101",
         block_name: "A",
+        floor_label: null,
         name: "Silva, Ana",
         whatsapp: "21999998888",
+        email: null,
+        notes: null,
       },
     ]);
   });
@@ -72,24 +75,22 @@ describe("readResidentFile + mapeamento explícito", () => {
       "Contato",
     ]);
 
-    const mapping = {
-      unit: 1,
-      block: 2,
-      names: [3],
-      phones: [4],
-    };
+    const mapping = ["none", "unit", "block", "name", "phone"] as const;
 
-    expect(mapResidentRows(source, mapping)).toEqual([
+    expect(mapResidentRows(source, [...mapping])).toEqual([
       {
         unit_number: "201",
         block_name: "A",
+        floor_label: null,
         name: "Marina",
         whatsapp: "21988887777",
+        email: null,
+        notes: null,
       },
     ]);
   });
 
-  it("gera um morador por coluna quando a planilha usa Morador 1, 2 e 3", async () => {
+  it("gera um morador por coluna quando o usuário repete Morador e Telefone", async () => {
     const source = await readResidentFile(
       csvFile(
         "Apto;Morador 1;Morador 2;Morador 3;WhatsApp 1;WhatsApp 2;WhatsApp 3\n101;Ana;Bruno;Carla;21911112222;21933334444;21955556666\n",
@@ -97,27 +98,75 @@ describe("readResidentFile + mapeamento explícito", () => {
     );
 
     const mapping = guessResidentColumnMapping(source.headers);
-    expect(mapping.names).toEqual([1, 2, 3]);
-    expect(mapping.phones).toEqual([4, 5, 6]);
+    expect(mapping).toEqual([
+      "unit",
+      "name",
+      "name",
+      "name",
+      "phone",
+      "phone",
+      "phone",
+    ]);
 
     expect(mapResidentRows(source, mapping)).toEqual([
       {
         unit_number: "101",
         block_name: null,
+        floor_label: null,
         name: "Ana",
         whatsapp: "21911112222",
+        email: null,
+        notes: null,
       },
       {
         unit_number: "101",
         block_name: null,
+        floor_label: null,
         name: "Bruno",
         whatsapp: "21933334444",
+        email: null,
+        notes: null,
       },
       {
         unit_number: "101",
         block_name: null,
+        floor_label: null,
         name: "Carla",
         whatsapp: "21955556666",
+        email: null,
+        notes: null,
+      },
+    ]);
+  });
+
+  it("sugere andar, e-mail e observações e ignora colunas não mapeadas", async () => {
+    const source = await readResidentFile(
+      csvFile(
+        "Apto;Andar;Morador;E-mail;Observações;Bloco;Telefone;Lixo\n101;1;Ana;ana@email.com;Portão vermelho;A;21999998888;qualquer\n",
+      ),
+    );
+
+    const mapping = guessResidentColumnMapping(source.headers);
+    expect(mapping).toEqual([
+      "unit",
+      "floor",
+      "name",
+      "email",
+      "notes",
+      "block",
+      "phone",
+      "none",
+    ]);
+
+    expect(mapResidentRows(source, mapping)).toEqual([
+      {
+        unit_number: "101",
+        block_name: "A",
+        floor_label: "1",
+        name: "Ana",
+        whatsapp: "21999998888",
+        email: "ana@email.com",
+        notes: "Portão vermelho",
       },
     ]);
   });
@@ -129,16 +178,16 @@ describe("readResidentFile + mapeamento explícito", () => {
 
     const mapping = guessResidentColumnMapping(source.headers);
 
-    expect(mapping.unit).toBe(0);
-    expect(mapping.block).toBe(1);
-    expect(mapping.names).toEqual([]);
-    expect(mapping.phones).toEqual([]);
+    expect(mapping).toEqual(["unit", "block"]);
     expect(mapResidentRows(source, mapping)).toEqual([
       {
         unit_number: "302",
         block_name: "C",
+        floor_label: null,
         name: null,
         whatsapp: null,
+        email: null,
+        notes: null,
       },
     ]);
   });
@@ -150,8 +199,11 @@ describe("readResidentFile + mapeamento explícito", () => {
       {
         unit_number: "201",
         block_name: "B",
+        floor_label: null,
         name: "Carla",
         whatsapp: "21988887777",
+        email: null,
+        notes: null,
       },
     ]);
   });
@@ -171,8 +223,11 @@ describe("applyImportBlockChoice", () => {
     {
       unit_number: "101",
       block_name: "A",
+      floor_label: null,
       name: "Ana",
       whatsapp: null,
+      email: null,
+      notes: null,
     },
   ];
 
@@ -202,26 +257,38 @@ describe("analyzeResidentImport", () => {
       {
         unit_number: "101",
         block_name: "A",
+        floor_label: null,
         name: "Ana",
         whatsapp: "21999998888",
+        email: null,
+        notes: null,
       },
       {
         unit_number: "102",
         block_name: "A",
+        floor_label: null,
         name: null,
         whatsapp: null,
+        email: null,
+        notes: null,
       },
       {
         unit_number: "101",
         block_name: "A",
+        floor_label: null,
         name: "Ana",
         whatsapp: "21999998888",
+        email: null,
+        notes: null,
       },
       {
         unit_number: "",
         block_name: "A",
+        floor_label: null,
         name: "Sem unidade",
         whatsapp: null,
+        email: null,
+        notes: null,
       },
     ]);
 
@@ -234,25 +301,48 @@ describe("analyzeResidentImport", () => {
     });
     expect(analysis.importableRows).toHaveLength(2);
   });
+
+  it("considera e-mail e observações como dados de morador", () => {
+    const analysis = analyzeResidentImport([
+      {
+        unit_number: "103",
+        block_name: null,
+        floor_label: null,
+        name: null,
+        whatsapp: null,
+        email: "ana@email.com",
+        notes: null,
+      },
+    ]);
+
+    expect(analysis.counts.ready).toBe(1);
+    expect(analysis.counts.unitOnly).toBe(0);
+  });
 });
 
 describe("toRpcResidentRows", () => {
-  it("converte campos vazios em null", () => {
+  it("converte campos vazios em null e preserva os novos campos", () => {
     expect(
       toRpcResidentRows([
         {
           unit_number: " 101 ",
           block_name: " A ",
+          floor_label: " 1 ",
           name: " ",
           whatsapp: "",
+          email: " ",
+          notes: " Portão vermelho ",
         },
       ]),
     ).toEqual([
       {
         unit_number: "101",
         block_name: "A",
+        floor_label: "1",
         name: null,
         whatsapp: null,
+        email: null,
+        notes: "Portão vermelho",
       },
     ]);
   });
