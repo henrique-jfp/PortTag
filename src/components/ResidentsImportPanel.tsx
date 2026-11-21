@@ -1,10 +1,14 @@
 import { useRef, useState, type ChangeEvent } from "react";
 import {
   analyzeResidentImport,
-  parseResidentFile,
+  guessResidentColumnMapping,
+  mapResidentRows,
+  readResidentFile,
   toRpcResidentRows,
+  NO_COLUMN,
+  type ResidentColumnMapping,
   type ResidentImportAnalysis,
-  type ResidentImportRow,
+  type ResidentImportSource,
 } from "../lib/residentImport";
 import { supabase } from "../lib/supabase";
 
@@ -21,6 +25,42 @@ type ImportRpcResult = {
   duplicates_skipped?: number;
 };
 
+const MAPPING_FIELDS: {
+  key: keyof ResidentColumnMapping;
+  label: string;
+  hint: string;
+  required?: boolean;
+}[] = [
+  {
+    key: "unit",
+    label: "Unidade / Apartamento",
+    hint: "Obrigatório. Ex.: 101, Apto 201, Nº do imóvel.",
+    required: true,
+  },
+  {
+    key: "block",
+    label: "Bloco / Torre",
+    hint: "Opcional. Linhas sem bloco usam o bloco padrão.",
+  },
+  {
+    key: "name",
+    label: "Nome do morador",
+    hint: "Opcional. Linhas sem nome criam apenas a unidade.",
+  },
+  {
+    key: "phone",
+    label: "Telefone / WhatsApp",
+    hint: "Opcional. Números são normalizados ao importar.",
+  },
+];
+
+const EMPTY_MAPPING: ResidentColumnMapping = {
+  unit: NO_COLUMN,
+  block: NO_COLUMN,
+  name: NO_COLUMN,
+  phone: NO_COLUMN,
+};
+
 function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? `${fallback} ${cause.message}` : fallback;
 }
@@ -33,7 +73,8 @@ export function ResidentsImportPanel({
 }: ResidentsImportPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [rows, setRows] = useState<ResidentImportRow[]>([]);
+  const [source, setSource] = useState<ResidentImportSource | null>(null);
+  const [mapping, setMapping] = useState<ResidentColumnMapping>(EMPTY_MAPPING);
   const [analysis, setAnalysis] = useState<ResidentImportAnalysis | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState("");
   const [createMissingUnits, setCreateMissingUnits] = useState(true);
@@ -42,20 +83,25 @@ export function ResidentsImportPanel({
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
 
-  // `null` em todas as linhas significa que o arquivo não tem coluna de bloco.
-  const fileHasBlockColumn = rows.some((row) => row.block_name !== null);
   const needsFallbackBlock =
     hasBlocks &&
     Boolean(
       analysis?.importableRows.some((row) => !row.block_name?.trim()),
     );
 
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    setFile(event.target.files?.[0] ?? null);
-    setRows([]);
+  function resetFile() {
+    setFile(null);
+    setSource(null);
+    setMapping(EMPTY_MAPPING);
     setAnalysis(null);
     setError("");
     setSummary("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    resetFile();
+    setFile(event.target.files?.[0] ?? null);
   }
 
   async function handleAnalyze() {
@@ -67,17 +113,38 @@ export function ResidentsImportPanel({
     setParsing(true);
     setError("");
     setSummary("");
+    setAnalysis(null);
     try {
-      const parsedRows = await parseResidentFile(file);
-      setRows(parsedRows);
-      setAnalysis(analyzeResidentImport(parsedRows));
+      const nextSource = await readResidentFile(file);
+      setSource(nextSource);
+      setMapping(guessResidentColumnMapping(nextSource.headers));
+      setSummary(
+        `${nextSource.rows.length} linha(s) encontrada(s). Confira o mapeamento das colunas antes de continuar.`,
+      );
     } catch (cause) {
-      setRows([]);
-      setAnalysis(null);
+      setSource(null);
+      setMapping(EMPTY_MAPPING);
       setError(errorMessage(cause, "Não foi possível analisar o arquivo."));
     } finally {
       setParsing(false);
     }
+  }
+
+  function updateMapping(field: keyof ResidentColumnMapping, value: string) {
+    setMapping((current) => ({
+      ...current,
+      [field]: Number.parseInt(value, 10),
+    }));
+    setAnalysis(null);
+    setSummary("");
+    setError("");
+  }
+
+  function handlePreview() {
+    if (!source || mapping.unit < 0) return;
+    setAnalysis(analyzeResidentImport(mapResidentRows(source, mapping)));
+    setError("");
+    setSummary("");
   }
 
   async function handleImport() {
@@ -105,15 +172,10 @@ export function ResidentsImportPanel({
           `${result.residents_created ?? 0} morador(es) cadastrado(s) e ` +
           `${result.duplicates_skipped ?? 0} duplicata(s) ignorada(s).`,
       );
-      setFile(null);
-      setRows([]);
-      setAnalysis(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      resetFile();
       await onImported();
     } catch (cause) {
-      setError(
-        errorMessage(cause, "Não foi possível concluir a importação."),
-      );
+      setError(errorMessage(cause, "Não foi possível concluir a importação."));
     } finally {
       setImporting(false);
     }
@@ -125,9 +187,10 @@ export function ResidentsImportPanel({
         <div>
           <h3>Importar planilha de moradores</h3>
           <p>
-            Envie um CSV ou XLSX com as colunas de apartamento, bloco, nome e
-            WhatsApp. Nome e WhatsApp são opcionais: uma linha sem ambos cria
-            apenas a unidade. O porteiro não faz esse cadastro.
+            Envie um CSV ou XLSX, analise o arquivo e informe em qual coluna está
+            cada dado. Nada é adivinhado: as sugestões podem ser trocadas antes
+            da importação. Nome e WhatsApp são opcionais: uma linha sem ambos
+            cria apenas a unidade. O porteiro não faz esse cadastro.
           </p>
         </div>
       </div>
@@ -138,38 +201,35 @@ export function ResidentsImportPanel({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.xlsx,.xls"
+            accept=".csv,.xlsx,.xlsm,.xls"
             onChange={handleFileChange}
+            disabled={importing}
           />
+          <span className="field-hint">{file ? file.name : "Nenhum arquivo"}</span>
         </label>
 
-        <div className="form-field">
-          Bloco padrão
-          {hasBlocks ? (
-            <>
-              <select
-                value={selectedBlockId}
-                onChange={(event) => setSelectedBlockId(event.target.value)}
-              >
-                <option value="">Selecione um bloco</option>
-                {blocks.map((block) => (
-                  <option key={block.id} value={block.id}>
-                    {block.name}
-                  </option>
-                ))}
-              </select>
-              <span className="field-hint">
-                {fileHasBlockColumn
-                  ? "Usado apenas nas linhas sem bloco preenchido; as demais usam o bloco da planilha."
-                  : "As unidades serão criadas neste bloco."}
-              </span>
-            </>
-          ) : (
+        {hasBlocks && (
+          <div className="form-field">
+            Bloco padrão
+            <select
+              value={selectedBlockId}
+              onChange={(event) => setSelectedBlockId(event.target.value)}
+              disabled={importing}
+            >
+              <option value="">Selecione um bloco</option>
+              {blocks.map((block) => (
+                <option key={block.id} value={block.id}>
+                  {block.name}
+                </option>
+              ))}
+            </select>
             <span className="field-hint">
-              Este condomínio não usa blocos.
+              {source && mapping.block >= 0
+                ? "Usado apenas nas linhas sem bloco preenchido; as demais usam o bloco da planilha."
+                : "As unidades serão criadas neste bloco."}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         <div className="form-field">
           Opções
@@ -180,6 +240,7 @@ export function ResidentsImportPanel({
               onChange={(event) =>
                 setCreateMissingUnits(event.target.checked)
               }
+              disabled={importing}
             />
             Criar unidades que ainda não existem
           </label>
@@ -189,11 +250,21 @@ export function ResidentsImportPanel({
           <button
             className="secondary-button"
             type="button"
-            disabled={!file || parsing}
+            disabled={!file || parsing || importing}
             onClick={() => void handleAnalyze()}
           >
             {parsing ? "Analisando..." : "Analisar arquivo"}
           </button>
+          {source && (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={mapping.unit < 0 || importing}
+              onClick={handlePreview}
+            >
+              Atualizar prévia
+            </button>
+          )}
           <button
             className="primary-button"
             type="button"
@@ -210,6 +281,49 @@ export function ResidentsImportPanel({
           </button>
         </div>
       </div>
+
+      {source && (
+        <div className="resident-import-mapping">
+          <div className="section-heading">
+            <div>
+              <h4>Mapear colunas do arquivo</h4>
+              <p>
+                Encontramos {source.headers.length} coluna(s). Escolha em qual
+                coluna está cada informação; apenas a unidade é obrigatória.
+              </p>
+            </div>
+          </div>
+          <div className="resident-import-mapping-grid">
+            {MAPPING_FIELDS.map((field) => (
+              <label className="form-field" key={field.key}>
+                {field.label}
+                {field.required ? " *" : ""}
+                <select
+                  value={mapping[field.key]}
+                  onChange={(event) =>
+                    updateMapping(field.key, event.target.value)
+                  }
+                  disabled={importing}
+                >
+                  <option value={NO_COLUMN}>Não usar</option>
+                  {source.headers.map((header, index) => (
+                    <option key={`${header}-${index}`} value={index}>
+                      {index + 1}. {header || `(coluna ${index + 1})`}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">{field.hint}</span>
+              </label>
+            ))}
+          </div>
+          <p className="field-hint">
+            Cabeçalhos encontrados:{" "}
+            {source.headers
+              .map((header, index) => `${index + 1}. ${header || "—"}`)
+              .join(" · ")}
+          </p>
+        </div>
+      )}
 
       {error && (
         <p className="feedback-message feedback-error" role="alert">

@@ -342,10 +342,13 @@ alterar o endereço, o painel pede confirmação explícita porque ele alimenta 
 conferência determinística das etiquetas. Tanto em **Moradores** quanto em
 **Blocos e Unidades**, Síndico e Super Admin podem importar uma planilha de
 moradores pela RPC `import_condominium_residents` (o Porteiro não tem essa
-opção): informe unidade, bloco quando houver, nome e WhatsApp; as unidades
-ausentes só entram se a opção correspondente estiver marcada e os contatos
-repetidos são ignorados. O resultado informa unidades criadas, moradores criados
-e duplicatas ignoradas.
+opção). A tela lê o arquivo, mostra os cabeçalhos encontrados e pede o
+**mapeamento explícito das colunas**: unidade/apartamento (obrigatório), bloco,
+nome e telefone/WhatsApp (opcionais). O nome das colunas não precisa seguir um
+padrão: a sugestão inicial pode ser trocada antes de gerar a prévia e confirmar
+a importação. As unidades ausentes só entram se a opção correspondente estiver
+marcada e os contatos repetidos são ignorados. O resultado informa unidades
+criadas, moradores criados e duplicatas ignoradas.
 
 A retirada é registrada pelo porteiro após confirmação presencial do morador.
 Para confirmar a retirada, o morador assina na tela do celular e o porteiro

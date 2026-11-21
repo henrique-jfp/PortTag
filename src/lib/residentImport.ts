@@ -40,12 +40,30 @@ export type ImportResidentRpcRow = {
   whatsapp: string | null;
 };
 
+/** Arquivo já lido, com os cabeçalhos e as linhas abaixo deles. */
+export type ResidentImportSource = {
+  headers: string[];
+  rows: readonly (readonly unknown[])[];
+};
+
+/** Índices das colunas escolhidas; `-1` significa "não usar". */
+export type ResidentColumnMapping = {
+  unit: number;
+  block: number;
+  name: number;
+  phone: number;
+};
+
+export const NO_COLUMN = -1;
+
 const UNIT_HEADERS = [
   "apartamento",
   "ap",
+  "apt",
   "apto",
   "unit",
   "unidade",
+  "unid",
   "numero",
   "nro",
 ];
@@ -74,8 +92,7 @@ function normalizeHeader(value: unknown): string {
 }
 
 function cellToString(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  return String(value).trim();
+  return value === null || value === undefined ? "" : String(value).trim();
 }
 
 function findColumn(
@@ -91,46 +108,75 @@ function findColumn(
   return headers.findIndex(
     (header, index) =>
       !used.has(index) &&
-      aliases.some(
-        (alias) => alias.length > 2 && header.includes(alias),
-      ),
+      aliases.some((alias) => alias.length > 2 && header.includes(alias)),
   );
 }
 
-function rowsFromMatrix(matrix: readonly (readonly unknown[])[]): ResidentImportRow[] {
-  const headerIndex = matrix.findIndex((row) =>
-    row.some((cell) => cellToString(cell) !== ""),
-  );
-  if (headerIndex < 0) {
+/**
+ * Sugestão inicial de colunas. O usuário pode — e deve, quando a sugestão
+ * estiver errada — trocar qualquer uma delas na tela antes de importar.
+ */
+export function guessResidentColumnMapping(
+  headers: readonly string[],
+): ResidentColumnMapping {
+  const normalized = headers.map(normalizeHeader);
+  const used = new Set<number>();
+
+  const unit = findColumn(normalized, UNIT_HEADERS, used);
+  if (unit >= 0) used.add(unit);
+  const block = findColumn(normalized, BLOCK_HEADERS, used);
+  if (block >= 0) used.add(block);
+  const name = findColumn(normalized, NAME_HEADERS, used);
+  if (name >= 0) used.add(name);
+  const phone = findColumn(normalized, PHONE_HEADERS, used);
+
+  return { unit, block, name, phone };
+}
+
+/** Converte as colunas escolhidas nas linhas enviadas para a RPC. */
+export function mapResidentRows(
+  source: ResidentImportSource,
+  mapping: ResidentColumnMapping,
+): ResidentImportRow[] {
+  const valueAt = (row: readonly unknown[], index: number) =>
+    index >= 0 && index < row.length ? cellToString(row[index]) : "";
+
+  return source.rows.map((row) => ({
+    unit_number: valueAt(row, mapping.unit),
+    block_name: mapping.block >= 0 ? valueAt(row, mapping.block) : null,
+    name: mapping.name >= 0 ? valueAt(row, mapping.name) : null,
+    whatsapp: mapping.phone >= 0 ? normalizePhone(valueAt(row, mapping.phone)) : null,
+  }));
+}
+
+function sourceFromMatrix(
+  matrix: readonly (readonly unknown[])[],
+): ResidentImportSource {
+  const nonEmpty = matrix
+    .map((row, index) => ({
+      index,
+      cells: row.filter((cell) => cellToString(cell) !== "").length,
+    }))
+    .filter((row) => row.cells > 0)
+    .slice(0, 10);
+  if (nonEmpty.length === 0) {
     throw new Error("A planilha está vazia. Envie um arquivo com cabeçalhos.");
   }
 
-  const headers = matrix[headerIndex].map(normalizeHeader);
-  const used = new Set<number>();
-  const unitIndex = findColumn(headers, UNIT_HEADERS, used);
-  if (unitIndex < 0) {
-    throw new Error(MISSING_UNIT_MESSAGE);
-  }
-  used.add(unitIndex);
+  // Planilhas exportadas costumam ter um título de uma célula acima do
+  // cabeçalho. Escolher a linha com mais células preenchidas evita confundir
+  // esse título com os nomes das colunas — sem precisar advinhar o significado.
+  const headerRow = nonEmpty.reduce((best, row) =>
+    row.cells > best.cells ? row : best,
+  );
+  const headerIndex = headerRow.index;
 
-  const blockIndex = findColumn(headers, BLOCK_HEADERS, used);
-  if (blockIndex >= 0) used.add(blockIndex);
-  const nameIndex = findColumn(headers, NAME_HEADERS, used);
-  if (nameIndex >= 0) used.add(nameIndex);
-  const phoneIndex = findColumn(headers, PHONE_HEADERS, used);
-
-  const rows: ResidentImportRow[] = [];
-  for (let index = headerIndex + 1; index < matrix.length; index += 1) {
-    const cells = matrix[index];
-    if (!cells || cells.every((cell) => cellToString(cell) === "")) continue;
-
-    rows.push({
-      unit_number: cellToString(cells[unitIndex]),
-      block_name: blockIndex >= 0 ? cellToString(cells[blockIndex]) : null,
-      name: nameIndex >= 0 ? cellToString(cells[nameIndex]) : null,
-      whatsapp: phoneIndex >= 0 ? normalizePhone(cellToString(cells[phoneIndex])) : null,
-    });
-  }
+  const headers = matrix[headerIndex].map((cell) =>
+    cellToString(cell).replace(/^\uFEFF/, ""),
+  );
+  const rows = matrix
+    .slice(headerIndex + 1)
+    .filter((row) => row.some((cell) => cellToString(cell) !== ""));
 
   if (rows.length === 0) {
     throw new Error(
@@ -138,7 +184,7 @@ function rowsFromMatrix(matrix: readonly (readonly unknown[])[]): ResidentImport
     );
   }
 
-  return rows;
+  return { headers, rows };
 }
 
 /** Conta os separadores candidatos fora de campos entre aspas. */
@@ -165,7 +211,9 @@ function detectDelimiter(text: string): ";" | "," {
   return commas > semicolons ? "," : ";";
 }
 
-async function parseCsv(file: File): Promise<ResidentImportRow[]> {
+async function matrixFromCsv(
+  file: File,
+): Promise<readonly (readonly unknown[])[]> {
   const text = (await file.text()).replace(/^\uFEFF/, "");
   const delimiter = detectDelimiter(text);
   const papa = await import("papaparse");
@@ -175,45 +223,49 @@ async function parseCsv(file: File): Promise<ResidentImportRow[]> {
   });
 
   if (result.errors.length > 0) {
-    throw new Error(
-      `Não foi possível ler o CSV. ${result.errors[0].message}`,
-    );
+    throw new Error(`Não foi possível ler o CSV. ${result.errors[0].message}`);
   }
 
-  return rowsFromMatrix(result.data);
+  return result.data;
 }
 
-async function parseExcel(file: File): Promise<ResidentImportRow[]> {
-  let data: readonly (readonly unknown[])[];
+async function matrixFromExcel(
+  file: File,
+): Promise<readonly (readonly unknown[])[]> {
   try {
     const { readSheet } = await import("read-excel-file/browser");
-    data = await readSheet(file);
+    return await readSheet(file);
   } catch (error) {
     const message = error instanceof Error ? error.message : "erro desconhecido";
-    const hint =
-      file.name.toLowerCase().endsWith(".xls")
-        ? "O formato .xls antigo não é suportado. Salve a planilha como .xlsx e tente novamente."
-        : "Confira se o arquivo é uma planilha .xlsx válida.";
+    const hint = file.name.toLowerCase().endsWith(".xls")
+      ? "O formato .xls antigo não é suportado. Salve a planilha como .xlsx e tente novamente."
+      : "Confira se o arquivo é uma planilha .xlsx válida.";
     throw new Error(`Não foi possível ler a planilha. ${hint} (${message})`);
   }
-
-  return rowsFromMatrix(data);
 }
 
-/** Lê um CSV ou XLSX e devolve linhas normalizadas para a importação. */
-export async function parseResidentFile(
-  file: File,
-): Promise<ResidentImportRow[]> {
+/** Lê um CSV ou XLSX sem tentar advinhar o significado das colunas. */
+export async function readResidentFile(file: File): Promise<ResidentImportSource> {
   const extension = file.name.split(".").pop()?.toLowerCase();
 
-  if (extension === "csv") return parseCsv(file);
+  if (extension === "csv") return sourceFromMatrix(await matrixFromCsv(file));
   if (extension === "xlsx" || extension === "xlsm" || extension === "xls") {
-    return parseExcel(file);
+    return sourceFromMatrix(await matrixFromExcel(file));
   }
 
   throw new Error(
     "Formato de arquivo não suportado. Envie um arquivo .csv, .xlsx ou .xls.",
   );
+}
+
+/** Caminho rápido: lê o arquivo e usa apenas os cabeçalhos reconhecidos. */
+export async function parseResidentFile(
+  file: File,
+): Promise<ResidentImportRow[]> {
+  const source = await readResidentFile(file);
+  const mapping = guessResidentColumnMapping(source.headers);
+  if (mapping.unit < 0) throw new Error(MISSING_UNIT_MESSAGE);
+  return mapResidentRows(source, mapping);
 }
 
 /** Mantém apenas dígitos e remove o código do país 55 em números de 12 a 13 dígitos. */
@@ -279,9 +331,7 @@ export function analyzeResidentImport(
   return {
     rows: analyzed,
     importableRows: analyzed
-      .filter(
-        (row) => row.status === "ready" || row.status === "unit-only",
-      )
+      .filter((row) => row.status === "ready" || row.status === "unit-only")
       .map(({ unit_number, block_name, name, whatsapp }) => ({
         unit_number,
         block_name,

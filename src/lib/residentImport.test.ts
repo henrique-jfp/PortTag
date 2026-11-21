@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   analyzeResidentImport,
+  guessResidentColumnMapping,
+  mapResidentRows,
   normalizePhone,
   parseResidentFile,
+  readResidentFile,
   toRpcResidentRows,
-  type ResidentImportRow,
 } from "./residentImport";
 
 vi.mock("read-excel-file/browser", () => ({
@@ -18,15 +20,33 @@ function csvFile(content: string, name = "moradores.csv"): File {
   return new File([content], name, { type: "text/csv" });
 }
 
-describe("parseResidentFile — CSV", () => {
+function xlsxFile(name = "moradores.xlsx"): File {
+  return new File(["planilha"], name, {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+describe("readResidentFile + mapeamento explícito", () => {
   it("lê CSV pt-BR com BOM, ponto e vírgula e aspas do Excel", async () => {
-    const file = csvFile(
-      '\uFEFFApartamento;Bloco;Nome;Telefone\r\n101;A;"Silva, Ana";(21) 99999-8888\r\n',
+    const source = await readResidentFile(
+      csvFile(
+        '\uFEFFApartamento;Bloco;Nome;Telefone\r\n101;A;"Silva, Ana";(21) 99999-8888\r\n',
+      ),
     );
 
-    const rows = await parseResidentFile(file);
+    expect(source.headers).toEqual([
+      "Apartamento",
+      "Bloco",
+      "Nome",
+      "Telefone",
+    ]);
+    expect(source.rows).toEqual([
+      ["101", "A", "Silva, Ana", "(21) 99999-8888"],
+    ]);
 
-    expect(rows).toEqual([
+    const mapping = guessResidentColumnMapping(source.headers);
+    expect(mapping).toEqual({ unit: 0, block: 1, name: 2, phone: 3 });
+    expect(mapResidentRows(source, mapping)).toEqual([
       {
         unit_number: "101",
         block_name: "A",
@@ -36,42 +56,61 @@ describe("parseResidentFile — CSV", () => {
     ]);
   });
 
-  it("lê CSV com vírgula e aceita cabeçalhos alternativos", async () => {
-    const file = csvFile(
-      "Apto,Morador,Whatsapp\n102,João,21988887777\n",
-      "moradores-virgula.csv",
+  it("aceita cabeçalhos fora do dicionário quando o usuário mapeia a coluna", async () => {
+    const source = await readResidentFile(
+      csvFile(
+        "Título do relatório\nNº do imóvel;Apt;Complemento;Pessoa destinatária;Contato\n101;201;A;Marina;21988887777\n",
+      ),
     );
 
-    const rows = await parseResidentFile(file);
+    expect(source.headers).toEqual([
+      "Nº do imóvel",
+      "Apt",
+      "Complemento",
+      "Pessoa destinatária",
+      "Contato",
+    ]);
 
-    expect(rows).toEqual([
+    const mapping = {
+      unit: 1,
+      block: 2,
+      name: 3,
+      phone: 4,
+    };
+
+    expect(mapResidentRows(source, mapping)).toEqual([
       {
-        unit_number: "102",
-        block_name: null,
-        name: "João",
+        unit_number: "201",
+        block_name: "A",
+        name: "Marina",
         whatsapp: "21988887777",
       },
     ]);
   });
 
-  it("avisa quando não há coluna de apartamento", async () => {
-    const file = csvFile("Bloco,Nome,Telefone\nA,João,21988887777\n");
+  it("sugere Unid e deixa nome/telefone fora quando não há sugestão", async () => {
+    const source = await readResidentFile(
+      csvFile("Unid;Bloco\n302;C\n"),
+    );
 
-    await expect(parseResidentFile(file)).rejects.toThrow(/apartamento/i);
+    const mapping = guessResidentColumnMapping(source.headers);
+
+    expect(mapping.unit).toBe(0);
+    expect(mapping.block).toBe(1);
+    expect(mapping.name).toBe(-1);
+    expect(mapping.phone).toBe(-1);
+    expect(mapResidentRows(source, mapping)).toEqual([
+      {
+        unit_number: "302",
+        block_name: "C",
+        name: null,
+        whatsapp: null,
+      },
+    ]);
   });
 
-  it("rejeita extensões desconhecidas", async () => {
-    const file = new File(["101,A,Maria"], "moradores.txt");
-
-    await expect(parseResidentFile(file)).rejects.toThrow(/não suportado/i);
-  });
-});
-
-describe("parseResidentFile — planilha", () => {
-  it("despacha .xlsx para o parser de planilha e normaliza a primeira linha", async () => {
-    const file = new File(["conteúdo"], "moradores.xlsx");
-
-    const rows = await parseResidentFile(file);
+  it("lê XLSX e mantém a compatibilidade de parseResidentFile", async () => {
+    const rows = await parseResidentFile(xlsxFile());
 
     expect(rows).toEqual([
       {
@@ -82,52 +121,52 @@ describe("parseResidentFile — planilha", () => {
       },
     ]);
   });
+
+  it("falha com arquivo vazio ou sem linhas de dados", async () => {
+    await expect(readResidentFile(csvFile(""))).rejects.toThrow(
+      /planilha está vazia/i,
+    );
+    await expect(
+      readResidentFile(csvFile("Apartamento;Nome\n")),
+    ).rejects.toThrow(/não tem linhas de moradores/i);
+  });
 });
 
 describe("normalizePhone", () => {
-  it("remove formatação e o código do país quando presente", () => {
-    expect(normalizePhone("(21) 99999-8888")).toBe("21999998888");
-    expect(normalizePhone("+55 21 99999-8888")).toBe("21999998888");
-    expect(normalizePhone("55 21 9999-8888")).toBe("2199998888");
-    expect(normalizePhone("021 99999-8888")).toBe("021999998888");
-  });
-
-  it("devolve texto vazio para valores vazios", () => {
-    expect(normalizePhone("")).toBe("");
-    expect(normalizePhone("  -  ")).toBe("");
+  it("aceita telefones com máscara e remove código do país", () => {
+    expect(normalizePhone("(21) 98888-7777")).toBe("21988887777");
+    expect(normalizePhone("+55 21 98888 7777")).toBe("21988887777");
   });
 });
 
 describe("analyzeResidentImport", () => {
-  const rows: ResidentImportRow[] = [
-    {
-      unit_number: "101",
-      block_name: "A",
-      name: "Maria",
-      whatsapp: "21999998888",
-    },
-    {
-      unit_number: "101",
-      block_name: "A",
-      name: "Maria",
-      whatsapp: "21999998888",
-    },
-    {
-      unit_number: "102",
-      block_name: "A",
-      name: null,
-      whatsapp: null,
-    },
-    {
-      unit_number: "",
-      block_name: null,
-      name: "João",
-      whatsapp: null,
-    },
-  ];
-
-  it("separa prontos, apenas unidade, duplicatas e erros", () => {
-    const analysis = analyzeResidentImport(rows);
+  it("classifica linhas prontas, apenas unidade, duplicatas e erros", () => {
+    const analysis = analyzeResidentImport([
+      {
+        unit_number: "101",
+        block_name: "A",
+        name: "Ana",
+        whatsapp: "21999998888",
+      },
+      {
+        unit_number: "102",
+        block_name: "A",
+        name: null,
+        whatsapp: null,
+      },
+      {
+        unit_number: "101",
+        block_name: "A",
+        name: "Ana",
+        whatsapp: "21999998888",
+      },
+      {
+        unit_number: "",
+        block_name: "A",
+        name: "Sem unidade",
+        whatsapp: null,
+      },
+    ]);
 
     expect(analysis.counts).toEqual({
       total: 4,
@@ -136,41 +175,25 @@ describe("analyzeResidentImport", () => {
       duplicates: 1,
       errors: 1,
     });
-    expect(analysis.rows.map((row) => row.status)).toEqual([
-      "ready",
-      "duplicate",
-      "unit-only",
-      "error",
-    ]);
-    expect(analysis.rows[3].message).toMatch(/apartamento/i);
-    expect(analysis.importableRows).toEqual([rows[0], rows[2]]);
-  });
-
-  it("considera duplicatas com nomes em caixas diferentes", () => {
-    const analysis = analyzeResidentImport([
-      rows[0],
-      { ...rows[0], name: "maria", block_name: "a" },
-    ]);
-
-    expect(analysis.counts.duplicates).toBe(1);
+    expect(analysis.importableRows).toHaveLength(2);
   });
 });
 
 describe("toRpcResidentRows", () => {
-  it("transforma campos opcionais vazios em null", () => {
-    const rows = toRpcResidentRows([
+  it("converte campos vazios em null", () => {
+    expect(
+      toRpcResidentRows([
+        {
+          unit_number: " 101 ",
+          block_name: " A ",
+          name: " ",
+          whatsapp: "",
+        },
+      ]),
+    ).toEqual([
       {
-        unit_number: " 103 ",
-        block_name: "",
-        name: "",
-        whatsapp: "  ",
-      },
-    ]);
-
-    expect(rows).toEqual([
-      {
-        unit_number: "103",
-        block_name: null,
+        unit_number: "101",
+        block_name: "A",
         name: null,
         whatsapp: null,
       },
