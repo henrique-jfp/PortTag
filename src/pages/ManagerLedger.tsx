@@ -3,12 +3,13 @@ import {
   BarChart3,
   Building2,
   ClipboardList,
+  ExternalLink,
   LayoutDashboard,
-  LogOut,
   MessageCircle,
   ShieldCheck,
   Users,
 } from "lucide-react";
+import { AppShell } from "../components/AppShell";
 import { useAuth } from "../contexts/AuthContext";
 import { AccessExpiredNotice } from "../components/AccessExpiredNotice";
 import { ManagerDashboard, type PackageFilterPreset } from "../components/ManagerDashboard";
@@ -314,70 +315,82 @@ export function ManagerLedger() {
     section === "whatsapp" ||
     (section === "notebook" && notebookTab === "audit");
 
-  return (
-    <main className="ledger-page">
-      <header className="ledger-header">
-        <div>
-          <p className="eyebrow">Controle de Encomendas · Área do Síndico</p>
-          <h1>Caderno de registros</h1>
-          <p>{user?.email}</p>
-        </div>
-        <div className="header-actions">
-          {isSuperAdmin && (
-            <a className="secondary-button button-link" href="/">
-              Super Admin
-            </a>
-          )}
-          <a className="secondary-button button-link" href="/porter.html">
-            App Porteiro
-          </a>
-          <button className="secondary-button" onClick={() => void handleSignOut()}>
-            <LogOut size={17} /> Sair
+  const navigation = (
+    <>
+      <p className="app-shell-nav-label">Área do síndico</p>
+      {sections.map((item) => {
+        const Icon = item.icon;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            className={section === item.id ? "is-active" : undefined}
+            aria-current={section === item.id ? "page" : undefined}
+            onClick={() => openSection(item.id)}
+          >
+            <Icon size={17} />
+            {item.label}
           </button>
-        </div>
-      </header>
+        );
+      })}
+    </>
+  );
 
-      {pageError && (
-        <p className="feedback-message feedback-error" role="alert">
-          {pageError}
-        </p>
+  const footer = (
+    <>
+      {isSuperAdmin && (
+        <a href="/">
+          <ShieldCheck size={16} /> Super Admin
+        </a>
       )}
+      <a href="/porter.html">
+        <ExternalLink size={16} /> Portaria
+      </a>
+    </>
+  );
 
-      {accessBlocked && (
-        <section className="welcome-card access-blocked-card" role="status">
-          <h2>Acesso bloqueado</h2>
-          <p>
-            O prazo de acesso do condomínio venceu ou foi suspenso. Entre em
-            contato com o suporte técnico para regularizar. Enquanto isso,
-            apenas esta página inicial permanece disponível.
+  return (
+    <AppShell
+      product="Síndico"
+      navigation={navigation}
+      navigationLabel="Seções do síndico"
+      footer={footer}
+      userEmail={user?.email}
+      onSignOut={() => void handleSignOut()}
+    >
+      <div className="ledger-page">
+        <header className="ledger-header">
+          <div>
+            <p className="eyebrow">Controle de Encomendas · Área do Síndico</p>
+            <h1>Caderno de registros</h1>
+            <p>{user?.email}</p>
+          </div>
+        </header>
+
+        {pageError && (
+          <p className="feedback-message feedback-error" role="alert">
+            {pageError}
           </p>
-        </section>
-      )}
+        )}
 
-      {!buildings.length ? (
-        <section className="welcome-card">
-          <h2>Sem acesso a um condomínio</h2>
-          <p>Peça ao Super Admin para vincular sua conta como síndico.</p>
-        </section>
-      ) : (
-        <>
-          <nav className="manager-navigation" aria-label="Seções do síndico">
-            {sections.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={section === item.id ? "is-active" : ""}
-                  aria-current={section === item.id ? "page" : undefined}
-                  onClick={() => openSection(item.id)}
-                >
-                  <Icon size={16} />
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
+        {accessBlocked && (
+          <section className="welcome-card access-blocked-card" role="status">
+            <h2>Acesso bloqueado</h2>
+            <p>
+              O prazo de acesso do condomínio venceu ou foi suspenso. Entre em
+              contato com o suporte técnico para regularizar. Enquanto isso,
+              apenas esta página inicial permanece disponível.
+            </p>
+          </section>
+        )}
+
+        {!buildings.length ? (
+          <section className="welcome-card">
+            <h2>Sem acesso a um condomínio</h2>
+            <p>Peça ao Super Admin para vincular sua conta como síndico.</p>
+          </section>
+        ) : (
+          <>
 
           {managementSection && (
             <div className="manager-context">
@@ -556,13 +569,14 @@ export function ManagerLedger() {
               condominiumId={activeBuildingId}
             />
           )}
-        </>
-      )}
+          </>
+        )}
 
-      <AccessExpiredNotice
-        open={supportNoticeOpen}
-        onClose={() => setSupportNoticeOpen(false)}
-      />
-    </main>
+        <AccessExpiredNotice
+          open={supportNoticeOpen}
+          onClose={() => setSupportNoticeOpen(false)}
+        />
+      </div>
+    </AppShell>
   );
 }

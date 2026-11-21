@@ -92,20 +92,23 @@ determinístico. Os detalhes de segredos e agendamentos estão em
 Para abrir sem a barra de endereço, instale como app — não use “Adicionar
 atalho”, que cria apenas um link para o navegador:
 
-1. Abra `https://porteiro.henriquedejesus.dev/porter.html` no Chrome/Android.
+1. Abra `https://porteiro.henriquedejesus.dev/porter.html` (Portaria) ou
+   `https://porteiro.henriquedejesus.dev/manager.html` (Síndico) no
+   Chrome/Android.
 2. Toque na página e espere alguns segundos. Quando o Chrome considerar o app
    instalável, aparece **Instalar app** no cabeçalho; toque e confirme.
    Alternativamente, use o menu do Chrome → **Instalar app** (e não
    **Adicionar atalho**).
 3. No Safari/iOS, use **Compartilhar → Adicionar à Tela de Início**.
 
-O manifest `public/manifest-porter.webmanifest` define `display: standalone`, o
-nome "PortTag" e os ícones de 192/512 px; no iOS, as metas
-`apple-mobile-web-app-*` fazem o mesmo. Depois da instalação o app mostra a
-orientação para colocar o ícone na tela inicial: em vários Android o app
+Os manifests `public/manifest-porter.webmanifest` e
+`public/manifest-manager.webmanifest` definem `display: standalone`, os nomes
+"Portaria" e "Síndico" e os ícones oficiais PortTag de 192/512 px; no iOS, as
+metas `apple-mobile-web-app-*` fazem o mesmo. Depois da instalação o app mostra
+a orientação para colocar o ícone na tela inicial: em vários Android o app
 instalado vai para a **gaveta de apps** e não aparece sozinho na tela inicial.
-Nesse caso, abra a gaveta, procure **PortTag**, toque e segure no ícone e
-escolha **Adicionar à tela inicial**. O site não consegue fazer isso
+Nesse caso, abra a gaveta, procure **Portaria** ou **Síndico**, toque e segure
+no ícone e escolha **Adicionar à tela inicial**. O site não consegue fazer isso
 programaticamente. Se o ícone tiver um emblema do Chrome, é um atalho simples:
 apague-o e reinstale pelo passo 2.
 Em aparelhos sem Google Play Services, o Chrome não consegue gerar o WebAPK e
@@ -345,7 +348,7 @@ A função `manage-manager` exige JWT válido e perfil de Super Admin; a chave
 `service_role` fica apenas na Edge Function. Porteiros funcionam de forma
 equivalente em `porter.html`, com usuário `porter-*@porter.invalid`.
 
-O app do Porteiro é mobile-first: tira a foto com a câmera do celular e comprime
+O app Portaria é mobile-first: tira a foto com a câmera do celular e comprime
 a imagem antes do processamento. A leitura da etiqueta é feita na nuvem, com
 Vision + regras + Groq, e sugere destinatário, unidade, empresa e rastreio. Não
 existe leitura de texto no aparelho: se a nuvem falhar ou não estiver configurada, o aparelho lê só

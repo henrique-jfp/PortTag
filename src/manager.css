@@ -1,46 +1,6 @@
 /* Painéis administrativos da área do síndico. Todos os seletores são
    prefixados com .manager para não interferir no caderno compartilhado. */
 
-.manager-navigation {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 24px;
-  padding: 6px;
-  border: 1px solid #e3e8f1;
-  border-radius: 14px;
-  background: #fff;
-  box-shadow: 0 6px 22px rgba(20, 35, 65, 0.05);
-}
-
-.manager-navigation button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 38px;
-  margin: 0;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: #697386;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.manager-navigation button:hover {
-  background: #eef4ff;
-  color: #2859c5;
-}
-
-.manager-navigation button.is-active {
-  background: #2859c5;
-  color: #fff;
-}
-
 .manager-context {
   display: flex;
   align-items: end;

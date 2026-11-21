@@ -1,7 +1,7 @@
 {
   "id": "/porter.html",
-  "name": "PortTag",
-  "short_name": "PortTag",
+  "name": "Portaria",
+  "short_name": "Portaria",
   "description": "Recebimento de encomendas com leitura de etiqueta.",
   "lang": "pt-BR",
   "start_url": "/porter.html",

@@ -1,7 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowUpRight, Building2 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { PackageNotebook, type NotebookBuilding } from "../components/PackageNotebook";
 import { useAuth } from "../contexts/AuthContext";
 import { cepDigits, lookupCepAddress } from "../lib/addressLookup";
 import { supabase } from "../lib/supabase";
@@ -79,65 +78,6 @@ type Condominium = {
   created_at: string;
 };
 
-type Portaria = {
-  id: string;
-  condominium_id: string;
-  name: string;
-  block_id: string | null;
-  active: boolean;
-};
-
-type BlockOption = { id: string; condominium_id: string; name: string };
-
-type Notebook = { id: string; name: string; blockId: string | null };
-
-function buildNotebooks(
-  condominiums: Condominium[],
-  portarias: Portaria[],
-  blocks: BlockOption[],
-): Notebook[] {
-  return condominiums.flatMap((condominium) => {
-    const prefix = condominiums.length > 1 ? `${condominium.name} · ` : "";
-    const rows = portarias.filter(
-      (portaria) =>
-        portaria.condominium_id === condominium.id && portaria.active,
-    );
-    if (rows.length) {
-      if (condominium.operation_mode === "central") {
-        return [
-          {
-            id: rows[0].id,
-            name: `${prefix}Portaria Central`,
-            blockId: null,
-          },
-        ];
-      }
-      return rows.map((portaria) => ({
-        id: portaria.id,
-        name: `${prefix}${portaria.name}`,
-        blockId: portaria.block_id,
-      }));
-    }
-    const condominiumBlocks = blocks.filter(
-      (block) => block.condominium_id === condominium.id,
-    );
-    if (condominium.operation_mode === "central" || !condominiumBlocks.length) {
-      return [
-        {
-          id: condominium.id,
-          name: `${prefix}Portaria Central`,
-          blockId: null,
-        },
-      ];
-    }
-    return condominiumBlocks.map((block) => ({
-      id: block.id,
-      name: `${prefix}${block.name}`,
-      blockId: block.id,
-    }));
-  });
-}
-
 type ResetPreview = {
   packages: number;
   package_events: number;
@@ -206,8 +146,6 @@ export function Dashboard() {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [setupError, setSetupError] = useState("");
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
-  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
-  const [blockOptions, setBlockOptions] = useState<BlockOption[]>([]);
   const [listError, setListError] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [cepLookupStatus, setCepLookupStatus] =
@@ -234,7 +172,6 @@ export function Dashboard() {
   const [updatingOperationId, setUpdatingOperationId] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [statusError, setStatusError] = useState("");
-  const [notebookOpen, setNotebookOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -280,7 +217,6 @@ export function Dashboard() {
       } else {
         const rows = (data ?? []) as Condominium[];
         setCondominiums(rows);
-        void refreshNotebookData(rows);
       }
 
       setLoading(false);
@@ -360,34 +296,6 @@ export function Dashboard() {
     });
   }
 
-  async function refreshNotebookData(rows: Condominium[]) {
-    if (!rows.length) {
-      setNotebooks([]);
-      setBlockOptions([]);
-      return;
-    }
-    const ids = rows.map((condominium) => condominium.id);
-    const [blocksResult, portariasResult] = await Promise.all([
-      supabase
-        .from("blocks")
-        .select("id, condominium_id, name")
-        .in("condominium_id", ids)
-        .order("name"),
-      supabase
-        .from("portarias")
-        .select("id, name, block_id, active")
-        .in("condominium_id", ids)
-        .eq("active", true)
-        .order("name"),
-    ]);
-    const blocks = (blocksResult.data ?? []) as BlockOption[];
-    const portarias = (portariasResult.data ?? []) as Portaria[];
-    setBlockOptions(blocksResult.error ? [] : blocks);
-    setNotebooks(
-      buildNotebooks(rows, portariasResult.error ? [] : portarias, blocks),
-    );
-  }
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError("");
@@ -435,7 +343,6 @@ export function Dashboard() {
         setListError("");
         const rows = (data ?? []) as Condominium[];
         setCondominiums(rows);
-        void refreshNotebookData(rows);
       }
     } catch (error) {
       const message =
@@ -471,7 +378,6 @@ export function Dashboard() {
           : item,
       );
       setCondominiums(rows);
-      void refreshNotebookData(rows);
       setStatusMessage("Modelo de operação atualizado.");
     } catch (error) {
       const message =
@@ -592,7 +498,6 @@ export function Dashboard() {
 
       const rows = (data ?? []) as Condominium[];
       setCondominiums(rows);
-      void refreshNotebookData(rows);
       setSuccessMessage(
         `Dados de ${resetTarget.name} zerados. O cadastro do condomínio foi mantido.`,
       );
@@ -631,7 +536,6 @@ export function Dashboard() {
       setListError("");
       const rows = (data ?? []) as Condominium[];
       setCondominiums(rows);
-      void refreshNotebookData(rows);
       setSuccessMessage("Prazo de acesso atualizado.");
       setRenewingCondominiumId("");
     } catch (error) {
@@ -671,7 +575,6 @@ export function Dashboard() {
       setListError("");
       const rows = (data ?? []) as Condominium[];
       setCondominiums(rows);
-      void refreshNotebookData(rows);
       setStatusMessage(
         nextStatus === "active"
           ? `Acesso de ${condominium.name} reativado.`
@@ -686,11 +589,6 @@ export function Dashboard() {
     }
   }
 
-  async function handleSignOut() {
-    const { error } = await supabase.auth.signOut();
-    if (error) setSetupError(`Não foi possível sair: ${error.message}`);
-  }
-
   if (loading) {
     return <div className="loading-screen">Carregando painel...</div>;
   }
@@ -703,28 +601,6 @@ export function Dashboard() {
           <h1>{isSuperAdmin ? "Painel do Super Admin" : "Acesso de operador"}</h1>
           <p>Conectado como {user?.email}</p>
         </div>
-        <div className="admin-header-actions">
-          {isSuperAdmin && (
-            <nav className="admin-shortcuts" aria-label="Acesso rápido">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => setNotebookOpen(true)}
-              >
-                Caderno
-              </button>
-              <Link className="secondary-button button-link" to="/label-lab">
-                Label Lab
-              </Link>
-              <a className="secondary-button button-link" href="/porter.html">
-                App Porteiro
-              </a>
-            </nav>
-          )}
-          <button className="secondary-button" onClick={handleSignOut}>
-            Sair
-          </button>
-        </div>
       </header>
 
       {setupError ? (
@@ -735,32 +611,18 @@ export function Dashboard() {
         <section className="welcome-card">
           <h2>Esta área é exclusiva do Super Admin</h2>
           <p>
-            Entre no app do Síndico ou do Porteiro usando o endereço entregue
-            pelo responsável pelo sistema.
+            Entre no app Síndico ou na Portaria usando o endereço entregue pelo
+            responsável pelo sistema.
           </p>
           <div className="header-actions">
             <a className="primary-button button-link" href="/manager.html">
-              App Síndico
+              Síndico
             </a>
             <a className="secondary-button button-link" href="/porter.html">
-              App Porteiro
+              Portaria
             </a>
           </div>
         </section>
-      ) : notebookOpen ? (
-        <PackageNotebook
-          forceBuildingList
-          buildings={condominiums.map((condominium): NotebookBuilding => ({
-            id: condominium.id,
-            name: condominium.name,
-            meta: `${condominium.city}, ${condominium.state} · ${condominium.block_count} bloco(s)${condominium.status === "inactive" ? " · inativo" : ""}`,
-          }))}
-          notebooks={notebooks}
-          blockOptions={blockOptions.map((block) => ({
-            id: block.id,
-            name: block.name,
-          }))}
-        />
       ) : (
         <>
           <section className="admin-section">
