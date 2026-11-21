@@ -3182,6 +3182,20 @@ button.overview-stat:disabled {
   gap: 8px;
 }
 
+.porter-bulk-notifications,
+.porter-bulk-manual-notifications {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e3e8f1;
+}
+
+.porter-bulk-notifications p,
+.porter-bulk-manual-notifications p {
+  margin: 0;
+}
+
 .porter-batch-list {
   max-height: 190px;
   overflow-y: auto;

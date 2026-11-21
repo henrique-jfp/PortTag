@@ -268,8 +268,58 @@ type BulkItem = {
   /** Aceite explícito de rastreio repetido (outro volume). */
   allowDuplicate: boolean;
   createdPackageId: string;
-  whatsappLink: string;
+  /** Evita recriar um aviso para os mesmos pacotes neste lote visual. */
+  notificationPrepared: boolean;
 };
+
+type BulkPackageNotification = {
+  id: string | null;
+  unit_id: string;
+  unit_label: string;
+  package_ids: string[];
+  channel: string | null;
+  recipient: string | null;
+  message: string | null;
+  status: string;
+  skipped_reason: string | null;
+};
+
+type BulkManualNotification = {
+  unitLabel: string;
+  packageCount: number;
+  link: string;
+};
+
+function buildWhatsappLink({
+  condominiumName,
+  whatsapp,
+  unitLabel,
+  recipient,
+  porterName,
+  company,
+  trackingCode,
+  receivedAt,
+}: {
+  condominiumName: string;
+  whatsapp: string;
+  unitLabel: string;
+  recipient?: string;
+  porterName?: string;
+  company?: string;
+  trackingCode?: string;
+  receivedAt?: string | Date;
+}) {
+  const message = buildPackageNotificationMessage({
+    condominiumName,
+    unitLabel,
+    recipientName: recipient,
+    porterName,
+    company,
+    trackingCode,
+    receivedAt,
+  });
+  return whatsappLink(whatsapp, message);
+}
 
 class DuplicatePackageError extends Error {
   constructor(message: string) {
@@ -598,37 +648,6 @@ function collectLabelSampleInBackground(
   }, 0);
 }
 
-function buildWhatsappLink({
-  condominiumName,
-  whatsapp,
-  unitLabel,
-  recipient,
-  porterName,
-  company,
-  trackingCode,
-  receivedAt,
-}: {
-  condominiumName: string;
-  whatsapp: string;
-  unitLabel: string;
-  recipient?: string;
-  porterName?: string;
-  company?: string;
-  trackingCode?: string;
-  receivedAt?: string | Date;
-}) {
-  const message = buildPackageNotificationMessage({
-    condominiumName,
-    unitLabel,
-    recipientName: recipient,
-    porterName,
-    company,
-    trackingCode,
-    receivedAt,
-  });
-  return whatsappLink(whatsapp, message);
-}
-
 /**
  * Grava o recebimento. A foto da etiqueta não é enviada ao Storage: ela só
  * existe na memória durante a leitura. Quando há avaria, uma foto separada do
@@ -639,17 +658,14 @@ async function persistPackage(
   ctx: {
     userId: string;
     condominiumId: string;
-    condominiumName: string;
     unit: Unit;
     company: string;
     deliveryPerson: string;
-    porterName: string;
-    whatsapp: string;
     allowDuplicate: boolean;
     isDamaged: boolean;
     damageFile: File | null;
   },
-): Promise<{ id: string; whatsappLink: string }> {
+): Promise<{ id: string }> {
   const trimmedTrackingCode = draft.trackingCode.trim();
   if (trimmedTrackingCode && !ctx.allowDuplicate) {
     const { data: duplicateRows } = await supabase.rpc("find_duplicate_package", {
@@ -719,18 +735,6 @@ async function persistPackage(
 
   return {
     id: typeof createdPackageId === "string" ? createdPackageId : "",
-    whatsappLink: ctx.whatsapp
-      ? buildWhatsappLink({
-          condominiumName: ctx.condominiumName,
-          whatsapp: ctx.whatsapp,
-          unitLabel: ctx.unit.unit_number,
-          recipient: draft.recipientName.trim(),
-          porterName: ctx.porterName,
-          company: ctx.company,
-          trackingCode: trimmedTrackingCode,
-          receivedAt: new Date(),
-        })
-      : "",
   };
 }
 
@@ -819,12 +823,13 @@ export function PorterReception() {
   const [mismatchAcknowledged, setMismatchAcknowledged] = useState(false);
   const [savedDeliveryPersonRevision, setSavedDeliveryPersonRevision] =
     useState(0);
-  const [contactsByUnit, setContactsByUnit] = useState<{
-    unitId: string;
-    contacts: UnitResident[];
-  } | null>(null);
   const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkNotifying, setBulkNotifying] = useState(false);
+  const [bulkNotificationMessage, setBulkNotificationMessage] = useState("");
+  const [bulkManualNotifications, setBulkManualNotifications] = useState<
+    BulkManualNotification[]
+  >([]);
   const [bulkCompany, setBulkCompany] = useState("");
   const [bulkDeliveryPerson, setBulkDeliveryPerson] = useState("");
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(
@@ -850,17 +855,11 @@ export function PorterReception() {
     () => units.find((unit) => unit.id === unitId) ?? null,
     [unitId, units],
   );
-  const selectedUnitId = selectedUnit?.id ?? "";
   const lastDeliveryPerson = useMemo(() => {
     // A revisão força uma nova leitura do sessionStorage após salvar.
     void savedDeliveryPersonRevision;
     return account ? readSavedDeliveryPerson(account.condominium_id) : "";
   }, [account, savedDeliveryPersonRevision]);
-  const selectedUnitContacts = useMemo(
-    () =>
-      contactsByUnit?.unitId === selectedUnitId ? contactsByUnit.contacts : [],
-    [contactsByUnit, selectedUnitId],
-  );
   const selectedUnitResidentNames = selectedUnit
     ? authorizedResidents
         .filter((resident) => resident.unit_id === selectedUnit.id)
@@ -905,6 +904,25 @@ export function PorterReception() {
       ).length,
     }),
     [bulkItems],
+  );
+  const bulkPackagesAwaitingNotification = useMemo(
+    () =>
+      bulkItems.filter(
+        (item) =>
+          item.status === "done" &&
+          Boolean(item.createdPackageId) &&
+          !item.notificationPrepared,
+      ),
+    [bulkItems],
+  );
+  const bulkNotificationUnitCount = useMemo(
+    () =>
+      new Set(
+        bulkPackagesAwaitingNotification
+          .map((item) => item.draft?.unitId)
+          .filter((unitId): unitId is string => Boolean(unitId)),
+      ).size,
+    [bulkPackagesAwaitingNotification],
   );
   const batchCandidates = useMemo(() => {
     if (!collectionBaseId) return [];
@@ -956,28 +974,6 @@ export function PorterReception() {
       window.removeEventListener("appinstalled", handleInstalled);
     };
   }, []);
-
-  useEffect(() => {
-    if (!selectedUnitId) return;
-
-    let active = true;
-    supabase
-      .from("unit_residents")
-      .select("id, name, whatsapp")
-      .eq("unit_id", selectedUnitId)
-      .order("created_at")
-      .then(({ data, error }) => {
-        if (!active || error) return;
-        setContactsByUnit({
-          unitId: selectedUnitId,
-          contacts: (data ?? []) as UnitResident[],
-        });
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [selectedUnitId]);
 
   useEffect(() => {
     function handlePopState() {
@@ -1800,18 +1796,12 @@ export function PorterReception() {
     // feita no momento em que o porteiro confirmou o recebimento do entregador.
     const shouldNotify = notifyOnReceive;
     try {
-      const savedWhatsapp =
-        selectedUnitContacts.find((resident) => resident.whatsapp)?.whatsapp ??
-        "";
       const result = await persistPackage(draft, {
         userId: user.id,
         condominiumId: account.condominium_id,
-        condominiumName: condominium.name,
         unit: selectedUnit,
         company,
         deliveryPerson,
-        porterName: account.name,
-        whatsapp: savedWhatsapp,
         allowDuplicate: allowDuplicate.current,
         isDamaged,
         damageFile,
@@ -1896,7 +1886,7 @@ export function PorterReception() {
       acknowledged: false,
       allowDuplicate: false,
       createdPackageId: "",
-      whatsappLink: "",
+      notificationPrepared: false,
     }));
     setBulkItems((current) => [...current, ...newItems]);
     setBulkDeliveryPerson((current) => current || lastDeliveryPerson);
@@ -1908,6 +1898,8 @@ export function PorterReception() {
     setBulkCompany("");
     setBulkDeliveryPerson(lastDeliveryPerson);
     setSuccessMessage("");
+    setBulkNotificationMessage("");
+    setBulkManualNotifications([]);
   }
 
   function updateBulkDraft(id: string, patch: Partial<PackageDraft>) {
@@ -1953,19 +1945,12 @@ export function PorterReception() {
       message: "Salvando no caderno...",
     });
     try {
-      const whatsapp =
-        authorizedResidents.find(
-          (resident) => resident.unit_id === unit.id && resident.whatsapp,
-        )?.whatsapp ?? "";
       const result = await persistPackage(draft, {
         userId: user.id,
         condominiumId: account.condominium_id,
-        condominiumName: condominium.name,
         unit,
         company: draft.company,
         deliveryPerson: draft.deliveryPerson,
-        porterName: account.name,
-        whatsapp,
         allowDuplicate: item.allowDuplicate,
         isDamaged: false,
         damageFile: null,
@@ -1975,12 +1960,9 @@ export function PorterReception() {
         draft,
         message: "Encomenda registrada.",
         createdPackageId: result.id,
-        whatsappLink: result.whatsappLink,
+        notificationPrepared: false,
       });
       rememberDeliveryPerson(draft.deliveryPerson.trim());
-      if (result.id && whatsapp) {
-        void notifyPackage(result.id);
-      }
     } catch (error) {
       if (error instanceof DuplicatePackageError) {
         updateBulkItem(item.id, {
@@ -2059,6 +2041,107 @@ export function PorterReception() {
     }
 
     await saveBulkItem(item, effective);
+  }
+
+  async function notifyBulkPackages() {
+    const packageIds = bulkPackagesAwaitingNotification.map(
+      (item) => item.createdPackageId,
+    );
+    if (!packageIds.length || bulkNotifying) return;
+
+    setPageError("");
+    setBulkNotificationMessage("");
+    setBulkManualNotifications([]);
+    setBulkNotifying(true);
+    try {
+      const { data, error } = await supabase.rpc(
+        "register_bulk_package_notifications",
+        { p_package_ids: packageIds },
+      );
+      if (error) throw new Error(error.message);
+
+      const notifications = (Array.isArray(data) ? data : []) as BulkPackageNotification[];
+      const preparedPackageIds = new Set(
+        notifications.flatMap((notification) => notification.package_ids ?? []),
+      );
+      setBulkItems((current) =>
+        current.map((item) =>
+          preparedPackageIds.has(item.createdPackageId)
+            ? { ...item, notificationPrepared: true }
+            : item,
+        ),
+      );
+
+      const manualNotifications: BulkManualNotification[] = [];
+      let automaticSent = 0;
+      let skipped = 0;
+
+      for (const notification of notifications) {
+        if (!notification.id || !notification.recipient || !notification.message) {
+          skipped += 1;
+          continue;
+        }
+
+        const packageCount = notification.package_ids.length;
+        const manualLink = whatsappLink(notification.recipient, notification.message);
+        if (notification.channel !== "whatsapp" || notification.status !== "pending") {
+          manualNotifications.push({
+            unitLabel: notification.unit_label,
+            packageCount,
+            link: manualLink,
+          });
+          continue;
+        }
+
+        try {
+          const { data: sendResult, error: sendError } =
+            await supabase.functions.invoke("send-package-notification", {
+              body: { notificationId: notification.id },
+            });
+          if (sendError || sendResult?.status === "failed") {
+            manualNotifications.push({
+              unitLabel: notification.unit_label,
+              packageCount,
+              link: manualLink,
+            });
+          } else {
+            automaticSent += 1;
+          }
+        } catch {
+          manualNotifications.push({
+            unitLabel: notification.unit_label,
+            packageCount,
+            link: manualLink,
+          });
+        }
+      }
+
+      setBulkManualNotifications(manualNotifications);
+      const parts: string[] = [];
+      if (automaticSent) {
+        parts.push(
+          `${automaticSent} aviso${automaticSent === 1 ? "" : "s"} enviado${automaticSent === 1 ? "" : "s"} automaticamente`,
+        );
+      }
+      if (manualNotifications.length) {
+        parts.push(
+          `${manualNotifications.length} aviso${manualNotifications.length === 1 ? "" : "s"} pronto${manualNotifications.length === 1 ? "" : "s"} para envio manual`,
+        );
+      }
+      if (skipped) parts.push(`${skipped} apartamento${skipped === 1 ? "" : "s"} sem WhatsApp cadastrado`);
+      setBulkNotificationMessage(
+        parts.length ? `${parts.join("; ")}.` : "Não há avisos novos para enviar.",
+      );
+      await reloadPackages();
+    } catch (error) {
+      setPageError(
+        error instanceof Error
+          ? `Não foi possível preparar os avisos do lote. ${error.message}`
+          : "Não foi possível preparar os avisos do lote.",
+      );
+    } finally {
+      setBulkNotifying(false);
+    }
   }
 
   async function startBulkImport() {
@@ -3002,16 +3085,6 @@ export function PorterReception() {
                               <span>{bulkStatusLabel[item.status]}</span>
                             </div>
                             <p>{item.message}</p>
-                            {item.status === "done" && item.whatsappLink && (
-                              <a
-                                className="porter-whatsapp-link"
-                                href={item.whatsappLink}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Avisar morador no WhatsApp
-                              </a>
-                            )}
                             {item.status === "error" && (
                               <button
                                 className="porter-secondary-button"
@@ -3142,6 +3215,45 @@ export function PorterReception() {
                           </li>
                         ))}
                       </ul>
+                      {bulkPackagesAwaitingNotification.length > 0 && (
+                        <div className="porter-bulk-notifications">
+                          <p>
+                            {bulkPackagesAwaitingNotification.length} encomenda(s)
+                            pronta(s) para aviso em {bulkNotificationUnitCount} apartamento(s).
+                            Cada apartamento receberá uma única mensagem com os
+                            códigos de rastreio deste lote.
+                          </p>
+                          <button
+                            className="porter-primary-button"
+                            type="button"
+                            disabled={bulkRunning || bulkNotifying}
+                            onClick={() => void notifyBulkPackages()}
+                          >
+                            {bulkNotifying
+                              ? "Preparando avisos..."
+                              : "Enviar avisos aos moradores"}
+                          </button>
+                        </div>
+                      )}
+                      {bulkNotificationMessage && (
+                        <p className="porter-success">{bulkNotificationMessage}</p>
+                      )}
+                      {bulkManualNotifications.length > 0 && (
+                        <div className="porter-bulk-manual-notifications">
+                          <p>Abra cada mensagem abaixo para concluir os avisos manuais:</p>
+                          {bulkManualNotifications.map((notification) => (
+                            <a
+                              key={`${notification.unitLabel}-${notification.link}`}
+                              className="porter-whatsapp-link"
+                              href={notification.link}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Avisar apartamento {notification.unitLabel} ({notification.packageCount} encomenda{notification.packageCount === 1 ? "" : "s"})
+                            </a>
+                          ))}
+                        </div>
+                      )}
                       <div className="porter-bulk-actions">
                         <button
                           className="porter-primary-button"

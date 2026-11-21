@@ -113,6 +113,11 @@
     importação é permitida
     ao Síndico e ao Super Admin, nunca ao Porteiro; a RPC é atômica e devolve
     `units_created`, `residents_created` e `duplicates_skipped`.
+    Depois execute `20261120170000_bulk_package_notifications.sql`: cria o
+    vínculo dos volumes de um aviso em lote e a RPC que agrupa, por apartamento,
+    os pacotes importados juntos. Em seguida faça deploy novamente de
+    `send-package-notification`, para atualizar todos os volumes agrupados após
+    um envio automático bem-sucedido.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

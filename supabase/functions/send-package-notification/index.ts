@@ -178,12 +178,23 @@ Deno.serve(async (req) => {
       p_error: null,
     });
 
-    // Atualiza packages.last_notified_at
-    if (notification.package_id) {
+    // Um aviso em lote representa vários volumes. A tabela de vínculo existe
+    // apenas para esses avisos; notificações antigas continuam pelo pacote-base.
+    const { data: linkedPackages } = await adminClient
+      .from("package_notification_packages")
+      .select("package_id")
+      .eq("notification_id", targetNotificationId);
+    const packageIds = (linkedPackages ?? [])
+      .map((item) => item.package_id as string)
+      .filter(Boolean);
+    if (!packageIds.length && notification.package_id) {
+      packageIds.push(notification.package_id);
+    }
+    if (packageIds.length) {
       await adminClient
         .from("packages")
         .update({ last_notified_at: new Date().toISOString() })
-        .eq("id", notification.package_id);
+        .in("id", packageIds);
     }
 
     return respond({
