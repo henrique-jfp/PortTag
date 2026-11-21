@@ -117,7 +117,9 @@
     vínculo dos volumes de um aviso em lote e a RPC que agrupa, por apartamento,
     os pacotes importados juntos. Em seguida faça deploy novamente de
     `send-package-notification`, para atualizar todos os volumes agrupados após
-    um envio automático bem-sucedido. Por fim, execute
+    um envio automático bem-sucedido. A função aceita `notificationId` ou
+    `packageId`; com `packageId`, localiza o aviso tanto pelo pacote-base quanto
+    pelo vínculo do lote. Por fim, execute
     `20261120180000_reset_condominium_data.sql`: cria a tabela de auditoria
     `condominium_reset_audit` e as RPCs `get_condominium_reset_preview` e
     `reset_condominium_data`, usadas pelo botão **Zerar dados** do Super Admin.

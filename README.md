@@ -210,7 +210,9 @@ A migração 33 agrupa os avisos da importação de fotos por apartamento: um ú
 texto lista todos os códigos de rastreio daquele lote. Após aplicá-la, faça o
 deploy novamente da Edge Function `send-package-notification`, para que todos
 os pacotes do grupo sejam marcados como avisados quando o envio automático
-concluir.
+concluir. A função aceita `notificationId` (usado pelo app) ou `packageId`; neste
+último caso, ela também consulta o vínculo do lote, então qualquer volume do
+grupo resolve para o aviso correto.
 
 A migração 32 cria `set_condominium_status`, exclusiva do Super Admin, para
 suspender ou reativar o acesso de um condomínio (por exemplo, por

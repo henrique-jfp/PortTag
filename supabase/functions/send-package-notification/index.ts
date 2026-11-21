@@ -80,6 +80,7 @@ Deno.serve(async (req) => {
 
   let targetNotificationId = notificationId;
   if (!targetNotificationId && packageId) {
+    // Aviso avulso: o pacote está na própria notificação.
     const { data: latestNotif } = await adminClient
       .from("package_notifications")
       .select("id")
@@ -90,6 +91,28 @@ Deno.serve(async (req) => {
 
     if (latestNotif?.id) {
       targetNotificationId = latestNotif.id;
+    } else {
+      // Aviso em lote: só o primeiro volume fica em package_notifications.
+      // Os demais são encontrados pela tabela de vínculo; sem esta busca,
+      // um disparo com packageId de volume não-base responde 404.
+      const { data: links } = await adminClient
+        .from("package_notification_packages")
+        .select("notification_id")
+        .eq("package_id", packageId);
+      const linkedIds = (links ?? [])
+        .map((link) => link.notification_id as string)
+        .filter(Boolean);
+
+      if (linkedIds.length) {
+        const { data: latestLinkedNotif } = await adminClient
+          .from("package_notifications")
+          .select("id")
+          .in("id", linkedIds)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        targetNotificationId = latestLinkedNotif?.id ?? null;
+      }
     }
   }
 
