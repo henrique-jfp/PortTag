@@ -261,6 +261,16 @@
   margin-top: 2px;
 }
 
+@media (max-width: 480px) {
+  .dashboard .confirmation-dialog {
+    padding: 20px;
+  }
+
+  .dashboard .reset-summary-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 .dashboard .admin-feedback-stack {
   display: grid;
   gap: 10px;

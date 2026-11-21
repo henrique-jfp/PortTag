@@ -1081,7 +1081,14 @@ export function Dashboard() {
       )}
 
       {deleteTarget && (
-        <div className="dialog-backdrop">
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deleting) {
+              setDeleteTarget(null);
+            }
+          }}
+        >
           <section
             className="confirmation-dialog"
             role="dialog"
@@ -1135,7 +1142,14 @@ export function Dashboard() {
       )}
 
       {resetTarget && (
-        <div className="dialog-backdrop">
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !resetting) {
+              setResetTarget(null);
+            }
+          }}
+        >
           <section
             className="confirmation-dialog"
             role="dialog"
