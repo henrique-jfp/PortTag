@@ -62,6 +62,36 @@ type Condominium = {
   created_at: string;
 };
 
+type ResetPreview = {
+  packages: number;
+  package_events: number;
+  package_notifications: number;
+  residents: number;
+  unit_residents: number;
+  units: number;
+  blocks: number;
+  porter_accounts: number;
+  condominium_users: number;
+  whatsapp_instances: number;
+  label_lab_samples: number;
+  storage_objects: number;
+};
+
+const resetPreviewLabels: { key: keyof ResetPreview; label: string }[] = [
+  { key: "packages", label: "Encomendas" },
+  { key: "package_events", label: "Eventos de encomendas" },
+  { key: "package_notifications", label: "Avisos ao morador" },
+  { key: "residents", label: "Moradores" },
+  { key: "unit_residents", label: "Contatos de unidade" },
+  { key: "units", label: "Unidades" },
+  { key: "blocks", label: "Blocos" },
+  { key: "porter_accounts", label: "Porteiros" },
+  { key: "condominium_users", label: "Vínculos de acesso" },
+  { key: "whatsapp_instances", label: "Instâncias de WhatsApp" },
+  { key: "label_lab_samples", label: "Amostras do Label Lab" },
+  { key: "storage_objects", label: "Fotos e arquivos privados" },
+];
+
 type ViaCepResponse = {
   logradouro?: string;
   bairro?: string;
@@ -117,6 +147,13 @@ export function Dashboard() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [resetTarget, setResetTarget] = useState<Condominium | null>(null);
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [resetAck, setResetAck] = useState(false);
+  const [resetPreview, setResetPreview] = useState<ResetPreview | null>(null);
+  const [loadingResetPreview, setLoadingResetPreview] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetting, setResetting] = useState(false);
   const [renewingCondominiumId, setRenewingCondominiumId] = useState("");
   const [renewDuration, setRenewDuration] = useState<AccessDuration>("1m");
   const [renewing, setRenewing] = useState(false);
@@ -328,6 +365,90 @@ export function Dashboard() {
       setDeleteError(`Não foi possível excluir o condomínio. ${message}`);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function openResetDialog(condominium: Condominium) {
+    setDeleteTarget(null);
+    setResetTarget(condominium);
+    setResetConfirmation("");
+    setResetAck(false);
+    setResetPreview(null);
+    setResetError("");
+    setLoadingResetPreview(true);
+
+    try {
+      const { data, error } = await supabase.rpc(
+        "get_condominium_reset_preview",
+        { p_condominium_id: condominium.id },
+      );
+      if (error) {
+        setResetError(error.message);
+        return;
+      }
+      setResetPreview((data ?? {}) as ResetPreview);
+    } catch (error) {
+      setResetError(
+        error instanceof Error ? error.message : "Falha inesperada.",
+      );
+    } finally {
+      setLoadingResetPreview(false);
+    }
+  }
+
+  async function handleResetCondominium(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !resetTarget ||
+      !resetAck ||
+      resetConfirmation.trim() !== resetTarget.name.trim()
+    ) {
+      return;
+    }
+
+    setResetting(true);
+    setResetError("");
+
+    try {
+      const { error } = await supabase.rpc("reset_condominium_data", {
+        p_condominium_id: resetTarget.id,
+        p_confirmation_name: resetConfirmation.trim(),
+        p_ack: resetAck,
+      });
+      if (error) {
+        setResetError(error.message);
+        return;
+      }
+
+      const { data, error: listError } = await supabase
+        .from("condominiums")
+        .select(
+          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
+        )
+        .order("created_at", { ascending: false });
+
+      setResetTarget(null);
+      setResetConfirmation("");
+      setResetAck(false);
+      setResetPreview(null);
+
+      if (listError) {
+        setStatusError(
+          `Dados zerados, mas não foi possível atualizar a lista: ${listError.message}`,
+        );
+        return;
+      }
+
+      setCondominiums(data ?? []);
+      setSuccessMessage(
+        `Dados de ${resetTarget.name} zerados. O cadastro do condomínio foi mantido.`,
+      );
+    } catch (error) {
+      setResetError(
+        error instanceof Error ? error.message : "Falha inesperada.",
+      );
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -933,7 +1054,16 @@ export function Dashboard() {
                       <button
                         className="text-button danger-text-button"
                         type="button"
+                        title="Apaga os dados do condomínio, mas mantém o cadastro"
+                        onClick={() => void openResetDialog(condominium)}
+                      >
+                        Zerar dados
+                      </button>
+                      <button
+                        className="text-button danger-text-button"
+                        type="button"
                         onClick={() => {
+                          setResetTarget(null);
                           setDeleteTarget(condominium);
                           setDeleteConfirmation("");
                           setDeleteError("");
@@ -997,6 +1127,114 @@ export function Dashboard() {
                   }
                 >
                   {deleting ? "Excluindo..." : "Excluir permanentemente"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {resetTarget && (
+        <div className="dialog-backdrop">
+          <section
+            className="confirmation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-condominium-title"
+          >
+            <h2 id="reset-condominium-title">
+              Zerar dados de {resetTarget.name}?
+            </h2>
+            <p>
+              Serão apagados encomendas, eventos, avisos, moradores, unidades,
+              blocos, porteiros, vínculos de acesso, fotos e amostras do Label
+              Lab deste condomínio. O cadastro — nome, endereço, status e prazo
+              de acesso — e as regras do Label Lab serão mantidos.
+            </p>
+            <p>
+              Contas de login e a instância externa de WhatsApp não são
+              removidas automaticamente: apenas os vínculos e a configuração
+              local são apagados.
+            </p>
+
+            {loadingResetPreview ? (
+              <p className="field-hint" role="status">
+                Carregando contadores...
+              </p>
+            ) : resetPreview ? (
+              <div className="reset-summary">
+                <h3>O que será apagado</h3>
+                {resetPreviewLabels.every(
+                  ({ key }) => Number(resetPreview[key] ?? 0) === 0,
+                ) ? (
+                  <p className="field-hint">
+                    Nenhum registro apagável encontrado.
+                  </p>
+                ) : (
+                  <ul className="reset-summary-list">
+                    {resetPreviewLabels
+                      .filter(
+                        ({ key }) => Number(resetPreview[key] ?? 0) > 0,
+                      )
+                      .map(({ key, label }) => (
+                        <li key={key}>
+                          <span>{label}</span>
+                          <strong>{Number(resetPreview[key] ?? 0)}</strong>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
+
+            <form onSubmit={handleResetCondominium}>
+              <label className="form-field">
+                Digite <strong>{resetTarget.name}</strong> para confirmar
+                <input
+                  autoComplete="off"
+                  required
+                  value={resetConfirmation}
+                  onChange={(event) =>
+                    setResetConfirmation(event.target.value)
+                  }
+                />
+              </label>
+              <label className="reset-ack">
+                <input
+                  type="checkbox"
+                  required
+                  checked={resetAck}
+                  onChange={(event) => setResetAck(event.target.checked)}
+                />
+                <span>
+                  Entendo que esta ação é irreversível e que os dados apagados
+                  não poderão ser recuperados.
+                </span>
+              </label>
+              {resetError && (
+                <p className="feedback-message feedback-error" role="alert">
+                  {resetError}
+                </p>
+              )}
+              <div className="form-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={resetting}
+                  onClick={() => setResetTarget(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="danger-button"
+                  disabled={
+                    resetting ||
+                    loadingResetPreview ||
+                    !resetAck ||
+                    resetConfirmation.trim() !== resetTarget.name.trim()
+                  }
+                >
+                  {resetting ? "Zerando..." : "Zerar condomínio"}
                 </button>
               </div>
             </form>

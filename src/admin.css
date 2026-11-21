@@ -215,6 +215,52 @@
   border-top: 4px solid #b42318;
 }
 
+.dashboard .reset-summary {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid #f2c6c2;
+  border-radius: 10px;
+  background: #fff7f6;
+}
+
+.dashboard .reset-summary h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.dashboard .reset-summary-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard .reset-summary-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: #475467;
+}
+
+.dashboard .reset-summary-list strong {
+  color: #101828;
+}
+
+.dashboard .reset-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.dashboard .reset-ack input {
+  margin-top: 2px;
+}
+
 .dashboard .admin-feedback-stack {
   display: grid;
   gap: 10px;

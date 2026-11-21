@@ -117,7 +117,15 @@
     vínculo dos volumes de um aviso em lote e a RPC que agrupa, por apartamento,
     os pacotes importados juntos. Em seguida faça deploy novamente de
     `send-package-notification`, para atualizar todos os volumes agrupados após
-    um envio automático bem-sucedido.
+    um envio automático bem-sucedido. Por fim, execute
+    `20261120180000_reset_condominium_data.sql`: cria a tabela de auditoria
+    `condominium_reset_audit` e as RPCs `get_condominium_reset_preview` e
+    `reset_condominium_data`, usadas pelo botão **Zerar dados** do Super Admin.
+    A RPC apaga encomendas, eventos, avisos, moradores, unidades, blocos,
+    porteiros, vínculos, amostras do Label Lab e os arquivos dos buckets
+    `package-receipts`/`label-lab-private` daquele condomínio, mas mantém o
+    cadastro e as regras publicadas. Exige nome exato e aceite do aviso; contas
+    de login e a instância externa da Evolution não são removidas.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.
