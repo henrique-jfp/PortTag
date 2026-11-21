@@ -123,11 +123,19 @@ Deno.serve(async (req) => {
   // Busca a notificação gravada
   const { data: notification, error: notifError } = await adminClient
     .from("package_notifications")
-    .select("*, packages(unit_number, block_name, sender, tracking_code)")
+    // A tabela de vínculo do aviso em lote cria um segundo caminho de FK até
+    // packages. Sem o hint da constraint, o PostgREST responde PGRST201 e o
+    // aviso existente é confundido com "não encontrado".
+    .select(
+      "*, packages!package_notifications_package_id_fkey(unit_number, block_name, sender, tracking_code)",
+    )
     .eq("id", targetNotificationId)
     .single();
 
   if (notifError || !notification) {
+    if (notifError && notifError.code !== "PGRST116") {
+      console.error("Falha ao consultar aviso:", notifError.code, notifError.message);
+    }
     return respond({ error: "Notificação não encontrada." }, 404);
   }
 
