@@ -826,6 +826,7 @@ export function PorterReception() {
   const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkNotifying, setBulkNotifying] = useState(false);
+  const [bulkNotifyOnReceive, setBulkNotifyOnReceive] = useState(false);
   const [bulkNotificationMessage, setBulkNotificationMessage] = useState("");
   const [bulkManualNotifications, setBulkManualNotifications] = useState<
     BulkManualNotification[]
@@ -904,25 +905,6 @@ export function PorterReception() {
       ).length,
     }),
     [bulkItems],
-  );
-  const bulkPackagesAwaitingNotification = useMemo(
-    () =>
-      bulkItems.filter(
-        (item) =>
-          item.status === "done" &&
-          Boolean(item.createdPackageId) &&
-          !item.notificationPrepared,
-      ),
-    [bulkItems],
-  );
-  const bulkNotificationUnitCount = useMemo(
-    () =>
-      new Set(
-        bulkPackagesAwaitingNotification
-          .map((item) => item.draft?.unitId)
-          .filter((unitId): unitId is string => Boolean(unitId)),
-      ).size,
-    [bulkPackagesAwaitingNotification],
   );
   const batchCandidates = useMemo(() => {
     if (!collectionBaseId) return [];
@@ -1912,8 +1894,11 @@ export function PorterReception() {
     );
   }
 
-  async function saveBulkItem(item: BulkItem, draft: PackageDraft) {
-    if (!user || !account || !condominium) return;
+  async function saveBulkItem(
+    item: BulkItem,
+    draft: PackageDraft,
+  ): Promise<string | null> {
+    if (!user || !account || !condominium) return null;
 
     const reasons = reviewReasonsFor(item, draft);
     if (reasons.length) {
@@ -1934,11 +1919,11 @@ export function PorterReception() {
         draft,
         message,
       });
-      return;
+      return null;
     }
 
     const unit = units.find((candidate) => candidate.id === draft.unitId);
-    if (!unit) return; // reviewReasonsFor já exige uma unidade válida.
+    if (!unit) return null; // reviewReasonsFor já exige uma unidade válida.
 
     updateBulkItem(item.id, {
       status: "processing",
@@ -1963,6 +1948,7 @@ export function PorterReception() {
         notificationPrepared: false,
       });
       rememberDeliveryPerson(draft.deliveryPerson.trim());
+      return result.id || null;
     } catch (error) {
       if (error instanceof DuplicatePackageError) {
         updateBulkItem(item.id, {
@@ -1971,7 +1957,7 @@ export function PorterReception() {
           allowDuplicate: false,
           message: error.message,
         });
-        return;
+        return null;
       }
       updateBulkItem(item.id, {
         status: "error",
@@ -1981,11 +1967,12 @@ export function PorterReception() {
             ? error.message
             : "Não foi possível salvar esta foto.",
       });
+      return null;
     }
   }
 
-  async function processBulkItem(item: BulkItem) {
-    if (!account || !condominium) return;
+  async function processBulkItem(item: BulkItem): Promise<string | null> {
+    if (!account || !condominium) return null;
     updateBulkItem(item.id, {
       status: "processing",
       message: "Lendo a etiqueta...",
@@ -2010,7 +1997,7 @@ export function PorterReception() {
             ? error.message
             : "Não foi possível ler esta foto.",
       });
-      return;
+      return null;
     }
 
     if (isDeviceResourceError(draft.labelRead?.error)) {
@@ -2019,7 +2006,7 @@ export function PorterReception() {
         draft,
         message: DEVICE_RESOURCE_MESSAGE,
       });
-      return;
+      return null;
     }
 
     // Empresa e entregador podem ser definidos uma vez para a fila inteira.
@@ -2037,16 +2024,13 @@ export function PorterReception() {
         draft: effective,
         message: `Confira antes de salvar: ${reasons.join(", ")}.`,
       });
-      return;
+      return null;
     }
 
-    await saveBulkItem(item, effective);
+    return saveBulkItem(item, effective);
   }
 
-  async function notifyBulkPackages() {
-    const packageIds = bulkPackagesAwaitingNotification.map(
-      (item) => item.createdPackageId,
-    );
+  async function notifyBulkPackages(packageIds: string[]) {
     if (!packageIds.length || bulkNotifying) return;
 
     setPageError("");
@@ -2125,7 +2109,7 @@ export function PorterReception() {
       }
       if (manualNotifications.length) {
         parts.push(
-          `${manualNotifications.length} aviso${manualNotifications.length === 1 ? "" : "s"} pronto${manualNotifications.length === 1 ? "" : "s"} para envio manual`,
+          `${manualNotifications.length} aviso${manualNotifications.length === 1 ? "" : "s"} automático${manualNotifications.length === 1 ? "" : "s"} indisponível; use o fallback manual abaixo`,
         );
       }
       if (skipped) parts.push(`${skipped} apartamento${skipped === 1 ? "" : "s"} sem WhatsApp cadastrado`);
@@ -2153,10 +2137,13 @@ export function PorterReception() {
     setSuccessMessage("");
     bulkCancelled.current = false;
     setBulkRunning(true);
+    const shouldNotify = bulkNotifyOnReceive;
+    const savedPackageIds: string[] = [];
     try {
       for (const item of queue) {
         if (bulkCancelled.current) break;
-        await processBulkItem(item);
+        const packageId = await processBulkItem(item);
+        if (packageId) savedPackageIds.push(packageId);
       }
     } finally {
       setBulkRunning(false);
@@ -2169,6 +2156,9 @@ export function PorterReception() {
       setSuccessMessage(
         `${queue.length} foto(s) processada(s). Confira o resultado na fila.`,
       );
+      if (shouldNotify && savedPackageIds.length) {
+        await notifyBulkPackages(savedPackageIds);
+      }
     }
     await reloadPackages();
   }
@@ -3056,6 +3046,17 @@ export function PorterReception() {
                         }
                       />
                     </label>
+                    <label className="porter-mismatch-check porter-bulk-notify-check">
+                      <input
+                        type="checkbox"
+                        checked={bulkNotifyOnReceive}
+                        disabled={bulkRunning || bulkNotifying}
+                        onChange={(event) =>
+                          setBulkNotifyOnReceive(event.target.checked)
+                        }
+                      />
+                      Enviar mensagem a todos os moradores ao concluir o lote
+                    </label>
                   </div>
                   <button
                     className="porter-secondary-button"
@@ -3215,26 +3216,6 @@ export function PorterReception() {
                           </li>
                         ))}
                       </ul>
-                      {bulkPackagesAwaitingNotification.length > 0 && (
-                        <div className="porter-bulk-notifications">
-                          <p>
-                            {bulkPackagesAwaitingNotification.length} encomenda(s)
-                            pronta(s) para aviso em {bulkNotificationUnitCount} apartamento(s).
-                            Cada apartamento receberá uma única mensagem com os
-                            códigos de rastreio deste lote.
-                          </p>
-                          <button
-                            className="porter-primary-button"
-                            type="button"
-                            disabled={bulkRunning || bulkNotifying}
-                            onClick={() => void notifyBulkPackages()}
-                          >
-                            {bulkNotifying
-                              ? "Preparando avisos..."
-                              : "Enviar avisos aos moradores"}
-                          </button>
-                        </div>
-                      )}
                       {bulkNotificationMessage && (
                         <p className="porter-success">{bulkNotificationMessage}</p>
                       )}
@@ -3258,11 +3239,17 @@ export function PorterReception() {
                         <button
                           className="porter-primary-button"
                           type="button"
-                          disabled={bulkRunning || bulkCounts.pending === 0}
+                          disabled={
+                            bulkRunning ||
+                            bulkNotifying ||
+                            bulkCounts.pending === 0
+                          }
                           onClick={() => void startBulkImport()}
                         >
-                          {bulkRunning
-                            ? "Processando fila..."
+                          {bulkRunning || bulkNotifying
+                            ? bulkNotifying
+                              ? "Enviando avisos..."
+                              : "Processando fila..."
                             : `Processar ${bulkCounts.pending} foto(s)`}
                         </button>
                         {bulkRunning ? (
