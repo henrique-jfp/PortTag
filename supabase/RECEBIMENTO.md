@@ -147,6 +147,34 @@
     Observações e Não usar. Repetir **Morador** em várias colunas cria vários
     moradores no mesmo apartamento. A RPC passa a gravar andar em `units` e
     e-mail/observações em `unit_residents`, aceitando contato sem nome/telefone.
+    Execute `20261121130000_bulk_package_reception.sql` (recebimento em lote),
+    que cria a auditoria `package_reception_acknowledgements` e as RPCs
+    `find_duplicate_packages` (pré-checagem de todos os rastreios da fila) e
+    `create_packages_batch` (uma chamada para gravar até 50 encomendas, com
+    resultado por foto). A tabela de auditoria registra quem aceitou endereço
+    divergente/inconclusivo e rastreio repetido; a leitura é restrita ao
+    condomínio pelas policies RLS. A decisão de endereço continua
+    determinística no app (`verifyPackageDestinationAddress`): a RPC apenas
+    registra o aceite do porteiro depois da conferência física. Sem esta
+    migration o frontend cai para o registro foto a foto, então aplique-a
+    antes de publicar a versão de teste. Depois execute
+    `20261121140000_gatehouse_operation.sql`,
+    `20261121150000_gatehouse_scoped_queries.sql` e
+    `20261121160000_notebook_retention_and_reset.sql`, nesta ordem. A 39 cria
+    `portarias` e faz a autorização de bloco usar a portaria **atual** do
+    porteiro; a origem fica em `home_portaria_id` para o botão **Voltar à
+    portaria de origem**. `create_condominium` ganha `p_operation_mode` e a
+    troca posterior usa `update_condominium_operation`; a retenção do caderno
+    é configurada por `update_notebook_retention` na migração 41.
+    A 40 acrescenta `arg_block_id` às buscas do caderno e
+    ao relatório e grava o bloco em `package_events`. A 41 cria a limpeza
+    definitiva por retenção configurável e ajusta o **Zerar dados** para remover
+    portarias. Depois de aplicá-las, redeploy de `manage-porter` (criação com
+    `portariaId`, ações `set-portaria` e `delete-access`) e de
+    `cleanup-package-receipts` (agora também chama
+    `cleanup_expired_notebook_records`). A exclusão de acesso **não apaga** nada
+    que o porteiro registrou: bloqueia o login e conserva os dados do caderno
+    pelo prazo definido pelo síndico.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

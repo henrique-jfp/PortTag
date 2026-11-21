@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Building2, ChevronRight } from "lucide-react";
 import { PackageReceipt } from "./PackageReceipt";
 import { Pagination } from "./Pagination";
@@ -57,6 +57,8 @@ export function PackageNotebook({
   presetLabel = "",
   onClearPreset,
   allowReceiptPrint = false,
+  notebooks = [],
+  blockOptions = [],
 }: {
   buildings: NotebookBuilding[];
   forceBuildingList?: boolean;
@@ -64,9 +66,21 @@ export function PackageNotebook({
   presetLabel?: string;
   onClearPreset?: () => void;
   allowReceiptPrint?: boolean;
+  /** Cadernos por portaria. Vazio mantém o comportamento de caderno único. */
+  notebooks?: Array<{ id: string; name: string; blockId: string | null }>;
+  /** Blocos disponíveis para restringir o caderno aberto. */
+  blockOptions?: Array<{ id: string; name: string }>;
 }) {
   const [buildingId, setBuildingId] = useState("");
-  const [filters, setFilters] = useState<PackageFilters>(initialFilters ?? {});
+  // O bloco vive fora de `filters`: ele pode vir do chamador, da aba ativa ou
+  // do seletor, e precisa poder ser limpo sem apagar os outros filtros.
+  const [filters, setFilters] = useState<PackageFilters>(() => {
+    const { blockId: _blockId, ...rest } = initialFilters ?? {};
+    return rest;
+  });
+  const [activeNotebookId, setActiveNotebookId] = useState("");
+  /** null = usar o bloco recebido/da aba; "" = sem filtro de bloco. */
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [sort, setSort] = useState<PackageSort>("recent");
   const [porterNames, setPorterNames] = useState<Map<string, string>>(new Map());
   const [drawers, setDrawers] = useState<DrawerRecord[]>([]);
@@ -98,10 +112,29 @@ export function PackageNotebook({
     buildingId ||
     (!forceBuildingList && buildings.length === 1 ? buildings[0].id : "");
 
+  // A aba ativa define o escopo do caderno. Se a lista chegar depois da primeira
+  // renderização, a primeira portaria passa a ser a aba ativa automaticamente.
+  const activeNotebook =
+    notebooks.find((notebook) => notebook.id === activeNotebookId) ??
+    notebooks[0] ??
+    null;
+
+  // Um bloco escolhido explicitamente (seletor interno ou filtro recebido)
+  // afunila/substitui o escopo da aba; sem ele, vale o bloco da aba ativa.
+  const externalBlockId = initialFilters?.blockId ?? null;
+  const blockId =
+    selectedBlockId !== null
+      ? selectedBlockId || null
+      : externalBlockId || activeNotebook?.blockId || null;
+  const effectiveFilters = useMemo<PackageFilters>(
+    () => ({ ...filters, blockId }),
+    [filters, blockId],
+  );
+
   useEffect(() => {
     if (!activeBuildingId) return;
     let active = true;
-    fetchDrawers(activeBuildingId, filters, drawerPage)
+    fetchDrawers(activeBuildingId, effectiveFilters, drawerPage)
       .then((result) => {
         if (!active) return;
         setDrawers(result.items);
@@ -118,8 +151,11 @@ export function PackageNotebook({
     return () => {
       active = false;
     };
-  }, [activeBuildingId, drawerPage, filters]);
+  }, [activeBuildingId, drawerPage, effectiveFilters]);
 
+  // A RPC search_package_records ordena por received_at desc, id desc quando
+  // arg_sort = 'recent' (padrão desta tela): a gaveta vai do mais novo ao mais
+  // antigo sem depender de reordenação no cliente.
   useEffect(() => {
     if (!activeBuildingId || !activeDrawer?.unit_id) return;
     let active = true;
@@ -127,7 +163,7 @@ export function PackageNotebook({
       condominiumId: activeBuildingId,
       unitId: activeDrawer.unit_id,
       sort,
-      filters,
+      filters: effectiveFilters,
       page: recordPage,
     })
       .then((result) => {
@@ -146,7 +182,7 @@ export function PackageNotebook({
     return () => {
       active = false;
     };
-  }, [activeBuildingId, activeDrawer, recordPage, sort, filters]);
+  }, [activeBuildingId, activeDrawer, recordPage, sort, effectiveFilters]);
 
   // Nomes dos porteiros são apenas informativos. Operadores não leem outros
   // porteiros por RLS; nesse caso o nome simplesmente fica "Não identificado".
@@ -217,8 +253,29 @@ export function PackageNotebook({
     resetDrawer();
   }
 
+  function selectNotebook(notebookId: string) {
+    if (notebookId === activeNotebook?.id) return;
+    setActiveNotebookId(notebookId);
+    // O bloco da aba passa a valer; um bloco escolhido antes não vaza para a
+    // portaria seguinte.
+    setSelectedBlockId(null);
+    setDrawerPage(1);
+    setDrawersLoading(true);
+    setError("");
+    resetDrawer();
+  }
+
+  function selectBlock(blockId: string) {
+    setSelectedBlockId(blockId);
+    setDrawerPage(1);
+    setDrawersLoading(true);
+    setError("");
+    resetDrawer();
+  }
+
   function clearFilters() {
     setFilters({});
+    setSelectedBlockId(null);
     setSort("recent");
     setDrawerPage(1);
     setDrawersLoading(true);
@@ -416,6 +473,39 @@ export function PackageNotebook({
 
   return (
     <div className="notebook">
+      {notebooks.length > 0 && (
+        <div
+          className="notebook-building-bar"
+          role="tablist"
+          aria-label="Cadernos por portaria"
+        >
+          {notebooks.map((notebook) => {
+            const isActive = notebook.id === activeNotebook?.id;
+            return (
+              <button
+                key={notebook.id}
+                className="notebook-back"
+                role="tab"
+                type="button"
+                aria-selected={isActive}
+                style={
+                  isActive
+                    ? {
+                        borderColor: "#2859c5",
+                        background: "#eef3ff",
+                        color: "#2859c5",
+                      }
+                    : undefined
+                }
+                onClick={() => selectNotebook(notebook.id)}
+              >
+                {notebook.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {error && (
         <p className="notebook-error" role="alert">
           Não foi possível carregar o caderno. {error}
@@ -460,6 +550,22 @@ export function PackageNotebook({
       )}
 
       <div className="notebook-filters">
+        {blockOptions.length > 0 && (
+          <label>
+            Bloco
+            <select
+              value={selectedBlockId ?? externalBlockId ?? ""}
+              onChange={(event) => selectBlock(event.target.value)}
+            >
+              <option value="">Todos os blocos</option>
+              {blockOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           De
           <input

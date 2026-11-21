@@ -46,6 +46,21 @@ function isCondominiumExpired(condominium: Condominium): boolean {
   return new Date(condominium.access_expires_at).getTime() <= Date.now();
 }
 
+type OperationMode = "single" | "central" | "per_block";
+
+const operationModeOptions: { value: OperationMode; label: string }[] = [
+  { value: "single", label: "Bloco único" },
+  { value: "central", label: "Vários blocos com portaria central" },
+  { value: "per_block", label: "Vários blocos com portaria por bloco" },
+];
+
+function operationModeLabel(value: string | null | undefined): string {
+  return (
+    operationModeOptions.find((option) => option.value === value)?.label ??
+    "Vários blocos com portaria por bloco"
+  );
+}
+
 type Condominium = {
   id: string;
   name: string;
@@ -59,8 +74,68 @@ type Condominium = {
   status: "active" | "inactive";
   access_expires_at: string | null;
   access_duration: string | null;
+  operation_mode?: OperationMode | null;
   created_at: string;
 };
+
+type Portaria = {
+  id: string;
+  condominium_id: string;
+  name: string;
+  block_id: string | null;
+  active: boolean;
+};
+
+type BlockOption = { id: string; condominium_id: string; name: string };
+
+type Notebook = { id: string; name: string; blockId: string | null };
+
+function buildNotebooks(
+  condominiums: Condominium[],
+  portarias: Portaria[],
+  blocks: BlockOption[],
+): Notebook[] {
+  return condominiums.flatMap((condominium) => {
+    const prefix = condominiums.length > 1 ? `${condominium.name} · ` : "";
+    const rows = portarias.filter(
+      (portaria) =>
+        portaria.condominium_id === condominium.id && portaria.active,
+    );
+    if (rows.length) {
+      if (condominium.operation_mode === "central") {
+        return [
+          {
+            id: rows[0].id,
+            name: `${prefix}Portaria Central`,
+            blockId: null,
+          },
+        ];
+      }
+      return rows.map((portaria) => ({
+        id: portaria.id,
+        name: `${prefix}${portaria.name}`,
+        blockId: portaria.block_id,
+      }));
+    }
+    const condominiumBlocks = blocks.filter(
+      (block) => block.condominium_id === condominium.id,
+    );
+    if (condominium.operation_mode === "central" || !condominiumBlocks.length) {
+      return [
+        {
+          id: condominium.id,
+          name: `${prefix}Portaria Central`,
+          blockId: null,
+        },
+      ];
+    }
+    return condominiumBlocks.map((block) => ({
+      id: block.id,
+      name: `${prefix}${block.name}`,
+      blockId: block.id,
+    }));
+  });
+}
 
 type ResetPreview = {
   packages: number;
@@ -114,6 +189,7 @@ type CondominiumForm = {
   blockCount: string;
   initialBlockName: string;
   accessDuration: AccessDuration;
+  operationMode: OperationMode;
 };
 
 const emptyForm: CondominiumForm = {
@@ -128,6 +204,7 @@ const emptyForm: CondominiumForm = {
   hasBlocks: false,
   initialBlockName: "",
   accessDuration: "none",
+  operationMode: "per_block",
 };
 
 export function Dashboard() {
@@ -136,6 +213,8 @@ export function Dashboard() {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [setupError, setSetupError] = useState("");
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
+  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
+  const [blockOptions, setBlockOptions] = useState<BlockOption[]>([]);
   const [listError, setListError] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [cepLookupStatus, setCepLookupStatus] =
@@ -159,6 +238,7 @@ export function Dashboard() {
   const [renewing, setRenewing] = useState(false);
   const [renewError, setRenewError] = useState("");
   const [togglingCondominiumId, setTogglingCondominiumId] = useState("");
+  const [updatingOperationId, setUpdatingOperationId] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [statusError, setStatusError] = useState("");
   const [notebookOpen, setNotebookOpen] = useState(false);
@@ -197,9 +277,7 @@ export function Dashboard() {
 
       const { data, error: condominiumsError } = await supabase
         .from("condominiums")
-        .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
-        )
+        .select("*")
         .order("created_at", { ascending: false });
 
       if (!active) return;
@@ -207,7 +285,9 @@ export function Dashboard() {
       if (condominiumsError) {
         setListError(condominiumsError.message);
       } else {
-        setCondominiums(data ?? []);
+        const rows = (data ?? []) as Condominium[];
+        setCondominiums(rows);
+        void refreshNotebookData(rows);
       }
 
       setLoading(false);
@@ -275,6 +355,34 @@ export function Dashboard() {
     };
   }, [form.cep]);
 
+  async function refreshNotebookData(rows: Condominium[]) {
+    if (!rows.length) {
+      setNotebooks([]);
+      setBlockOptions([]);
+      return;
+    }
+    const ids = rows.map((condominium) => condominium.id);
+    const [blocksResult, portariasResult] = await Promise.all([
+      supabase
+        .from("blocks")
+        .select("id, condominium_id, name")
+        .in("condominium_id", ids)
+        .order("name"),
+      supabase
+        .from("portarias")
+        .select("id, name, block_id, active")
+        .in("condominium_id", ids)
+        .eq("active", true)
+        .order("name"),
+    ]);
+    const blocks = (blocksResult.data ?? []) as BlockOption[];
+    const portarias = (portariasResult.data ?? []) as Portaria[];
+    setBlockOptions(blocksResult.error ? [] : blocks);
+    setNotebooks(
+      buildNotebooks(rows, portariasResult.error ? [] : portarias, blocks),
+    );
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError("");
@@ -282,7 +390,7 @@ export function Dashboard() {
     setSaving(true);
 
     try {
-      const { error } = await supabase.rpc("create_condominium", {
+      const args = {
         p_name: form.name,
         p_cep: form.cep,
         p_street: form.street,
@@ -297,6 +405,10 @@ export function Dashboard() {
           ? form.initialBlockName.trim()
           : null,
         p_access_duration: form.accessDuration,
+      };
+      const { error } = await supabase.rpc("create_condominium", {
+        ...args,
+        p_operation_mode: form.operationMode,
       });
 
       if (error) {
@@ -309,16 +421,16 @@ export function Dashboard() {
 
       const { data, error: condominiumsError } = await supabase
         .from("condominiums")
-        .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
-        )
+        .select("*")
         .order("created_at", { ascending: false });
 
       if (condominiumsError) {
         setListError(condominiumsError.message);
       } else {
         setListError("");
-        setCondominiums(data ?? []);
+        const rows = (data ?? []) as Condominium[];
+        setCondominiums(rows);
+        void refreshNotebookData(rows);
       }
     } catch (error) {
       const message =
@@ -326,6 +438,42 @@ export function Dashboard() {
       setFormError(`Não foi possível cadastrar o condomínio. (${message})`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleOperationModeChange(
+    condominium: Condominium,
+    operationMode: OperationMode,
+  ) {
+    setStatusError("");
+    setStatusMessage("");
+    setUpdatingOperationId(condominium.id);
+
+    try {
+      const { error } = await supabase.rpc("update_condominium_operation", {
+        p_condominium_id: condominium.id,
+        p_operation_mode: operationMode,
+      });
+
+      if (error) {
+        setStatusError(error.message);
+        return;
+      }
+
+      const rows = condominiums.map((item) =>
+        item.id === condominium.id
+          ? { ...item, operation_mode: operationMode }
+          : item,
+      );
+      setCondominiums(rows);
+      void refreshNotebookData(rows);
+      setStatusMessage("Modelo de operação atualizado.");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Falha inesperada.";
+      setStatusError(`Não foi possível atualizar o modelo. (${message})`);
+    } finally {
+      setUpdatingOperationId("");
     }
   }
 
@@ -422,9 +570,7 @@ export function Dashboard() {
 
       const { data, error: listError } = await supabase
         .from("condominiums")
-        .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
-        )
+        .select("*")
         .order("created_at", { ascending: false });
 
       setResetTarget(null);
@@ -439,7 +585,9 @@ export function Dashboard() {
         return;
       }
 
-      setCondominiums(data ?? []);
+      const rows = (data ?? []) as Condominium[];
+      setCondominiums(rows);
+      void refreshNotebookData(rows);
       setSuccessMessage(
         `Dados de ${resetTarget.name} zerados. O cadastro do condomínio foi mantido.`,
       );
@@ -469,16 +617,16 @@ export function Dashboard() {
 
       const { data, error: listError } = await supabase
         .from("condominiums")
-        .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
-        )
+        .select("*")
         .order("created_at", { ascending: false });
       if (listError) {
         setListError(listError.message);
         return;
       }
       setListError("");
-      setCondominiums(data ?? []);
+      const rows = (data ?? []) as Condominium[];
+      setCondominiums(rows);
+      void refreshNotebookData(rows);
       setSuccessMessage("Prazo de acesso atualizado.");
       setRenewingCondominiumId("");
     } catch (error) {
@@ -509,16 +657,16 @@ export function Dashboard() {
 
       const { data, error: listError } = await supabase
         .from("condominiums")
-        .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, access_expires_at, access_duration, created_at",
-        )
+        .select("*")
         .order("created_at", { ascending: false });
       if (listError) {
         setListError(listError.message);
         return;
       }
       setListError("");
-      setCondominiums(data ?? []);
+      const rows = (data ?? []) as Condominium[];
+      setCondominiums(rows);
+      void refreshNotebookData(rows);
       setStatusMessage(
         nextStatus === "active"
           ? `Acesso de ${condominium.name} reativado.`
@@ -601,6 +749,11 @@ export function Dashboard() {
             id: condominium.id,
             name: condominium.name,
             meta: `${condominium.city}, ${condominium.state} · ${condominium.block_count} bloco(s)${condominium.status === "inactive" ? " · inativo" : ""}`,
+          }))}
+          notebooks={notebooks}
+          blockOptions={blockOptions.map((block) => ({
+            id: block.id,
+            name: block.name,
           }))}
         />
       ) : (
@@ -839,6 +992,35 @@ export function Dashboard() {
                 </div>
               </section>
 
+              <section className="admin-form-group" aria-label="Modelo de operação">
+                <h3>Modelo de operação</h3>
+                <p className="admin-form-group-hint">
+                  Define como as portarias e os cadernos são organizados. O
+                  padrão é um caderno por bloco.
+                </p>
+                <div className="admin-form-grid">
+                  <label className="form-field form-field-wide">
+                    Modelo de operação
+                    <select
+                      required
+                      value={form.operationMode}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          operationMode: event.target.value as OperationMode,
+                        }))
+                      }
+                    >
+                      {operationModeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </section>
+
                 <section className="admin-form-group" aria-label="Prazo de acesso">
                   <h3>Prazo de acesso</h3>
                   <p className="admin-form-group-hint">
@@ -948,7 +1130,8 @@ export function Dashboard() {
                           : "Endereço não informado"}
                       </p>
                       <p className="admin-condominium-meta">
-                        {condominium.block_count} bloco(s)
+                        {condominium.block_count} bloco(s) ·{" "}
+                        {operationModeLabel(condominium.operation_mode)}
                         {condominium.cep ? ` · CEP ${condominium.cep}` : ""}
                       </p>
                       <p className="admin-condominium-meta">
@@ -1016,6 +1199,27 @@ export function Dashboard() {
                       >
                         Abrir <ArrowUpRight size={15} aria-hidden="true" />
                       </Link>
+                      <label className="form-field">
+                        Modelo de operação
+                        <select
+                          value={
+                            (condominium.operation_mode ?? "per_block") as OperationMode
+                          }
+                          disabled={updatingOperationId === condominium.id}
+                          onChange={(event) =>
+                            void handleOperationModeChange(
+                              condominium,
+                              event.target.value as OperationMode,
+                            )
+                          }
+                        >
+                          {operationModeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <button
                         className="text-button"
                         type="button"

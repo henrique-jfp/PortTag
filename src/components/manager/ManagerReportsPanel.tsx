@@ -59,10 +59,28 @@ export function ManagerReportsPanel({
 }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [applied, setApplied] = useState({ from: "", to: "" });
+  const [blockId, setBlockId] = useState("");
+  const [blocks, setBlocks] = useState<Array<{ id: string; name: string }>>([]);
+  const [applied, setApplied] = useState({ from: "", to: "", blockId: "" });
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const { data, error: blocksError } = await supabase
+        .from("blocks")
+        .select("id, name")
+        .eq("condominium_id", condominiumId)
+        .order("name");
+      if (!active || blocksError) return;
+      setBlocks((data ?? []) as Array<{ id: string; name: string }>);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [condominiumId]);
 
   useEffect(() => {
     let active = true;
@@ -72,6 +90,7 @@ export function ManagerReportsPanel({
         p_condominium_id: condominiumId,
         p_date_from: applied.from ? localDayStart(applied.from) : null,
         p_date_to: applied.to ? localDayAfter(applied.to) : null,
+        arg_block_id: applied.blockId || null,
       };
       const { data, error: rpcError } = await supabase.rpc(
         "manager_package_report",
@@ -102,12 +121,14 @@ export function ManagerReportsPanel({
   function handleApply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
-    setApplied({ from: dateFrom, to: dateTo });
+    setApplied({ from: dateFrom, to: dateTo, blockId });
   }
 
   function handleExport() {
     if (!report) return;
-    const csv = buildReportCsv(report, applied);
+    const blockName = blocks.find((block) => block.id === applied.blockId)?.name;
+    const range = { ...applied, blockName };
+    const csv = buildReportCsv(report, range);
     const url = URL.createObjectURL(
       new Blob([csv], { type: "text/csv;charset=utf-8" }),
     );
@@ -159,6 +180,20 @@ export function ManagerReportsPanel({
             value={dateTo}
             onChange={(event) => setDateTo(event.target.value)}
           />
+        </label>
+        <label>
+          Bloco
+          <select
+            value={blockId}
+            onChange={(event) => setBlockId(event.target.value)}
+          >
+            <option value="">Todos os blocos</option>
+            {blocks.map((block) => (
+              <option key={block.id} value={block.id}>
+                {block.name}
+              </option>
+            ))}
+          </select>
         </label>
         <button type="submit">Aplicar recorte</button>
       </form>

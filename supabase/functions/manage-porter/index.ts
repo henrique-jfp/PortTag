@@ -6,11 +6,15 @@ type ManagePorterRequest = {
     | "reset-password"
     | "deactivate"
     | "activate"
-    | "renew-access";
+    | "renew-access"
+    | "set-portaria"
+    | "delete-access";
   condominiumId?: string;
   name?: string;
   username?: string;
   blockIds?: string[];
+  portariaId?: string;
+  home?: boolean;
   porterAccountId?: string;
   accessExpiresAt?: string | null;
 };
@@ -173,6 +177,9 @@ Deno.serve(async (request: Request) => {
       typeof input.name !== "string" ||
       typeof input.username !== "string" ||
       (input.blockIds !== undefined && !Array.isArray(input.blockIds)) ||
+      (input.portariaId !== undefined &&
+        input.portariaId !== null &&
+        typeof input.portariaId !== "string") ||
       (input.accessExpiresAt !== undefined &&
         input.accessExpiresAt !== null &&
         typeof input.accessExpiresAt !== "string")
@@ -232,16 +239,6 @@ Deno.serve(async (request: Request) => {
     }
     const accessError = await condominiumAccessError(serviceClient, condominiumId);
     if (accessError) return respond({ error: accessError.error }, accessError.status);
-    if (
-      (condominium.block_count > 0 && blockIds.length === 0) ||
-      (condominium.block_count === 0 && blockIds.length > 0)
-    ) {
-      return respond(
-        { error: "Selecione ao menos um bloco de trabalho para este condomínio." },
-        400,
-      );
-    }
-
     if (blockIds.length) {
       const { data: blocks, error: blocksError } = await serviceClient
         .from("blocks")
@@ -252,6 +249,54 @@ Deno.serve(async (request: Request) => {
       if ((blocks ?? []).length !== blockIds.length) {
         return respond({ error: "Um ou mais blocos não pertencem ao condomínio." }, 400);
       }
+    }
+
+    // A portaria é a origem do porteiro. Chamamos a RPC para cobrir o caso de
+    // condomínios criados antes deste modelo (ainda sem portarias cadastradas).
+    const { error: ensureError } = await serviceClient.rpc(
+      "ensure_condominium_portarias",
+      { p_condominium_id: condominiumId },
+    );
+    if (ensureError) return respond({ error: ensureError.message }, 500);
+
+    let portariaId = input.portariaId ?? null;
+    if (!portariaId && blockIds.length) {
+      // Compatibilidade com telas antigas que enviavam apenas blockIds.
+      const { data: legacyPortaria, error: legacyError } = await serviceClient
+        .from("portarias")
+        .select("id")
+        .eq("condominium_id", condominiumId)
+        .eq("block_id", blockIds[0])
+        .maybeSingle();
+      if (legacyError) return respond({ error: legacyError.message }, 500);
+      portariaId = legacyPortaria?.id ?? null;
+    }
+    if (!portariaId) {
+      const { data: fallback, error: fallbackError } = await serviceClient
+        .from("portarias")
+        .select("id")
+        .eq("condominium_id", condominiumId)
+        .eq("active", true)
+        .order("block_id", { ascending: true, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      if (fallbackError) return respond({ error: fallbackError.message }, 500);
+      portariaId = fallback?.id ?? null;
+    }
+    if (!portariaId || !isUuid(portariaId)) {
+      return respond(
+        { error: "Cadastre uma portaria para este condomínio antes de criar porteiros." },
+        400,
+      );
+    }
+    const { data: portaria, error: portariaError } = await serviceClient
+      .from("portarias")
+      .select("id, condominium_id, active, name")
+      .eq("id", portariaId)
+      .maybeSingle();
+    if (portariaError) return respond({ error: portariaError.message }, 500);
+    if (!portaria || portaria.condominium_id !== condominiumId || !portaria.active) {
+      return respond({ error: "Portaria inválida para este condomínio." }, 400);
     }
 
     let resolvedUsername = username;
@@ -305,6 +350,8 @@ Deno.serve(async (request: Request) => {
         username: resolvedUsername,
         name,
         access_expires_at: accessExpiresAt,
+        home_portaria_id: portariaId,
+        current_portaria_id: portariaId,
         created_by: userData.user.id,
       })
       .select("id")
@@ -354,6 +401,141 @@ Deno.serve(async (request: Request) => {
     });
   }
 
+  // Troca manual de portaria pelo síndico. Não há data, turno ou limite: a
+  // portaria atual apenas define o caderno que o porteiro enxerga e alimenta.
+  if (input.action === "set-portaria") {
+    if (
+      typeof input.porterAccountId !== "string" ||
+      !isUuid(input.porterAccountId) ||
+      ((input.portariaId === undefined || input.portariaId === null) &&
+        input.home !== true) ||
+      (input.portariaId != null && typeof input.portariaId !== "string")
+    ) {
+      return respond({ error: "Informe o porteiro e a portaria de destino." }, 400);
+    }
+
+    const { data: account, error: accountError } = await serviceClient
+      .from("porter_accounts")
+      .select(
+        "id, condominium_id, home_portaria_id, active, access_revoked_at",
+      )
+      .eq("id", input.porterAccountId)
+      .maybeSingle();
+    if (accountError) return respond({ error: accountError.message }, 500);
+    if (!account) return respond({ error: "Porteiro não encontrado." }, 404);
+    if (
+      !profile?.is_super_admin &&
+      !allowedCondominiumIds.includes(account.condominium_id)
+    ) {
+      return respond({ error: "Sem permissão para gerenciar este porteiro." }, 403);
+    }
+    if (account.access_revoked_at) {
+      return respond({ error: "Este acesso foi excluído e não pode ser alterado." }, 409);
+    }
+    if (!account.active) {
+      return respond({ error: "Reative o acesso antes de trocar a portaria." }, 409);
+    }
+
+    const targetPortariaId =
+      input.home === true ? account.home_portaria_id : input.portariaId;
+    if (!targetPortariaId || !isUuid(targetPortariaId)) {
+      return respond({ error: "O porteiro ainda não tem portaria de origem." }, 400);
+    }
+
+    const { data: target, error: targetError } = await serviceClient
+      .from("portarias")
+      .select("id, condominium_id, active, name")
+      .eq("id", targetPortariaId)
+      .maybeSingle();
+    if (targetError) return respond({ error: targetError.message }, 500);
+    if (
+      !target ||
+      target.condominium_id !== account.condominium_id ||
+      !target.active
+    ) {
+      return respond({ error: "Portaria inválida para este condomínio." }, 400);
+    }
+
+    const { error: updateError } = await serviceClient
+      .from("porter_accounts")
+      .update({ current_portaria_id: targetPortariaId })
+      .eq("id", account.id);
+    if (updateError) return respond({ error: updateError.message }, 500);
+    return respond({ message: `Porteiro agora está na ${target.name}.` });
+  }
+
+  // Demissão: bloqueia o login e esconde o porteiro da lista de ativos, mas
+  // NÃO apaga nenhum dado registrado. O auth.users é preservado porque os
+  // registros do caderno referenciam esse id.
+  if (input.action === "delete-access") {
+    if (
+      typeof input.porterAccountId !== "string" ||
+      !isUuid(input.porterAccountId)
+    ) {
+      return respond({ error: "Informe o porteiro." }, 400);
+    }
+
+    const { data: account, error: accountError } = await serviceClient
+      .from("porter_accounts")
+      .select("id, auth_user_id, condominium_id, access_revoked_at")
+      .eq("id", input.porterAccountId)
+      .maybeSingle();
+    if (accountError) return respond({ error: accountError.message }, 500);
+    if (!account) return respond({ error: "Porteiro não encontrado." }, 404);
+    if (
+      !profile?.is_super_admin &&
+      !allowedCondominiumIds.includes(account.condominium_id)
+    ) {
+      return respond({ error: "Sem permissão para gerenciar este porteiro." }, 403);
+    }
+    if (account.access_revoked_at) {
+      return respond({ error: "O acesso deste porteiro já foi excluído." }, 409);
+    }
+
+    const { error: revokeError } = await serviceClient
+      .from("porter_accounts")
+      .update({
+        active: false,
+        access_revoked_at: new Date().toISOString(),
+      })
+      .eq("id", account.id);
+    if (revokeError) return respond({ error: revokeError.message }, 500);
+
+    const { error: membershipError } = await serviceClient
+      .from("condominium_users")
+      .update({ status: "inactive" })
+      .eq("user_id", account.auth_user_id)
+      .eq("condominium_id", account.condominium_id)
+      .eq("role", "operator");
+    if (membershipError) {
+      return respond(
+        {
+          error: `O acesso foi bloqueado, mas o vínculo não foi atualizado: ${membershipError.message}`,
+        },
+        500,
+      );
+    }
+
+    // ban_duration bloqueia o login sem excluir o usuário; a senha também é
+    // trocada para que uma eventual reversão do banimento não restaure acesso.
+    const { error: banError } = await serviceClient.auth.admin.updateUserById(
+      account.auth_user_id,
+      { ban_duration: "876000h", password: createTemporaryPassword() },
+    );
+    if (banError) {
+      return respond(
+        {
+          error: `O acesso foi bloqueado no cadastro, mas a conta de login não pôde ser bloqueada: ${banError.message}`,
+        },
+        500,
+      );
+    }
+
+    return respond({
+      message: "Acesso excluído. Nenhum registro do caderno foi apagado.",
+    });
+  }
+
   if (
     input.action === "reset-password" ||
     input.action === "deactivate" ||
@@ -369,11 +551,16 @@ Deno.serve(async (request: Request) => {
 
     const { data: account, error: accountError } = await serviceClient
       .from("porter_accounts")
-      .select("id, auth_user_id, condominium_id, active, access_expires_at")
+      .select(
+        "id, auth_user_id, condominium_id, active, access_expires_at, access_revoked_at",
+      )
       .eq("id", input.porterAccountId)
       .maybeSingle();
     if (accountError) return respond({ error: accountError.message }, 500);
     if (!account) return respond({ error: "Porteiro não encontrado." }, 404);
+    if (account.access_revoked_at) {
+      return respond({ error: "Este acesso foi excluído e não pode ser alterado." }, 409);
+    }
     if (
       !profile?.is_super_admin &&
       !allowedCondominiumIds.includes(account.condominium_id)
@@ -506,7 +693,9 @@ Deno.serve(async (request: Request) => {
         error: `A conta foi bloqueada, mas o vínculo não foi atualizado: ${membershipUpdateError.message}`,
       }, 500);
     }
-    return respond({ message: "Acesso do porteiro removido." });
+    return respond({
+      message: "Acesso desativado. Os registros permanecem no caderno.",
+    });
   }
 
   return respond({ error: "Ação não suportada." }, 400);

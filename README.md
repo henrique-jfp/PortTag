@@ -168,6 +168,10 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 35. `supabase/migrations/20261121000000_optional_block_import.sql`
 36. `supabase/migrations/20261121010000_import_creates_blocks.sql`
 37. `supabase/migrations/20261121120000_resident_import_extra_fields.sql`
+38. `supabase/migrations/20261121130000_bulk_package_reception.sql`
+39. `supabase/migrations/20261121140000_gatehouse_operation.sql`
+40. `supabase/migrations/20261121150000_gatehouse_scoped_queries.sql`
+41. `supabase/migrations/20261121160000_notebook_retention_and_reset.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -224,6 +228,41 @@ No painel, o botão **Ativo**/**Inativo** do cartão substituiu **Editar**: nome
 endereço são definitivos após o cadastro. Inativar já bloqueia síndico e
 porteiro pelas mesmas regras do prazo vencido; renovar o prazo não reativa um
 condomínio inativo, e somente o Super Admin pode reativá-lo.
+
+A migração 38 prepara o recebimento em lote do porteiro. Ela cria a auditoria
+`package_reception_acknowledgements` (aceite único de endereço divergente ou
+inconclusivo e de rastreio repetido), a RPC `find_duplicate_packages`, que
+confere todos os rastreios da fila em uma chamada, e a RPC
+`create_packages_batch`, que registra até 50 encomendas por vez e devolve o
+resultado de cada foto sem desfazer as demais. O aceite de endereço continua
+sendo conferência física das etiquetas: a decisão determinística permanece em
+`verifyPackageDestinationAddress`, no app. Sem a migration aplicada, o lote usa
+o caminho antigo, foto a foto; por isso execute-a no SQL Editor antes de
+publicar o frontend para teste em produção.
+
+As migrações 39 a 41 implantam a operação por portaria. A 39 cria `portarias`
+(`condominium_id`, `block_id`, `name`, `active`), os campos de modo de operação e
+retenção em `condominiums`, e `home_portaria_id`, `current_portaria_id` e
+`access_revoked_at` em `porter_accounts`. `create_condominium` passou a aceitar
+`p_operation_mode`; a troca posterior usa `update_condominium_operation`, e a
+retenção é gravada por `update_notebook_retention`. A permissão de bloco passa a ser
+avaliada pela **portaria atual** do porteiro na função
+`can_access_condominium_block`; a portaria de origem é lembrada para o botão
+**Voltar à portaria de origem**. As portarias são criadas automaticamente
+conforme o modelo escolhido (`single`, `central` ou `per_block`).
+
+A 40 acrescenta `arg_block_id` a `search_package_drawers`,
+`search_package_records` e `manager_package_report`, grava o bloco em
+`package_events` e restringe `manager_package_report` a síndico ativo (ou Super
+Admin). A 41 cria `cleanup_expired_notebook_records`, usada pela Edge Function
+agendada para apagar definitivamente o caderno após o prazo configurado, e
+ajusta `reset_condominium_data` para remover também as portarias.
+
+Depois de aplicar as migrações 39 a 41, faça o deploy de `manage-porter` e de
+`cleanup-package-receipts`. A criação de porteiro passa a receber `portariaId`;
+as novas ações `set-portaria` e `delete-access` trocam a portaria atual e
+excluem **somente o acesso** (o login é bloqueado e nenhum registro do caderno
+é apagado). Férias continuam sendo **Desativar**, seguido de **Reativar**.
 
 A migração 29 cria a RPC `import_condominium_residents`, usada pela importação
 de planilha de moradores no cadastro de estrutura. Ela aceita unidade, bloco
@@ -286,7 +325,7 @@ where u.id = p.id
 ```
 
 O Super Admin pode cadastrar porteiros na área **Porteiros**, escolhendo o
-condomínio e os blocos de trabalho. No campo **Prazo de acesso**, escolha sem
+condomínio e a **portaria de origem**. No campo **Prazo de acesso**, escolha sem
 expiração, teste por 7 dias ou uma data e hora personalizadas. Ao vencer o
 prazo, o banco bloqueia o acesso do porteiro aos dados e o app informa que o
 acesso expirou; contas sem prazo continuam ativas até serem revogadas pelo

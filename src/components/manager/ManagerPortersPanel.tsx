@@ -3,7 +3,12 @@ import { ConfirmationDialog } from "../ConfirmationDialog";
 import { supabase } from "../../lib/supabase";
 import { normalizePorterUsername } from "../../lib/porterAccounts";
 
-type Block = { id: string; name: string };
+type Portaria = {
+  id: string;
+  name: string;
+  block_id: string | null;
+  active: boolean;
+};
 type Porter = {
   id: string;
   auth_user_id: string | null;
@@ -11,11 +16,28 @@ type Porter = {
   username: string;
   active: boolean;
   access_expires_at: string | null;
+  home_portaria_id: string | null;
+  current_portaria_id: string | null;
+  access_revoked_at: string | null;
 };
-type Action = "create" | "reset-password" | "deactivate" | "activate" | "renew-access";
+type Action =
+  | "create"
+  | "reset-password"
+  | "deactivate"
+  | "activate"
+  | "renew-access"
+  | "set-portaria"
+  | "delete-access";
 type Duration = "never" | "seven-days" | "custom";
 type Credentials = { name?: string; username?: string; password: string };
-type PendingAction = { action: Action; porter?: Porter };
+type PendingAction = {
+  action: Action;
+  porter?: Porter;
+  portariaId?: string;
+};
+
+const DELETE_ACCESS_CONFIRMATION = "EXCLUIR";
+const ACTIVITY_PAGE_SIZE = 500;
 
 function localDateTimeValue(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -53,23 +75,54 @@ function formatLastActivity(value: string | null) {
     : "Sem registro no caderno";
 }
 
+async function fetchLastActivity(
+  condominiumId: string,
+  actorIds: Set<string>,
+): Promise<Map<string, string>> {
+  const activity = new Map<string, string>();
+  if (!actorIds.size) return activity;
+
+  let from = 0;
+  while (true) {
+    const { data, error, count } = await supabase
+      .from("package_events")
+      .select("actor_id, occurred_at", { count: "exact" })
+      .eq("condominium_id", condominiumId)
+      .order("occurred_at", { ascending: false })
+      .range(from, from + ACTIVITY_PAGE_SIZE - 1);
+
+    if (error) throw new Error(error.message);
+    const page = data ?? [];
+    page.forEach((event) => {
+      if (event.actor_id && actorIds.has(event.actor_id)) {
+        activity.set(event.actor_id, event.occurred_at);
+      }
+    });
+    const total = count ?? 0;
+    from += ACTIVITY_PAGE_SIZE;
+    if (!page.length || from >= total || activity.size === actorIds.size) {
+      break;
+    }
+  }
+
+  return activity;
+}
+
 export function ManagerPortersPanel({
   condominiumId,
 }: {
   condominiumId: string;
 }) {
   const [loading, setLoading] = useState(true);
-  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [portarias, setPortarias] = useState<Portaria[]>([]);
+  const [portariasError, setPortariasError] = useState("");
   const [porters, setPorters] = useState<Porter[]>([]);
-  const [blockAssignments, setBlockAssignments] = useState<
-    Map<string, string[]>
-  >(new Map());
   const [lastActivity, setLastActivity] = useState<Map<string, string>>(
     new Map(),
   );
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
-  const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
+  const [selectedPortariaId, setSelectedPortariaId] = useState("");
   const [duration, setDuration] = useState<Duration>("never");
   const [customExpiry, setCustomExpiry] = useState("");
   const [renewDuration, setRenewDuration] = useState<Duration>("seven-days");
@@ -77,6 +130,12 @@ export function ManagerPortersPanel({
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [renewingPorter, setRenewingPorter] = useState<Porter | null>(null);
+  const [changingPorter, setChangingPorter] = useState<Porter | null>(null);
+  const [targetPortariaId, setTargetPortariaId] = useState("");
+  const [deleteAccessTarget, setDeleteAccessTarget] = useState<Porter | null>(
+    null,
+  );
+  const [deleteAccessText, setDeleteAccessText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -85,52 +144,47 @@ export function ManagerPortersPanel({
     let active = true;
 
     void (async () => {
-      const [blocksResult, portersResult, assignmentsResult, eventsResult] =
-        await Promise.all([
-          supabase
-            .from("blocks")
-            .select("id, name")
-            .eq("condominium_id", condominiumId)
-            .order("name"),
-          supabase
-            .from("porter_accounts")
-            .select("id, auth_user_id, name, username, active, access_expires_at")
-            .eq("condominium_id", condominiumId)
-            .order("name"),
-          supabase.from("porter_blocks").select("porter_account_id, block_id"),
-          supabase
-            .from("package_events")
-            .select("actor_id, occurred_at")
-            .eq("condominium_id", condominiumId)
-            .order("occurred_at", { ascending: false })
-            .limit(500),
-        ]);
+      const [portariasResult, portersResult] = await Promise.all([
+        supabase
+          .from("portarias")
+          .select("id, name, block_id, active")
+          .eq("condominium_id", condominiumId)
+          .eq("active", true)
+          .order("name"),
+        supabase
+          .from("porter_accounts")
+          .select(
+            "id, auth_user_id, name, username, active, access_expires_at, home_portaria_id, current_portaria_id, access_revoked_at",
+          )
+          .eq("condominium_id", condominiumId)
+          .is("access_revoked_at", null)
+          .order("name"),
+      ]);
 
       if (!active) return;
-      const failed =
-        blocksResult.error ??
-        portersResult.error ??
-        assignmentsResult.error ??
-        eventsResult.error;
-      if (failed) {
-        setError(`Não foi possível carregar os porteiros. ${failed.message}`);
+      if (portersResult.error) {
+        setError(
+          `Não foi possível carregar os porteiros. ${portersResult.error.message}`,
+        );
       } else {
-        setBlocks(blocksResult.data ?? []);
-        setPorters(portersResult.data ?? []);
-        const assignments = new Map<string, string[]>();
-        (assignmentsResult.data ?? []).forEach((row) => {
-          const current = assignments.get(row.porter_account_id) ?? [];
-          current.push(row.block_id);
-          assignments.set(row.porter_account_id, current);
-        });
-        setBlockAssignments(assignments);
-        const activity = new Map<string, string>();
-        (eventsResult.data ?? []).forEach((event) => {
-          if (event.actor_id && !activity.has(event.actor_id)) {
-            activity.set(event.actor_id, event.occurred_at);
-          }
-        });
+        const portersData = (portersResult.data ?? []) as Porter[];
+        setPorters(portersData);
+        const actorIds = new Set(
+          portersData
+            .map((porter) => porter.auth_user_id)
+            .filter((id): id is string => Boolean(id)),
+        );
+        const activity = await fetchLastActivity(condominiumId, actorIds);
+        if (!active) return;
         setLastActivity(activity);
+      }
+      if (portariasResult.error) {
+        setPortariasError(
+          `Não foi possível carregar as portarias. ${portariasResult.error.message}`,
+        );
+      } else {
+        const rows = (portariasResult.data ?? []) as Portaria[];
+        setPortarias(rows.filter((portaria) => portaria.active));
       }
       setLoading(false);
     })().catch((cause: unknown) => {
@@ -161,6 +215,11 @@ export function ManagerPortersPanel({
     return parsed.toISOString();
   }
 
+  function portariaName(portariaId: string | null) {
+    if (!portariaId) return "—";
+    return portarias.find((portaria) => portaria.id === portariaId)?.name ?? "—";
+  }
+
   async function invoke(action: Action, extra: Record<string, unknown> = {}) {
     setBusy(true);
     setError("");
@@ -183,6 +242,12 @@ export function ManagerPortersPanel({
         setSuccess("Nova senha temporária gerada.");
       } else if (action === "activate") {
         setSuccess("Acesso reativado.");
+      } else if (action === "set-portaria") {
+        setSuccess("Portaria atual do porteiro alterada.");
+      } else if (action === "delete-access") {
+        setSuccess(
+          "Acesso excluído. Nenhum registro do caderno foi apagado.",
+        );
       }
       return true;
     } catch (cause) {
@@ -198,40 +263,15 @@ export function ManagerPortersPanel({
   }
 
   async function reloadPorters() {
-    const [{ data: portersData }, { data: assignmentsData }, { data: eventsData }] =
-      await Promise.all([
-        supabase
-          .from("porter_accounts")
-          .select("id, auth_user_id, name, username, active, access_expires_at")
-          .eq("condominium_id", condominiumId)
-          .order("name"),
-        supabase.from("porter_blocks").select("porter_account_id, block_id"),
-        supabase
-          .from("package_events")
-          .select("actor_id, occurred_at")
-          .eq("condominium_id", condominiumId)
-          .order("occurred_at", { ascending: false })
-          .limit(500),
-      ]);
+    const { data: portersData } = await supabase
+      .from("porter_accounts")
+      .select(
+        "id, auth_user_id, name, username, active, access_expires_at, home_portaria_id, current_portaria_id, access_revoked_at",
+      )
+      .eq("condominium_id", condominiumId)
+      .is("access_revoked_at", null)
+      .order("name");
     if (portersData) setPorters(portersData);
-    if (assignmentsData) {
-      const assignments = new Map<string, string[]>();
-      assignmentsData.forEach((row) => {
-        const current = assignments.get(row.porter_account_id) ?? [];
-        current.push(row.block_id);
-        assignments.set(row.porter_account_id, current);
-      });
-      setBlockAssignments(assignments);
-    }
-    if (eventsData) {
-      const activity = new Map<string, string>();
-      eventsData.forEach((event) => {
-        if (event.actor_id && !activity.has(event.actor_id)) {
-          activity.set(event.actor_id, event.occurred_at);
-        }
-      });
-      setLastActivity(activity);
-    }
   }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
@@ -242,13 +282,13 @@ export function ManagerPortersPanel({
       const created = await invoke("create", {
         name: name.trim(),
         username: normalizePorterUsername(username),
-        blockIds: selectedBlockIds,
+        portariaId: selectedPortariaId,
         accessExpiresAt,
       });
       if (created) {
         setName("");
         setUsername("");
-        setSelectedBlockIds([]);
+        setSelectedPortariaId("");
         setDuration("never");
         setCustomExpiry("");
         await reloadPorters();
@@ -262,12 +302,17 @@ export function ManagerPortersPanel({
 
   async function handleConfirm() {
     if (!pending) return;
-    const { action, porter } = pending;
+    const { action, porter, portariaId } = pending;
     setPending(null);
     if (!porter || action === "create") return;
 
     setCredentials(null);
-    const done = await invoke(action, { porterAccountId: porter.id });
+    const extra: Record<string, unknown> = { porterAccountId: porter.id };
+    if (action === "set-portaria") {
+      if (portariaId === "home") extra.home = true;
+      else extra.portariaId = portariaId;
+    }
+    const done = await invoke(action, extra);
     if (done) await reloadPorters();
   }
 
@@ -288,11 +333,24 @@ export function ManagerPortersPanel({
     }
   }
 
-  function toggleBlock(blockId: string) {
-    setSelectedBlockIds((current) =>
-      current.includes(blockId)
-        ? current.filter((id) => id !== blockId)
-        : [...current, blockId],
+  async function confirmDeleteAccess() {
+    if (!deleteAccessTarget) return;
+    if (deleteAccessText.trim().toUpperCase() !== DELETE_ACCESS_CONFIRMATION) {
+      setError(`Digite ${DELETE_ACCESS_CONFIRMATION} para confirmar.`);
+      return;
+    }
+    const porter = deleteAccessTarget;
+    setDeleteAccessTarget(null);
+    setDeleteAccessText("");
+    const done = await invoke("delete-access", { porterAccountId: porter.id });
+    if (done) await reloadPorters();
+  }
+
+  function handleChangePortaria(porter: Porter) {
+    setChangingPorter(porter);
+    setTargetPortariaId(
+      portarias.find((portaria) => portaria.id !== porter.current_portaria_id)
+        ?.id ?? "",
     );
   }
 
@@ -303,8 +361,8 @@ export function ManagerPortersPanel({
           <p className="eyebrow">Equipe</p>
           <h2>Porteiros</h2>
           <p>
-            Contas de operação com acesso restrito ao seu condomínio e aos
-            blocos selecionados.
+            A permissão é da portaria: o porteiro registra e consulta somente o
+            caderno da portaria onde está trabalhando.
           </p>
         </div>
       </div>
@@ -315,6 +373,11 @@ export function ManagerPortersPanel({
         </p>
       )}
       {success && <p className="feedback-message">{success}</p>}
+      {portariasError && (
+        <p className="feedback-message feedback-error" role="alert">
+          {portariasError}
+        </p>
+      )}
 
       {credentials && (
         <div className="manager-credentials" role="status">
@@ -361,21 +424,30 @@ export function ManagerPortersPanel({
                 required
               />
             </label>
-            {blocks.length > 0 && (
-              <fieldset className="manager-fieldset">
-                <legend>Blocos de atuação</legend>
-                {blocks.map((block) => (
-                  <label key={block.id}>
-                    <input
-                      type="checkbox"
-                      checked={selectedBlockIds.includes(block.id)}
-                      onChange={() => toggleBlock(block.id)}
-                    />
-                    {block.name}
-                  </label>
+            <label>
+              Portaria de origem
+              <select
+                value={selectedPortariaId}
+                onChange={(event) => setSelectedPortariaId(event.target.value)}
+                required
+                disabled={portarias.length === 0}
+              >
+                <option value="">
+                  {portarias.length
+                    ? "Selecione a portaria"
+                    : "Cadastre uma portaria antes"}
+                </option>
+                {portarias.map((portaria) => (
+                  <option key={portaria.id} value={portaria.id}>
+                    {portaria.name}
+                  </option>
                 ))}
-              </fieldset>
-            )}
+              </select>
+            </label>
+            <p className="field-hint">
+              A portaria de origem é onde o porteiro trabalha normalmente. Você
+              pode trocar a portaria atual a qualquer momento.
+            </p>
             <label>
               Prazo de acesso
               <select
@@ -401,7 +473,7 @@ export function ManagerPortersPanel({
               </label>
             )}
             <div className="form-actions">
-              <button type="submit" disabled={busy}>
+              <button type="submit" disabled={busy || !selectedPortariaId}>
                 {busy ? "Cadastrando..." : "Criar acesso"}
               </button>
             </div>
@@ -431,19 +503,39 @@ export function ManagerPortersPanel({
                           : null,
                       )}
                       <br />
-                      Blocos:{" "}
-                      {(blockAssignments.get(porter.id) ?? [])
-                        .map(
-                          (blockId) =>
-                            blocks.find((block) => block.id === blockId)?.name ??
-                            "—",
-                        )
-                        .join(", ") || "Todos"}
+                      Origem: {portariaName(porter.home_portaria_id)} · Atual:{" "}
+                      {portariaName(porter.current_portaria_id)}
                     </small>
                   </div>
                   <div className="manager-list-actions">
                     {porter.active ? (
                       <>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => handleChangePortaria(porter)}
+                          disabled={!portarias.length}
+                        >
+                          Trocar portaria
+                        </button>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={
+                            !porter.current_portaria_id ||
+                            porter.current_portaria_id ===
+                              porter.home_portaria_id
+                          }
+                          onClick={() =>
+                            setPending({
+                              action: "set-portaria",
+                              porter,
+                              portariaId: "home",
+                            })
+                          }
+                        >
+                          Voltar à origem
+                        </button>
                         <button
                           className="secondary-button"
                           type="button"
@@ -469,13 +561,24 @@ export function ManagerPortersPanel({
                           Nova senha
                         </button>
                         <button
-                          className="danger-button"
+                          className="secondary-button"
                           type="button"
                           onClick={() =>
                             setPending({ action: "deactivate", porter })
                           }
                         >
-                          Remover acesso
+                          Desativar (férias)
+                        </button>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => {
+                            setDeleteAccessTarget(porter);
+                            setDeleteAccessText("");
+                            setError("");
+                          }}
+                        >
+                          Excluir acesso
                         </button>
                       </>
                     ) : (
@@ -494,6 +597,50 @@ export function ManagerPortersPanel({
           )}
         </div>
       </div>
+
+      {changingPorter && (
+        <form
+          className="manager-card manager-inline-renew"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const porter = changingPorter;
+            setChangingPorter(null);
+            setPending({
+              action: "set-portaria",
+              porter,
+              portariaId: targetPortariaId,
+            });
+          }}
+        >
+          <label>
+            Nova portaria para {changingPorter.name}
+            <select
+              value={targetPortariaId}
+              onChange={(event) => setTargetPortariaId(event.target.value)}
+              required
+            >
+              <option value="">Selecione a portaria</option>
+              {portarias.map((portaria) => (
+                <option key={portaria.id} value={portaria.id}>
+                  {portaria.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="form-actions">
+            <button type="submit" disabled={!targetPortariaId}>
+              Continuar
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setChangingPorter(null)}
+            >
+              Cancelar
+            </button>
+          </div>
+        </form>
+      )}
 
       {renewingPorter && (
         <form className="manager-card manager-inline-renew" onSubmit={handleRenew}>
@@ -534,6 +681,7 @@ export function ManagerPortersPanel({
           </div>
         </form>
       )}
+
       {pending?.action === "reset-password" && (
         <ConfirmationDialog
           title="Gerar nova senha?"
@@ -546,9 +694,23 @@ export function ManagerPortersPanel({
       )}
       {pending?.action === "deactivate" && (
         <ConfirmationDialog
-          title="Remover acesso?"
-          description={`O porteiro ${pending.porter?.name ?? ""} perderá o acesso ao app imediatamente.`}
-          confirmLabel="Remover acesso"
+          title="Desativar porteiro (férias)?"
+          description={`${pending.porter?.name ?? "O porteiro"} ficará sem acesso temporariamente. Os registros feitos por ele permanecem no caderno e ele poderá ser reativado depois.`}
+          confirmLabel="Desativar"
+          loading={busy}
+          onConfirm={handleConfirm}
+          onCancel={() => setPending(null)}
+        />
+      )}
+      {pending?.action === "set-portaria" && (
+        <ConfirmationDialog
+          title="Trocar a portaria atual?"
+          description={
+            pending.portariaId === "home"
+              ? `${pending.porter?.name ?? "O porteiro"} voltará à portaria de origem e passará a registrar e ver somente o caderno dela.`
+              : `${pending.porter?.name ?? "O porteiro"} passará a registrar e ver somente o caderno de ${portariaName(pending.portariaId ?? null)}.`
+          }
+          confirmLabel="Confirmar troca"
           loading={busy}
           onConfirm={handleConfirm}
           onCancel={() => setPending(null)}
@@ -563,6 +725,72 @@ export function ManagerPortersPanel({
           onConfirm={handleConfirm}
           onCancel={() => setPending(null)}
         />
+      )}
+
+      {deleteAccessTarget && (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !busy) {
+              setDeleteAccessTarget(null);
+              setDeleteAccessText("");
+            }
+          }}
+        >
+          <section
+            className="confirmation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-porter-access-title"
+          >
+            <h2 id="delete-porter-access-title">
+              Excluir acesso de {deleteAccessTarget.name}?
+            </h2>
+            <p>
+              Use esta opção para demissão. O login será bloqueado
+              definitivamente e a conta não aparecerá mais na lista de ativos.
+            </p>
+            <p>
+              <strong>
+                NENHUM dado registrado será apagado. Tudo o que ele recebeu
+                permanece no caderno pelo prazo de retenção configurado.
+              </strong>
+            </p>
+            <label className="form-field">
+              Digite <strong>{DELETE_ACCESS_CONFIRMATION}</strong> para confirmar
+              <input
+                autoComplete="off"
+                value={deleteAccessText}
+                onChange={(event) => setDeleteAccessText(event.target.value)}
+              />
+            </label>
+            <div className="form-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setDeleteAccessTarget(null);
+                  setDeleteAccessText("");
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="danger-button"
+                type="button"
+                disabled={
+                  busy ||
+                  deleteAccessText.trim().toUpperCase() !==
+                    DELETE_ACCESS_CONFIRMATION
+                }
+                onClick={() => void confirmDeleteAccess()}
+              >
+                {busy ? "Excluindo acesso..." : "Excluir acesso"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </section>
   );

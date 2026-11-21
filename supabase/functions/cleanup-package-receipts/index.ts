@@ -31,6 +31,21 @@ Deno.serve(async (request: Request) => {
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // Limpeza definitiva do caderno conforme o prazo configurado por condomínio.
+  // Antes disso, apenas a foto da etiqueta era removida; os registros ficavam
+  // para sempre. A RPC usa service_role e apaga também eventos e avisos.
+  const { data: retentionResult, error: retentionError } = await supabase.rpc(
+    "cleanup_expired_notebook_records",
+  );
+  if (retentionError) {
+    return new Response(JSON.stringify({ error: retentionError.message }), {
+      status: 500,
+      headers: responseHeaders,
+    });
+  }
+  const notebookDeleted = (retentionResult as { deleted?: number } | null)?.deleted ?? 0;
+
   const { data: expiredPackages, error: queryError } = await supabase
     .from("packages")
     .select("id, receipt_path")
@@ -46,7 +61,7 @@ Deno.serve(async (request: Request) => {
   }
 
   if (!expiredPackages?.length) {
-    return new Response(JSON.stringify({ deleted: 0 }), {
+    return new Response(JSON.stringify({ deleted: 0, notebookDeleted }), {
       status: 200,
       headers: responseHeaders,
     });
@@ -82,7 +97,7 @@ Deno.serve(async (request: Request) => {
     });
   }
 
-  return new Response(JSON.stringify({ deleted: paths.length }), {
+  return new Response(JSON.stringify({ deleted: paths.length, notebookDeleted }), {
     status: 200,
     headers: responseHeaders,
   });

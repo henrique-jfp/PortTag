@@ -52,6 +52,8 @@ export type PackageFilters = {
   company?: string;
   porter?: string;
   status?: string;
+  /** Escopo da portaria/bloco em uso. `null` não restringe o caderno. */
+  blockId?: string | null;
 };
 
 export type PageResult<T> = {
@@ -134,6 +136,7 @@ export async function fetchDrawers(
     arg_company_query: filters.company || null,
     arg_porter_query: filters.porter || null,
     arg_status: filters.status || null,
+    arg_block_id: filters.blockId ?? null,
     arg_limit: DRAWER_PAGE_SIZE,
     arg_offset: (page - 1) * DRAWER_PAGE_SIZE,
   });
@@ -167,6 +170,7 @@ export async function fetchPackageRecords(options: {
     arg_tracking_query: filters.tracking || null,
     arg_company_query: filters.company || null,
     arg_porter_query: filters.porter || null,
+    arg_block_id: filters.blockId ?? null,
     arg_sort: options.sort ?? "recent",
     arg_limit: pageSize,
     arg_offset: (options.page - 1) * pageSize,

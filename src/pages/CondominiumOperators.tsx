@@ -15,9 +15,11 @@ type Condominium = {
   block_count: number;
 };
 
-type Block = {
+type Portaria = {
   id: string;
   name: string;
+  block_id: string | null;
+  active: boolean;
 };
 
 type Porter = {
@@ -26,7 +28,11 @@ type Porter = {
   username: string;
   active: boolean;
   access_expires_at: string | null;
-  blocks: string[];
+  home_portaria_id: string | null;
+  current_portaria_id: string | null;
+  access_revoked_at: string | null;
+  homePortaria: string;
+  currentPortaria: string;
 };
 
 type Manager = {
@@ -52,6 +58,8 @@ type ConfirmationRequest = {
   busyLabel?: string;
   onConfirm: () => void | Promise<void>;
 };
+
+const DELETE_ACCESS_CONFIRMATION = "EXCLUIR";
 
 function localDateTimeValue(date = new Date()) {
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -104,14 +112,20 @@ export function CondominiumOperators({
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
   const [selectedCondominiumId, setSelectedCondominiumId] = useState("");
-  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [portarias, setPortarias] = useState<Portaria[]>([]);
   const [porters, setPorters] = useState<Porter[]>([]);
   const [managers, setManagers] = useState<Manager[]>([]);
   const [name, setName] = useState("");
   const [usernameOverride, setUsernameOverride] = useState<string | null>(null);
   const [accessDuration, setAccessDuration] = useState<AccessDuration>("never");
   const [customAccessExpiry, setCustomAccessExpiry] = useState("");
-  const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
+  const [selectedPortariaId, setSelectedPortariaId] = useState("");
+  const [changingPorterId, setChangingPorterId] = useState("");
+  const [targetPortariaId, setTargetPortariaId] = useState("");
+  const [deleteAccessTarget, setDeleteAccessTarget] = useState<Porter | null>(
+    null,
+  );
+  const [deleteAccessText, setDeleteAccessText] = useState("");
   const [newManagerName, setNewManagerName] = useState("");
   const [newManagerEmail, setNewManagerEmail] = useState("");
   const [managerEmail, setManagerEmail] = useState("");
@@ -208,27 +222,28 @@ export function CondominiumOperators({
 
     async function loadAccounts() {
       if (!selectedCondominiumId || !isSuperAdmin) {
-        setBlocks([]);
+        setPortarias([]);
         setPorters([]);
         setManagers([]);
         return;
       }
 
       setPageError("");
-      const [
-        blocksResult,
-        portersResult,
-        managerMembershipsResult,
-      ] = await Promise.all([
+      const [portariasResult, portersResult, managerMembershipsResult] =
+        await Promise.all([
         supabase
-          .from("blocks")
-          .select("id, name")
+          .from("portarias")
+          .select("id, name, block_id, active")
           .eq("condominium_id", selectedCondominiumId)
+          .eq("active", true)
           .order("name"),
         supabase
           .from("porter_accounts")
-          .select("id, name, username, active, access_expires_at")
+          .select(
+            "id, name, username, active, access_expires_at, home_portaria_id, current_portaria_id, access_revoked_at",
+          )
           .eq("condominium_id", selectedCondominiumId)
+          .is("access_revoked_at", null)
           .order("name"),
         supabase
           .from("condominium_users")
@@ -240,7 +255,7 @@ export function CondominiumOperators({
 
       if (!active) return;
       const loadError =
-        blocksResult.error ??
+        portariasResult.error ??
         portersResult.error ??
         managerMembershipsResult.error;
       if (loadError) {
@@ -248,35 +263,18 @@ export function CondominiumOperators({
         return;
       }
 
-      const porterIds = (portersResult.data ?? []).map((porter) => porter.id);
-      const { data: assignments, error: assignmentsError } = porterIds.length
-        ? await supabase
-            .from("porter_blocks")
-            .select("porter_account_id, block_id")
-            .in("porter_account_id", porterIds)
-        : { data: [], error: null };
-      if (!active) return;
-      if (assignmentsError) {
-        setPageError(assignmentsError.message);
-        return;
-      }
-
-      const blockNames = new Map(
-        (blocksResult.data ?? []).map((block) => [block.id, block.name]),
+      const activePortarias = (portariasResult.data ?? []).filter(
+        (portaria) => portaria.active,
+      ) as Portaria[];
+      const portariaNames = new Map(
+        activePortarias.map((portaria) => [portaria.id, portaria.name]),
       );
-      const assignedByPorter = new Map<string, string[]>();
-      for (const assignment of assignments ?? []) {
-        const blockName = blockNames.get(assignment.block_id);
-        if (!blockName) continue;
-        const current = assignedByPorter.get(assignment.porter_account_id) ?? [];
-        current.push(blockName);
-        assignedByPorter.set(assignment.porter_account_id, current);
-      }
-      setBlocks(blocksResult.data ?? []);
+      setPortarias(activePortarias);
       setPorters(
         (portersResult.data ?? []).map((porter) => ({
           ...porter,
-          blocks: assignedByPorter.get(porter.id) ?? [],
+          homePortaria: portariaNames.get(porter.home_portaria_id) ?? "—",
+          currentPortaria: portariaNames.get(porter.current_portaria_id) ?? "—",
         })),
       );
 
@@ -326,14 +324,6 @@ export function CondominiumOperators({
     selectedCondominium?.number ?? "",
   );
   const username = usernameOverride ?? suggestedUsername;
-
-  function toggleBlock(blockId: string) {
-    setSelectedBlockIds((current) =>
-      current.includes(blockId)
-        ? current.filter((id) => id !== blockId)
-        : [...current, blockId],
-    );
-  }
 
   function requestConfirmation(
     title: string,
@@ -403,7 +393,7 @@ export function CondominiumOperators({
           condominiumId: selectedCondominiumId,
           name: name.trim(),
           username,
-          blockIds: selectedBlockIds,
+          portariaId: selectedPortariaId,
           accessExpiresAt,
         },
       });
@@ -428,7 +418,7 @@ export function CondominiumOperators({
       });
       setName("");
       setUsernameOverride(null);
-      setSelectedBlockIds([]);
+      setSelectedPortariaId("");
       setAccessDuration("never");
       setCustomAccessExpiry("");
       setSuccessMessage("Porteiro cadastrado. A senha temporária é exibida somente agora.");
@@ -446,8 +436,15 @@ export function CondominiumOperators({
 
   async function handlePorterAction(
     porter: Porter,
-    action: "reset-password" | "deactivate" | "activate" | "renew-access",
+    action:
+      | "reset-password"
+      | "deactivate"
+      | "activate"
+      | "renew-access"
+      | "set-portaria"
+      | "delete-access",
     accessExpiresAt?: string | null,
+    portariaChange?: { portariaId?: string; home?: boolean },
   ) {
     setPageError("");
     setSuccessMessage("");
@@ -458,6 +455,7 @@ export function CondominiumOperators({
           action,
           porterAccountId: porter.id,
           ...(accessExpiresAt !== undefined ? { accessExpiresAt } : {}),
+          ...(portariaChange ?? {}),
         },
       });
       if (error) {
@@ -482,10 +480,14 @@ export function CondominiumOperators({
       } else {
         setSuccessMessage(
           action === "deactivate"
-            ? `Acesso de ${porter.name} removido.`
-            : typeof data?.message === "string"
-              ? data.message
-              : "Prazo de acesso atualizado.",
+            ? `Acesso de ${porter.name} desativado (férias).`
+            : action === "delete-access"
+              ? "Acesso excluído. Nenhum registro do caderno foi apagado."
+              : typeof data?.message === "string"
+                ? data.message
+                : action === "set-portaria"
+                  ? "Portaria atual do porteiro alterada."
+                  : "Prazo de acesso atualizado.",
         );
       }
       setListVersion((version) => version + 1);
@@ -524,6 +526,27 @@ export function CondominiumOperators({
     setReactivateAction("activate");
     setReactivateDuration("never");
     setReactivateCustomExpiry("");
+  }
+
+  function handleChangePortaria(porter: Porter) {
+    setChangingPorterId(porter.id);
+    setTargetPortariaId(
+      portarias.find((portaria) => portaria.id !== porter.current_portaria_id)
+        ?.id ?? "",
+    );
+    setPageError("");
+  }
+
+  async function confirmDeleteAccess() {
+    if (!deleteAccessTarget) return;
+    if (deleteAccessText.trim().toUpperCase() !== DELETE_ACCESS_CONFIRMATION) {
+      setPageError(`Digite ${DELETE_ACCESS_CONFIRMATION} para confirmar.`);
+      return;
+    }
+    const porter = deleteAccessTarget;
+    setDeleteAccessTarget(null);
+    setDeleteAccessText("");
+    await handlePorterAction(porter, "delete-access");
   }
 
   async function handleCreateManager(event: FormEvent<HTMLFormElement>) {
@@ -877,42 +900,36 @@ export function CondominiumOperators({
                 </label>
               )}
 
-              {selectedCondominium?.block_count ? (
-                <fieldset className="form-field form-field-wide block-assignment">
-                  <legend>Blocos onde o porteiro trabalha</legend>
-                  {blocks.length ? (
-                    <div className="block-assignment-options">
-                      {blocks.map((block) => (
-                        <label key={block.id}>
-                          <input
-                            type="checkbox"
-                            checked={selectedBlockIds.includes(block.id)}
-                            onChange={() => toggleBlock(block.id)}
-                          />
-                          {block.name}
-                        </label>
-                      ))}
-                    </div>
-                  ) : (
-                    <span className="field-hint">
-                      Cadastre os blocos antes de criar um porteiro.
-                    </span>
-                  )}
-                </fieldset>
-              ) : (
-                <p className="field-hint form-field-wide">
-                  Este condomínio não tem blocos; o porteiro terá acesso a
-                  todas as unidades.
-                </p>
-              )}
+              <label className="form-field form-field-wide">
+                Portaria de origem
+                <select
+                  required
+                  value={selectedPortariaId}
+                  onChange={(event) => setSelectedPortariaId(event.target.value)}
+                  disabled={portarias.length === 0}
+                >
+                  <option value="">
+                    {portarias.length
+                      ? "Selecione a portaria"
+                      : "Cadastre uma portaria antes"}
+                  </option>
+                  {portarias.map((portaria) => (
+                    <option key={portaria.id} value={portaria.id}>
+                      {portaria.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">
+                  A permissão é da portaria: o porteiro registrará e verá
+                  somente o caderno da portaria de origem.
+                </span>
+              </label>
 
               <div className="form-actions">
                 <button
                   className="primary-button"
                   disabled={
-                    saving ||
-                    !selectedCondominiumId ||
-                    Boolean(selectedCondominium?.block_count && !selectedBlockIds.length)
+                    saving || !selectedCondominiumId || !selectedPortariaId
                   }
                 >
                   {saving ? "Criando conta..." : "Cadastrar porteiro"}
@@ -951,32 +968,58 @@ export function CondominiumOperators({
                             : "Ativo"}{" "}
                         · {porter.access_expires_at
                           ? `Acesso até ${formatAccessExpiry(porter.access_expires_at)}`
-                          : "Sem expiração"} ·{" "}
-                        {porter.blocks.length
-                          ? porter.blocks.join(", ")
-                          : "Todos os blocos"}
+                          : "Sem expiração"}
+                        <br />
+                        Origem: {porter.homePortaria} · Atual:{" "}
+                        {porter.currentPortaria}
                       </span>
                     </div>
                     <div className="table-actions">
                       {porter.active && (
                         <>
-                          {porter.access_expires_at &&
-                            new Date(porter.access_expires_at).getTime() <=
-                              currentTime && (
-                              <button
-                                className="text-button"
-                                disabled={workingId === porter.id}
-                                onClick={() => {
-                                  setReactivatingId(porter.id);
-                                  setReactivateAction("renew-access");
-                                  setReactivateDuration("never");
-                                  setReactivateCustomExpiry("");
-                                  setPageError("");
-                                }}
-                              >
-                                Renovar prazo
-                              </button>
-                            )}
+                          <button
+                            className="text-button"
+                            disabled={workingId === porter.id || !portarias.length}
+                            onClick={() => handleChangePortaria(porter)}
+                          >
+                            Trocar portaria
+                          </button>
+                          <button
+                            className="text-button"
+                            disabled={
+                              workingId === porter.id ||
+                              !porter.current_portaria_id ||
+                              porter.current_portaria_id ===
+                                porter.home_portaria_id
+                            }
+                            onClick={() =>
+                              requestConfirmation(
+                                "Voltar à portaria de origem?",
+                                `${porter.name} voltará a registrar e ver somente o caderno da portaria de origem (${porter.homePortaria}).`,
+                                "Voltar à origem",
+                                () =>
+                                  handlePorterAction(porter, "set-portaria", undefined, {
+                                    home: true,
+                                  }),
+                                "Alterando...",
+                              )
+                            }
+                          >
+                            Voltar à origem
+                          </button>
+                          <button
+                            className="text-button"
+                            disabled={workingId === porter.id}
+                            onClick={() => {
+                              setReactivatingId(porter.id);
+                              setReactivateAction("renew-access");
+                              setReactivateDuration("never");
+                              setReactivateCustomExpiry("");
+                              setPageError("");
+                            }}
+                          >
+                            Renovar prazo
+                          </button>
                           <button
                             className="text-button"
                             disabled={workingId === porter.id}
@@ -994,19 +1037,30 @@ export function CondominiumOperators({
                             Nova senha
                           </button>
                           <button
-                            className="text-button danger-text-button"
+                            className="text-button"
                             disabled={workingId === porter.id}
                             onClick={() =>
                               requestConfirmation(
-                                "Remover acesso do porteiro?",
-                                `Remover o acesso de ${porter.name}? Ele não poderá mais entrar no app Porteiro até ser reativado.`,
-                                "Remover acesso",
+                                "Desativar porteiro (férias)?",
+                                `${porter.name} ficará sem acesso temporariamente. Os registros feitos por ele permanecem no caderno e ele poderá ser reativado depois.`,
+                                "Desativar",
                                 () => handlePorterAction(porter, "deactivate"),
-                                "Removendo...",
+                                "Desativando...",
                               )
                             }
                           >
-                            Remover acesso
+                            Desativar (férias)
+                          </button>
+                          <button
+                            className="text-button danger-text-button"
+                            disabled={workingId === porter.id}
+                            onClick={() => {
+                              setDeleteAccessTarget(porter);
+                              setDeleteAccessText("");
+                              setPageError("");
+                            }}
+                          >
+                            Excluir acesso
                           </button>
                         </>
                       )}
@@ -1094,6 +1148,62 @@ export function CondominiumOperators({
                             className="text-button"
                             disabled={workingId === porter.id}
                             onClick={() => setReactivatingId("")}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {changingPorterId === porter.id && (
+                      <div className="reactivate-panel">
+                        <p>
+                          Trocar a portaria atual de <strong>{porter.name}</strong>.
+                          Ele passará a registrar e ver somente o caderno da
+                          portaria escolhida.
+                        </p>
+                        <label className="form-field">
+                          Nova portaria
+                          <select
+                            value={targetPortariaId}
+                            onChange={(event) =>
+                              setTargetPortariaId(event.target.value)
+                            }
+                          >
+                            <option value="">Selecione a portaria</option>
+                            {portarias.map((portaria) => (
+                              <option key={portaria.id} value={portaria.id}>
+                                {portaria.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="table-actions">
+                          <button
+                            className="primary-button"
+                            disabled={workingId === porter.id || !targetPortariaId}
+                            onClick={() => {
+                              const portariaId = targetPortariaId;
+                              setChangingPorterId("");
+                              requestConfirmation(
+                                "Trocar a portaria atual?",
+                                `${porter.name} passará a registrar e ver somente o caderno de ${portarias.find((portaria) => portaria.id === portariaId)?.name ?? "outra portaria"}.`,
+                                "Confirmar troca",
+                                () =>
+                                  handlePorterAction(
+                                    porter,
+                                    "set-portaria",
+                                    undefined,
+                                    { portariaId },
+                                  ),
+                                "Alterando...",
+                              );
+                            }}
+                          >
+                            Continuar
+                          </button>
+                          <button
+                            className="text-button"
+                            onClick={() => setChangingPorterId("")}
                           >
                             Cancelar
                           </button>
@@ -1246,6 +1356,72 @@ export function CondominiumOperators({
             )}
           </div>
         </>
+      )}
+
+      {deleteAccessTarget && (
+        <div
+          className="dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !workingId) {
+              setDeleteAccessTarget(null);
+              setDeleteAccessText("");
+            }
+          }}
+        >
+          <section
+            className="confirmation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-porter-access-title"
+          >
+            <h2 id="delete-porter-access-title">
+              Excluir acesso de {deleteAccessTarget.name}?
+            </h2>
+            <p>
+              Use esta opção para demissão. O login será bloqueado
+              definitivamente e a conta não aparecerá mais na lista de ativos.
+            </p>
+            <p>
+              <strong>
+                NENHUM dado registrado será apagado. Tudo o que ele recebeu
+                permanece no caderno pelo prazo de retenção configurado.
+              </strong>
+            </p>
+            <label className="form-field">
+              Digite <strong>{DELETE_ACCESS_CONFIRMATION}</strong> para confirmar
+              <input
+                autoComplete="off"
+                value={deleteAccessText}
+                onChange={(event) => setDeleteAccessText(event.target.value)}
+              />
+            </label>
+            <div className="form-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={Boolean(workingId)}
+                onClick={() => {
+                  setDeleteAccessTarget(null);
+                  setDeleteAccessText("");
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="danger-button"
+                type="button"
+                disabled={
+                  Boolean(workingId) ||
+                  deleteAccessText.trim().toUpperCase() !==
+                    DELETE_ACCESS_CONFIRMATION
+                }
+                onClick={() => void confirmDeleteAccess()}
+              >
+                {workingId ? "Excluindo acesso..." : "Excluir acesso"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {confirmation && (

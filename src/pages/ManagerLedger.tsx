@@ -13,6 +13,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { AccessExpiredNotice } from "../components/AccessExpiredNotice";
 import { ManagerDashboard, type PackageFilterPreset } from "../components/ManagerDashboard";
 import { PackageNotebook, type NotebookBuilding } from "../components/PackageNotebook";
+import type { PackageFilters } from "../lib/packageQueries";
 import { ManagerCondominiumPanel } from "../components/manager/ManagerCondominiumPanel";
 import { ManagerHistoryPanel } from "../components/manager/ManagerHistoryPanel";
 import { ManagerPortersPanel } from "../components/manager/ManagerPortersPanel";
@@ -30,7 +31,69 @@ type Condominium = {
   block_count: number;
   status: "active" | "inactive";
   access_expires_at: string | null;
+  operation_mode?: "single" | "central" | "per_block" | null;
 };
+
+type Portaria = {
+  id: string;
+  condominium_id: string;
+  name: string;
+  block_id: string | null;
+  active: boolean;
+};
+
+type BlockOption = { id: string; condominium_id: string; name: string };
+
+type Notebook = { id: string; name: string; blockId: string | null };
+
+type LedgerFilters = PackageFilters & { blockId?: string | null };
+
+function buildNotebooks(
+  condominiums: Condominium[],
+  portarias: Portaria[],
+  blocks: BlockOption[],
+): Notebook[] {
+  return condominiums.flatMap((condominium) => {
+    const prefix = condominiums.length > 1 ? `${condominium.name} · ` : "";
+    const rows = portarias.filter(
+      (portaria) =>
+        portaria.condominium_id === condominium.id && portaria.active,
+    );
+    if (rows.length) {
+      if (condominium.operation_mode === "central") {
+        return [
+          {
+            id: rows[0].id,
+            name: `${prefix}Portaria Central`,
+            blockId: null,
+          },
+        ];
+      }
+      return rows.map((portaria) => ({
+        id: portaria.id,
+        name: `${prefix}${portaria.name}`,
+        blockId: portaria.block_id,
+      }));
+    }
+    const condominiumBlocks = blocks.filter(
+      (block) => block.condominium_id === condominium.id,
+    );
+    if (condominium.operation_mode === "central" || !condominiumBlocks.length) {
+      return [
+        {
+          id: condominium.id,
+          name: `${prefix}Portaria Central`,
+          blockId: null,
+        },
+      ];
+    }
+    return condominiumBlocks.map((block) => ({
+      id: block.id,
+      name: `${prefix}${block.name}`,
+      blockId: block.id,
+    }));
+  });
+}
 
 function isCondominiumExpired(condominium: Condominium): boolean {
   if (condominium.status !== "active") return true;
@@ -69,6 +132,9 @@ export function ManagerLedger() {
   const [loading, setLoading] = useState(true);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [buildings, setBuildings] = useState<NotebookBuilding[]>([]);
+  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
+  const [blockOptions, setBlockOptions] = useState<BlockOption[]>([]);
+  const [notebookBlockId, setNotebookBlockId] = useState("");
   const [section, setSection] = useState<Section>("overview");
   const [notebookTab, setNotebookTab] = useState<NotebookTab>("records");
   const [notebookPreset, setNotebookPreset] = useState<PackageFilterPreset | null>(
@@ -111,7 +177,7 @@ export function ManagerLedger() {
       if (superAdmin) {
         const { data, error } = await supabase
           .from("condominiums")
-          .select("id, name, city, state, block_count, status, access_expires_at")
+          .select("*")
           .order("name");
         if (!active) return;
         if (error) setPageError(error.message);
@@ -136,13 +202,44 @@ export function ManagerLedger() {
         if (ids.length) {
           const { data, error } = await supabase
             .from("condominiums")
-            .select("id, name, city, state, block_count, status, access_expires_at")
+            .select("*")
             .in("id", ids)
             .order("name");
           if (!active) return;
           if (error) setPageError(error.message);
           else condominiums = data ?? [];
         }
+      }
+
+      const condominiumIds = condominiums.map((condominium) => condominium.id);
+      if (condominiumIds.length) {
+        const [blocksResult, portariasResult] = await Promise.all([
+          supabase
+            .from("blocks")
+            .select("id, condominium_id, name")
+            .in("condominium_id", condominiumIds)
+            .order("name"),
+          supabase
+            .from("portarias")
+            .select("id, name, block_id, active")
+            .in("condominium_id", condominiumIds)
+            .eq("active", true)
+            .order("name"),
+        ]);
+        if (!active) return;
+        const blocks = (blocksResult.data ?? []) as BlockOption[];
+        const portarias = (portariasResult.data ?? []) as Portaria[];
+        setBlockOptions(blocksResult.error ? [] : blocks);
+        setNotebooks(
+          buildNotebooks(
+            condominiums,
+            portariasResult.error ? [] : portarias,
+            blocks,
+          ),
+        );
+      } else {
+        setBlockOptions([]);
+        setNotebooks([]);
       }
 
       setExpiredByBuilding(
@@ -341,14 +438,50 @@ export function ManagerLedger() {
                 </button>
               </div>
               {notebookTab === "records" && (
-                <PackageNotebook
-                  key={notebookPreset?.label ?? "all-records"}
-                  buildings={buildings}
-                  initialFilters={notebookPreset?.filters}
-                  presetLabel={notebookPreset?.label ?? ""}
-                  onClearPreset={() => setNotebookPreset(null)}
-                  allowReceiptPrint
-                />
+                <>
+                  <div className="manager-context">
+                    <label>
+                      Bloco
+                      <select
+                        value={notebookBlockId}
+                        onChange={(event) =>
+                          setNotebookBlockId(event.target.value)
+                        }
+                      >
+                        <option value="">Todos os blocos</option>
+                        {blockOptions.map((block) => (
+                          <option key={block.id} value={block.id}>
+                            {block.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <span>
+                      Filtro estruturado aplicado ao caderno e aos relatórios.
+                    </span>
+                  </div>
+                  <PackageNotebook
+                    key={`${notebookPreset?.label ?? "all-records"}-${notebookBlockId || "all-blocks"}`}
+                    buildings={buildings}
+                    notebooks={notebooks}
+                    blockOptions={blockOptions.map((block) => ({
+                      id: block.id,
+                      name: block.name,
+                    }))}
+                    initialFilters={
+                      {
+                        ...notebookPreset?.filters,
+                        blockId: notebookBlockId || null,
+                      } as LedgerFilters
+                    }
+                    presetLabel={notebookPreset?.label ?? ""}
+                    onClearPreset={() => {
+                      setNotebookPreset(null);
+                      setNotebookBlockId("");
+                    }}
+                    allowReceiptPrint
+                  />
+                </>
               )}
               {notebookTab === "audit" && activeBuildingId && (
                 <ManagerHistoryPanel

@@ -12,6 +12,8 @@ type Condominium = {
   state: string;
   block_count: number;
   status: "active" | "inactive";
+  operation_mode?: "single" | "central" | "per_block" | null;
+  notebook_retention_months?: number | null;
   created_at: string;
 };
 
@@ -23,6 +25,13 @@ type FormState = {
   neighborhood: string;
   city: string;
   state: string;
+  retentionMonths: string;
+};
+
+const operationModeLabels: Record<string, string> = {
+  single: "Bloco único",
+  central: "Vários blocos com portaria central",
+  per_block: "Vários blocos com portaria por bloco",
 };
 
 function toForm(data: Condominium): FormState {
@@ -34,6 +43,10 @@ function toForm(data: Condominium): FormState {
     neighborhood: data.neighborhood ?? "",
     city: data.city,
     state: data.state,
+    retentionMonths:
+      data.notebook_retention_months == null
+        ? ""
+        : String(data.notebook_retention_months),
   };
 }
 
@@ -56,9 +69,7 @@ export function ManagerCondominiumPanel({
     void (async () => {
       const { data, error: queryError } = await supabase
         .from("condominiums")
-        .select(
-          "id, name, cep, street, number, neighborhood, city, state, block_count, status, created_at",
-        )
+        .select("*")
         .eq("id", condominiumId)
         .maybeSingle();
       if (!active) return;
@@ -151,11 +162,35 @@ export function ManagerCondominiumPanel({
       return;
     }
 
+    const retentionText = form.retentionMonths.trim();
+    let retentionMonths: number | null = null;
+    if (retentionText) {
+      const parsed = Number(retentionText);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        setError("Informe um número inteiro de meses ou deixe em branco.");
+        return;
+      }
+      retentionMonths = parsed;
+    }
+
+    const currentRetention = condominium.notebook_retention_months ?? null;
+    const retentionChanged = retentionMonths !== currentRetention;
+    if (
+      retentionChanged &&
+      !window.confirm(
+        retentionMonths === null
+          ? "O caderno passará a ser mantido indefinidamente. Deseja salvar?"
+          : `A retenção será de ${retentionMonths} meses. A limpeza do caderno é definitiva: registros e fotos mais antigos poderão ser apagados sem recuperação. Deseja continuar?`,
+      )
+    ) {
+      return;
+    }
+
     setSaving(true);
     setError("");
     setSuccess("");
     try {
-      const { error: rpcError } = await supabase.rpc("update_condominium", {
+      const args = {
         p_condominium_id: condominiumId,
         p_name: form.name.trim(),
         p_cep: form.cep.trim(),
@@ -164,8 +199,24 @@ export function ManagerCondominiumPanel({
         p_neighborhood: form.neighborhood.trim(),
         p_city: form.city.trim(),
         p_state: form.state.trim(),
-      });
+      };
+      const { error: rpcError } = await supabase.rpc(
+        "update_condominium",
+        args,
+      );
       if (rpcError) throw new Error(rpcError.message);
+
+      if (retentionChanged) {
+        const { error: retentionError } = await supabase.rpc(
+          "update_notebook_retention",
+          {
+            p_condominium_id: condominiumId,
+            p_retention_months: retentionMonths,
+          },
+        );
+        if (retentionError) throw new Error(retentionError.message);
+      }
+
       setSuccess("Dados do condomínio atualizados.");
       setCondominium((current) =>
         current
@@ -178,6 +229,7 @@ export function ManagerCondominiumPanel({
               neighborhood: form.neighborhood.trim(),
               city: form.city.trim(),
               state: form.state.trim().toUpperCase(),
+              notebook_retention_months: retentionMonths,
             }
           : current,
       );
@@ -293,9 +345,28 @@ export function ManagerCondominiumPanel({
                 />
               </label>
             </div>
+            <label>
+              Manter registros do caderno por (meses)
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Vazio = nunca apagar"
+                value={form.retentionMonths}
+                onChange={(event) =>
+                  setForm({ ...form, retentionMonths: event.target.value })
+                }
+              />
+            </label>
+            <p className="field-hint">
+              Deixe em branco para manter os registros para sempre. Os registros
+              mais antigos que o prazo podem ser removidos pela limpeza automática.
+            </p>
             <p className="field-hint">
               Blocos cadastrados: {condominium.block_count} · Situação:{" "}
-              {condominium.status === "active" ? "Ativo" : "Inativo"}
+              {condominium.status === "active" ? "Ativo" : "Inativo"} · Modelo:{" "}
+              {operationModeLabels[condominium.operation_mode ?? ""] ??
+                "Vários blocos com portaria por bloco"}
             </p>
             <div className="form-actions">
               <button type="submit" disabled={saving}>

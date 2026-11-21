@@ -17,6 +17,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { AccessExpiredNotice } from "../components/AccessExpiredNotice";
 import { Pagination } from "../components/Pagination";
 import { PackageNotebook } from "../components/PackageNotebook";
+import { BulkUnitField } from "../components/porter/BulkUnitField";
 import {
   RECORD_PAGE_SIZE,
   fetchPackageRecords,
@@ -24,7 +25,8 @@ import {
 } from "../lib/packageQueries";
 import {
   bulkReviewReasons,
-  isDuplicateBulkMessage,
+  duplicateTrackingIds,
+  normalizeTrackingCode,
 } from "../lib/bulkImportReview";
 import {
   barcodeOnlyLabelRead,
@@ -78,7 +80,12 @@ type PorterAccount = {
   name: string;
   username: string;
   access_expires_at: string | null;
+  home_portaria_id: string | null;
+  current_portaria_id: string | null;
+  access_revoked_at: string | null;
 };
+
+type OperationMode = "single" | "central" | "per_block";
 
 type Condominium = {
   id: string;
@@ -88,14 +95,47 @@ type Condominium = {
   street: string;
   status: "active" | "inactive";
   access_expires_at: string | null;
+  operation_mode: OperationMode | null;
   // Pode vir nulo do banco; a verificação de endereço normaliza antes de usar.
   address_number: string | null;
+};
+
+type Portaria = {
+  id: string;
+  condominium_id: string;
+  block_id: string | null;
+  name: string;
+  active: boolean;
 };
 
 function condominiumAccessExpired(condominium: Condominium): boolean {
   if (condominium.status !== "active") return true;
   if (!condominium.access_expires_at) return false;
   return new Date(condominium.access_expires_at).getTime() <= Date.now();
+}
+
+function portariaLabel(portaria: Portaria | null): string {
+  if (!portaria) return "portaria não identificada";
+  const name = portaria.name.trim();
+  return /^portaria\b/i.test(name) ? name : `Portaria ${name}`;
+}
+
+/** Identifica a portaria em serviço sem depender de objetos do banco. */
+function portariaSignature(
+  currentPortariaId: string | null,
+  homePortariaId: string | null,
+): string {
+  return `${currentPortariaId ?? ""}|${homePortariaId ?? ""}`;
+}
+
+/** Unidades sem bloco existem só no modo single/central (ou sem migration). */
+function allowsBlocklessUnits(
+  mode: OperationMode | null,
+  blockCount: number,
+): boolean {
+  if (mode === "single" || mode === "central") return true;
+  if (mode) return false;
+  return blockCount === 0;
 }
 
 type Block = {
@@ -256,21 +296,47 @@ const bulkStatusLabel: Record<BulkItemStatus, string> = {
   review: "Revisar",
 };
 
+type BulkDuplicateInfo = {
+  unitNumber: string;
+  blockName: string | null;
+  receivedAt: string;
+};
+
 type BulkItem = {
   id: string;
   name: string;
-  source: File;
+  /** Liberado depois do salvamento para não segurar as fotos na memória. */
+  source: File | null;
+  /** Miniatura local; revogada quando o item é salvo ou removido. */
+  previewUrl: string;
   status: BulkItemStatus;
   draft: PackageDraft | null;
   message: string;
-  /** Aceite explícito de endereço divergente. */
-  acknowledged: boolean;
+  /** Rastreio já registrado no condomínio (pré-checagem do banco). */
+  duplicate: BulkDuplicateInfo | null;
+  /** Outra foto da mesma fila tem o mesmo rastreio. */
+  duplicateInQueue: boolean;
   /** Aceite explícito de rastreio repetido (outro volume). */
   allowDuplicate: boolean;
   createdPackageId: string;
   /** Evita recriar um aviso para os mesmos pacotes neste lote visual. */
   notificationPrepared: boolean;
+  /** Apartamento gravado, exibido depois do salvamento. */
+  savedUnitLabel: string;
 };
+
+type BulkCreateResult = {
+  item_index: number;
+  package_id: string | null;
+  error_message: string | null;
+  duplicate_unit_number: string | null;
+  duplicate_block_name: string | null;
+  duplicate_received_at: string | null;
+};
+
+/** Duas leituras ao mesmo tempo economizam a espera sem estourar a memória. */
+const BULK_READ_CONCURRENCY = 2;
+const BULK_SAVE_LIMIT = 50;
 
 type BulkPackageNotification = {
   id: string | null;
@@ -752,7 +818,22 @@ export function PorterReception() {
   // que um resultado tardio não reapareça depois de voltar à tela inicial.
   const readRequestId = useRef(0);
   const [loading, setLoading] = useState(true);
+  const loadingRef = useRef(true);
   const [account, setAccount] = useState<PorterAccount | null>(null);
+  const [currentPortaria, setCurrentPortaria] = useState<Portaria | null>(null);
+  const [homePortaria, setHomePortaria] = useState<Portaria | null>(null);
+  // Mudanças de portaria remontam o caderno para limpar filtros e paginação.
+  const [portariaViewToken, setPortariaViewToken] = useState(0);
+  const portariaSignatureRef = useRef("");
+  const refreshPortariaInFlight = useRef(false);
+  const gatehouseContextRef = useRef<{
+    condominiumId: string;
+    includeBlockless: boolean;
+    accessBlocked: boolean;
+  }>({ condominiumId: "", includeBlockless: false, accessBlocked: false });
+  const reloadScopedDataRef = useRef<(portaria: Portaria | null) => Promise<void>>(
+    () => Promise.resolve(),
+  );
   const [condominium, setCondominium] = useState<Condominium | null>(null);
   const [condominiumAccessBlocked, setCondominiumAccessBlocked] =
     useState(false);
@@ -829,6 +910,8 @@ export function PorterReception() {
   // No fluxo de lote, avisar é a ação esperada. A caixa continua disponível
   // para o porteiro desmarcar quando for necessário apenas registrar.
   const [bulkNotifyOnReceive, setBulkNotifyOnReceive] = useState(true);
+  /** Aceite único do lote: cobre endereço divergente e leitura inconclusiva. */
+  const [bulkAddressAttested, setBulkAddressAttested] = useState(false);
   const [bulkNotificationMessage, setBulkNotificationMessage] = useState("");
   const [bulkManualNotifications, setBulkManualNotifications] = useState<
     BulkManualNotification[]
@@ -839,6 +922,9 @@ export function PorterReception() {
     null,
   );
   const bulkCancelled = useRef(false);
+  /** Fila como fonte de verdade durante as leituras simultâneas. */
+  const bulkItemsRef = useRef<BulkItem[]>([]);
+  const bulkPreviewUrls = useRef<Set<string>>(new Set());
   const accessBlockedRef = useRef(false);
   const unitDetailsRequest = useRef(0);
   const draftReady = useRef(false);
@@ -853,6 +939,29 @@ export function PorterReception() {
     const elapsed = Math.round(monotonicNow() - readLogStart.current);
     setReadLog((current) => [...current.slice(-40), `${elapsed} ms · ${message}`]);
   }
+
+  // Toda consulta e todo caderno do porteiro usam a portaria atual — inclusive
+  // quando ele está em plantão fora da portaria de origem.
+  const currentBlockId = currentPortaria?.block_id ?? null;
+  const includeBlocklessUnits = condominium
+    ? allowsBlocklessUnits(condominium.operation_mode, condominium.block_count)
+    : false;
+  const onPlantation = Boolean(
+    currentPortaria &&
+      account?.home_portaria_id &&
+      account.home_portaria_id !== currentPortaria.id,
+  );
+
+  // O listener de foco vive fora do ciclo de render; estes refs entregam sempre
+  // o contexto mais recente sem re-registrar eventos a cada mudança de estado.
+  useEffect(() => {
+    loadingRef.current = loading;
+    gatehouseContextRef.current = {
+      condominiumId: account?.condominium_id ?? "",
+      includeBlockless: includeBlocklessUnits,
+      accessBlocked: condominiumAccessBlocked || accessBlockedRef.current,
+    };
+  }, [loading, account?.condominium_id, includeBlocklessUnits, condominiumAccessBlocked]);
 
   const selectedUnit = useMemo(
     () => units.find((unit) => unit.id === unitId) ?? null,
@@ -908,6 +1017,47 @@ export function PorterReception() {
     }),
     [bulkItems],
   );
+  const bulkSaveableItems = useMemo(
+    () =>
+      bulkItems.filter((item) => {
+        if (item.status !== "review" || !item.draft) return false;
+        return (
+          bulkReviewReasons({
+            unitId: item.draft.unitId,
+            unitExists: units.some((unit) => unit.id === item.draft?.unitId),
+            deliveryPerson: item.draft.deliveryPerson,
+            addressStatus: item.draft.addressVerification.status,
+            addressAcknowledged: bulkAddressAttested,
+            duplicate: Boolean(item.duplicate || item.duplicateInQueue),
+            allowDuplicate: item.allowDuplicate,
+          }).length === 0
+        );
+      }),
+    [bulkItems, bulkAddressAttested, units],
+  );
+  const bulkAddressPendingCount = useMemo(
+    () =>
+      bulkItems.filter(
+        (item) =>
+          item.status === "review" &&
+          item.draft &&
+          item.draft.addressVerification.status !== "verified",
+      ).length,
+    [bulkItems],
+  );
+  const bulkDuplicatePendingCount = useMemo(
+    () =>
+      bulkItems.filter(
+        (item) =>
+          item.status === "review" &&
+          (item.duplicate || item.duplicateInQueue) &&
+          !item.allowDuplicate,
+      ).length,
+    [bulkItems],
+  );
+  const hasBulkDefaults = Boolean(
+    bulkDeliveryPerson.trim() || lastDeliveryPerson.trim() || bulkCompany.trim(),
+  );
   const batchCandidates = useMemo(() => {
     if (!collectionBaseId) return [];
     const base = pendingPackages.find((item) => item.id === collectionBaseId);
@@ -937,6 +1087,16 @@ export function PorterReception() {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  // As miniaturas da fila vivem até o item ser salvo ou removido. Ao sair da
+  // tela, devolvemos os blobs para o navegador.
+  useEffect(() => {
+    const urls = bulkPreviewUrls.current;
+    return () => {
+      for (const url of urls) URL.revokeObjectURL(url);
+      urls.clear();
+    };
+  }, []);
 
   // O Chrome só dispara este evento quando considera o app instalável. Usar o
   // prompt dele garante um app standalone, e não um atalho com barra de URL.
@@ -991,7 +1151,9 @@ export function PorterReception() {
 
       const { data: porterData, error: porterError } = await supabase
         .from("porter_accounts")
-        .select("id, condominium_id, name, username, access_expires_at")
+        .select(
+          "id, condominium_id, name, username, access_expires_at, home_portaria_id, current_portaria_id, access_revoked_at",
+        )
         .eq("auth_user_id", user.id)
         .eq("active", true)
         .maybeSingle();
@@ -1016,23 +1178,35 @@ export function PorterReception() {
         return;
       }
 
+      if (porterData.access_revoked_at) {
+        setPageError(
+          "O acesso deste porteiro foi revogado. Procure o síndico ou o Super Admin.",
+        );
+        setLoading(false);
+        return;
+      }
+
       setAccount(porterData);
-      const [condominiumResult, assignmentResult] = await Promise.all([
+      const portariaIds = [
+        porterData.current_portaria_id,
+        porterData.home_portaria_id,
+      ].filter((id): id is string => Boolean(id));
+      const [condominiumResult, portariasResult] = await Promise.all([
         supabase
           .from("condominiums")
           .select(
-            "id, name, block_count, cep, street, address_number, status, access_expires_at",
+            "id, name, block_count, cep, street, address_number, status, access_expires_at, operation_mode",
           )
           .eq("id", porterData.condominium_id)
           .maybeSingle(),
         supabase
-          .from("porter_blocks")
-          .select("block_id")
-          .eq("porter_account_id", porterData.id),
+          .from("portarias")
+          .select("id, condominium_id, block_id, name, active")
+          .in("id", portariaIds),
       ]);
 
       if (!active) return;
-      const setupError = condominiumResult.error ?? assignmentResult.error;
+      const setupError = condominiumResult.error ?? portariasResult.error;
       if (setupError) {
         setPageError(setupError.message);
         setLoading(false);
@@ -1043,6 +1217,20 @@ export function PorterReception() {
         setLoading(false);
         return;
       }
+
+      const portarias = (portariasResult.data ?? []) as Portaria[];
+      const activePortaria =
+        portarias.find((portaria) => portaria.id === porterData.current_portaria_id) ??
+        null;
+      const originPortaria =
+        portarias.find((portaria) => portaria.id === porterData.home_portaria_id) ??
+        null;
+      setCurrentPortaria(activePortaria);
+      setHomePortaria(originPortaria);
+      portariaSignatureRef.current = portariaSignature(
+        porterData.current_portaria_id,
+        porterData.home_portaria_id,
+      );
 
       // Com o acesso bloqueado a RLS não devolve blocos/unidades; mesmo assim o
       // porteiro precisa ver a tela inicial com o aviso de suporte.
@@ -1061,17 +1249,22 @@ export function PorterReception() {
         return;
       }
 
-      const assignedBlockIds = (assignmentResult.data ?? []).map(
-        (assignment) => assignment.block_id,
-      );
       if (
-        condominiumResult.data.block_count > 0 &&
-        assignedBlockIds.length === 0
+        !activePortaria ||
+        !activePortaria.active ||
+        activePortaria.condominium_id !== porterData.condominium_id
       ) {
-        setPageError("Nenhum bloco foi vinculado a esta conta. Avise o Super Admin.");
+        setPageError(
+          "Nenhuma portaria ativa está vinculada a esta conta. Procure o síndico ou o Super Admin.",
+        );
         setLoading(false);
         return;
       }
+      const portariaBlockId = activePortaria.block_id;
+      const includeBlockless = allowsBlocklessUnits(
+        condominiumResult.data.operation_mode,
+        condominiumResult.data.block_count,
+      );
 
       const [blocksResult, unitsResult] = await Promise.all([
         supabase
@@ -1094,27 +1287,32 @@ export function PorterReception() {
         setLoading(false);
         return;
       }
-      const allowedUnits =
-        condominiumResult.data.block_count > 0
-          ? (unitsResult.data ?? []).filter(
-              (unit) =>
-                unit.block_id === null ||
-                assignedBlockIds.includes(unit.block_id),
-            )
-          : unitsResult.data ?? [];
+      const allowedUnits = portariaBlockId
+        ? (unitsResult.data ?? []).filter(
+            (unit) =>
+              unit.block_id === portariaBlockId ||
+              (includeBlockless && unit.block_id === null),
+          )
+        : unitsResult.data ?? [];
       accessBlockedRef.current = false;
       setCondominium(condominiumResult.data);
       setBlocks(blocksResult.data ?? []);
       setUnits(allowedUnits);
 
+      // O filtro vai ao banco: a tela não é a única barreira entre blocos.
+      let pendingQuery = supabase
+        .from("packages")
+        .select(packageFields)
+        .eq("condominium_id", porterData.condominium_id)
+        .eq("status", "received");
+      if (portariaBlockId) {
+        pendingQuery = includeBlockless
+          ? pendingQuery.or(`block_id.eq.${portariaBlockId},block_id.is.null`)
+          : pendingQuery.eq("block_id", portariaBlockId);
+      }
       const [pendingPackagesResult, residentDirectoryResult] =
         await Promise.all([
-          supabase
-            .from("packages")
-            .select(packageFields)
-            .eq("condominium_id", porterData.condominium_id)
-            .eq("status", "received")
-            .order("received_at", { ascending: false }),
+          pendingQuery.order("received_at", { ascending: false }),
           supabase.from("unit_residents").select("unit_id, name, whatsapp"),
         ]);
 
@@ -1153,6 +1351,106 @@ export function PorterReception() {
 
     return () => {
       active = false;
+    };
+  }, [user]);
+
+  // Voltar à aba (ou ao app) precisa refletir uma troca de portaria feita pelo
+  // síndico sem exigir F5. A assinatura evita consultas e remontagens repetidas;
+  // loadingRef impede que esta recarga corra no meio da carga inicial.
+  useEffect(() => {
+    if (!user) return;
+    const userId = user.id;
+    let active = true;
+
+    async function refreshCurrentPortaria() {
+      if (!active || loadingRef.current || refreshPortariaInFlight.current) return;
+      refreshPortariaInFlight.current = true;
+      try {
+        const { data: porterData, error: porterError } = await supabase
+          .from("porter_accounts")
+          .select("id, current_portaria_id, home_portaria_id")
+          .eq("auth_user_id", userId)
+          .eq("active", true)
+          .maybeSingle();
+        if (!active || porterError || !porterData) return;
+
+        const signature = portariaSignature(
+          porterData.current_portaria_id,
+          porterData.home_portaria_id,
+        );
+        if (signature === portariaSignatureRef.current) return;
+
+        const portariaIds = [
+          porterData.current_portaria_id,
+          porterData.home_portaria_id,
+        ].filter((id): id is string => Boolean(id));
+        const { data: portarias, error: portariasError } = portariaIds.length
+          ? await supabase
+              .from("portarias")
+              .select("id, condominium_id, block_id, name, active")
+              .in("id", portariaIds)
+          : { data: [], error: null };
+        if (!active || portariasError) return;
+
+        const rows = (portarias ?? []) as Portaria[];
+        const nextCurrent =
+          rows.find((portaria) => portaria.id === porterData.current_portaria_id) ??
+          null;
+        const nextHome =
+          rows.find((portaria) => portaria.id === porterData.home_portaria_id) ??
+          null;
+
+        portariaSignatureRef.current = signature;
+        setAccount((current) =>
+          current
+            ? {
+                ...current,
+                current_portaria_id: porterData.current_portaria_id,
+                home_portaria_id: porterData.home_portaria_id,
+              }
+            : current,
+        );
+        setCurrentPortaria(nextCurrent);
+        setHomePortaria(nextHome);
+        setPortariaViewToken((token) => token + 1);
+
+        const ctx = gatehouseContextRef.current;
+        if (
+          !nextCurrent ||
+          !nextCurrent.active ||
+          (ctx.condominiumId && nextCurrent.condominium_id !== ctx.condominiumId)
+        ) {
+          setPageError(
+            "Nenhuma portaria ativa está vinculada a esta conta. Procure o síndico ou o Super Admin.",
+          );
+          setUnits([]);
+          setPendingPackages([]);
+          setAuthorizedResidents([]);
+          return;
+        }
+
+        if (!ctx.accessBlocked) {
+          setPageError("");
+          await reloadScopedDataRef.current(nextCurrent);
+        }
+      } finally {
+        refreshPortariaInFlight.current = false;
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") void refreshCurrentPortaria();
+    }
+    function handleFocus() {
+      void refreshCurrentPortaria();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
     };
   }, [user]);
 
@@ -1199,14 +1497,79 @@ export function PorterReception() {
     hasSignature,
   ]);
 
+  // Recarrega só o escopo da portaria em serviço. Usado quando o síndico troca
+  // o plantão enquanto a aba estava em segundo plano: unidades, pendências,
+  // moradores autorizados e filtro do caderno mudam sempre juntos.
+  async function reloadScopedData(portaria: Portaria | null) {
+    const ctx = gatehouseContextRef.current;
+    if (!ctx.condominiumId || ctx.accessBlocked) return;
+    const blockId = portaria?.block_id ?? null;
+
+    const unitsResult = await supabase
+      .from("units")
+      .select("id, unit_number, block_id")
+      .eq("condominium_id", ctx.condominiumId)
+      .eq("status", "active")
+      .order("unit_number");
+    if (unitsResult.error) {
+      setPageError(unitsResult.error.message);
+      return;
+    }
+    const allowedUnits = blockId
+      ? (unitsResult.data ?? []).filter(
+          (unit) =>
+            unit.block_id === blockId ||
+            (ctx.includeBlockless && unit.block_id === null),
+        )
+      : unitsResult.data ?? [];
+
+    let pendingQuery = supabase
+      .from("packages")
+      .select(packageFields)
+      .eq("condominium_id", ctx.condominiumId)
+      .eq("status", "received");
+    if (blockId) {
+      pendingQuery = ctx.includeBlockless
+        ? pendingQuery.or(`block_id.eq.${blockId},block_id.is.null`)
+        : pendingQuery.eq("block_id", blockId);
+    }
+    const [pendingResult, residentsResult] = await Promise.all([
+      pendingQuery.order("received_at", { ascending: false }),
+      supabase.from("unit_residents").select("unit_id, name, whatsapp"),
+    ]);
+    const loadError = pendingResult.error ?? residentsResult.error;
+    if (loadError) {
+      setPageError(loadError.message);
+      return;
+    }
+    const allowedUnitIds = new Set(allowedUnits.map((unit) => unit.id));
+    setUnits(allowedUnits);
+    setPendingPackages(pendingResult.data ?? []);
+    setAuthorizedResidents(
+      (residentsResult.data ?? []).filter((resident) =>
+        allowedUnitIds.has(resident.unit_id),
+      ),
+    );
+  }
+  useEffect(() => {
+    reloadScopedDataRef.current = reloadScopedData;
+  });
+
   async function reloadPackages() {
     if (!account) return;
-    const pendingPackagesResult = await supabase
+    let pendingQuery = supabase
       .from("packages")
       .select(packageFields)
       .eq("condominium_id", account.condominium_id)
-      .eq("status", "received")
-      .order("received_at", { ascending: false });
+      .eq("status", "received");
+    if (currentBlockId) {
+      pendingQuery = includeBlocklessUnits
+        ? pendingQuery.or(`block_id.eq.${currentBlockId},block_id.is.null`)
+        : pendingQuery.eq("block_id", currentBlockId);
+    }
+    const pendingPackagesResult = await pendingQuery.order("received_at", {
+      ascending: false,
+    });
     if (pendingPackagesResult.error) {
       setPageError(pendingPackagesResult.error.message);
       return;
@@ -1319,6 +1682,16 @@ export function PorterReception() {
     setIsLoadingUnitDetails(true);
 
     try {
+      let unitPendingQuery = supabase
+        .from("packages")
+        .select(packageFields)
+        .eq("unit_id", unit.id)
+        .eq("status", "received");
+      if (currentBlockId) {
+        unitPendingQuery = includeBlocklessUnits
+          ? unitPendingQuery.or(`block_id.eq.${currentBlockId},block_id.is.null`)
+          : unitPendingQuery.eq("block_id", currentBlockId);
+      }
       const [residentsResult, packagesResult, pendingResult] =
         await Promise.all([
           supabase
@@ -1329,14 +1702,10 @@ export function PorterReception() {
           fetchPackageRecords({
             condominiumId: account.condominium_id,
             unitId: unit.id,
+            filters: { blockId: currentBlockId },
             page: 1,
           }),
-          supabase
-            .from("packages")
-            .select(packageFields)
-            .eq("unit_id", unit.id)
-            .eq("status", "received")
-            .order("received_at", { ascending: false }),
+          unitPendingQuery.order("received_at", { ascending: false }),
         ]);
 
       if (requestId !== unitDetailsRequest.current) return;
@@ -1375,6 +1744,7 @@ export function PorterReception() {
         const result = await fetchPackageRecords({
           condominiumId: account.condominium_id,
           unitId: searchedUnitId,
+          filters: { blockId: currentBlockId },
           page: unitPage,
         });
         if (!active) return;
@@ -1392,7 +1762,7 @@ export function PorterReception() {
     return () => {
       active = false;
     };
-  }, [account, searchedUnitId, unitPage]);
+  }, [account, searchedUnitId, unitPage, currentBlockId]);
 
   async function loadRecordSignature(packageId: string) {
     if (Object.prototype.hasOwnProperty.call(signatureCache, packageId)) return;
@@ -1823,22 +2193,74 @@ export function PorterReception() {
     }
   }
 
-  function updateBulkItem(id: string, patch: Partial<BulkItem>) {
-    setBulkItems((current) =>
-      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+  function commitBulkItems(next: BulkItem[]) {
+    bulkItemsRef.current = next;
+    setBulkItems(next);
+  }
+
+  function patchBulkItem(id: string, patch: Partial<BulkItem>) {
+    commitBulkItems(
+      bulkItemsRef.current.map((item) =>
+        item.id === id ? { ...item, ...patch } : item,
+      ),
     );
   }
 
-  function reviewReasonsFor(item: BulkItem, draft: PackageDraft) {
+  function bulkItemReasons(item: BulkItem) {
+    const draft = item.draft;
+    if (!draft) return ["leitura da etiqueta"];
     return bulkReviewReasons({
       unitId: draft.unitId,
       unitExists: units.some((unit) => unit.id === draft.unitId),
       deliveryPerson: draft.deliveryPerson,
       addressStatus: draft.addressVerification.status,
-      acknowledged: item.acknowledged,
-      duplicateMessage: isDuplicateBulkMessage(item.message),
+      addressAcknowledged: bulkAddressAttested,
+      duplicate: Boolean(item.duplicate || item.duplicateInQueue),
       allowDuplicate: item.allowDuplicate,
     });
+  }
+
+  function recomputeQueueDuplicates() {
+    const reviewItems = bulkItemsRef.current.filter(
+      (item) => item.status === "review" && item.draft,
+    );
+    const duplicated = duplicateTrackingIds(
+      reviewItems.map((item) => ({
+        id: item.id,
+        trackingCode: item.draft?.trackingCode,
+      })),
+    );
+    commitBulkItems(
+      bulkItemsRef.current.map((item) => ({
+        ...item,
+        duplicateInQueue: duplicated.has(item.id),
+      })),
+    );
+  }
+
+  /** Enter no apartamento leva o foco para a próxima foto em revisão. */
+  function focusNextBulkUnit(currentId: string) {
+    const reviewItems = bulkItemsRef.current.filter(
+      (item) => item.status === "review" && item.draft,
+    );
+    const index = reviewItems.findIndex((item) => item.id === currentId);
+    const next = reviewItems[index + 1];
+    if (!next) return;
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLInputElement>(`[data-bulk-unit="${next.id}"]`)
+        ?.focus();
+    });
+  }
+
+  /** Solta a foto original e a miniatura depois que o item foi gravado. */
+  function releaseBulkItemFiles(id: string) {
+    const item = bulkItemsRef.current.find((candidate) => candidate.id === id);
+    if (item?.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl);
+      bulkPreviewUrls.current.delete(item.previewUrl);
+    }
+    patchBulkItem(id, { source: null, draft: null, previewUrl: "" });
   }
 
   function handleBulkFilesChange(event: ChangeEvent<HTMLInputElement>) {
@@ -1862,25 +2284,54 @@ export function PorterReception() {
       );
     }
 
-    const newItems: BulkItem[] = accepted.map((file) => ({
-      id: crypto.randomUUID(),
-      name: file.name,
-      source: file,
-      status: "queued",
-      draft: null,
-      message: "Na fila",
-      acknowledged: false,
-      allowDuplicate: false,
-      createdPackageId: "",
-      notificationPrepared: false,
-    }));
-    setBulkItems((current) => [...current, ...newItems]);
+    const newItems: BulkItem[] = accepted.map((file) => {
+      const previewUrl = URL.createObjectURL(file);
+      bulkPreviewUrls.current.add(previewUrl);
+      return {
+        id: crypto.randomUUID(),
+        name: file.name,
+        source: file,
+        previewUrl,
+        status: "queued",
+        draft: null,
+        message: "Na fila",
+        duplicate: null,
+        duplicateInQueue: false,
+        allowDuplicate: false,
+        createdPackageId: "",
+        notificationPrepared: false,
+        savedUnitLabel: "",
+      };
+    });
+    commitBulkItems([...bulkItemsRef.current, ...newItems]);
+    // Fotos novas não herdam o aceite dado para as anteriores.
+    setBulkAddressAttested(false);
     setBulkDeliveryPerson((current) => current || lastDeliveryPerson);
+  }
+
+  function removeBulkItem(id: string) {
+    if (bulkRunning) return;
+    const item = bulkItemsRef.current.find((candidate) => candidate.id === id);
+    if (item?.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl);
+      bulkPreviewUrls.current.delete(item.previewUrl);
+    }
+    commitBulkItems(
+      bulkItemsRef.current.filter((candidate) => candidate.id !== id),
+    );
+    recomputeQueueDuplicates();
   }
 
   function clearBulkQueue() {
     if (bulkRunning) return;
-    setBulkItems([]);
+    for (const item of bulkItemsRef.current) {
+      if (item.previewUrl) {
+        URL.revokeObjectURL(item.previewUrl);
+        bulkPreviewUrls.current.delete(item.previewUrl);
+      }
+    }
+    commitBulkItems([]);
+    setBulkAddressAttested(false);
     setBulkCompany("");
     setBulkDeliveryPerson(lastDeliveryPerson);
     setSuccessMessage("");
@@ -1889,8 +2340,8 @@ export function PorterReception() {
   }
 
   function updateBulkDraft(id: string, patch: Partial<PackageDraft>) {
-    setBulkItems((current) =>
-      current.map((item) =>
+    commitBulkItems(
+      bulkItemsRef.current.map((item) =>
         item.id === id && item.draft
           ? { ...item, draft: { ...item.draft, ...patch } }
           : item,
@@ -1898,102 +2349,73 @@ export function PorterReception() {
     );
   }
 
-  async function saveBulkItem(
-    item: BulkItem,
-    draft: PackageDraft,
-  ): Promise<string | null> {
-    if (!user || !account || !condominium) return null;
-
-    const reasons = reviewReasonsFor(item, draft);
-    if (reasons.length) {
-      // Rastreio repetido mostra os dados do volume anterior; não perdemos essa
-      // mensagem ao devolver o item para revisão.
-      const duplicatePending =
-        isDuplicateBulkMessage(item.message) && !item.allowDuplicate;
-      const otherReasons = reasons.filter(
-        (reason) => reason !== "rastreio repetido",
-      );
-      const message = duplicatePending
-        ? otherReasons.length
-          ? `${item.message} Falta também: ${otherReasons.join(", ")}.`
-          : item.message
-        : `Confira antes de salvar: ${reasons.join(", ")}.`;
-      updateBulkItem(item.id, {
-        status: "review",
-        draft,
-        message,
-      });
-      return null;
-    }
-
-    const unit = units.find((candidate) => candidate.id === draft.unitId);
-    if (!unit) return null; // reviewReasonsFor já exige uma unidade válida.
-
-    updateBulkItem(item.id, {
-      status: "processing",
-      message: "Salvando no caderno...",
-    });
-    try {
-      const result = await persistPackage(draft, {
-        userId: user.id,
-        condominiumId: account.condominium_id,
-        unit,
-        company: draft.company,
-        deliveryPerson: draft.deliveryPerson,
-        allowDuplicate: item.allowDuplicate,
-        isDamaged: false,
-        damageFile: null,
-      });
-      updateBulkItem(item.id, {
-        status: "done",
-        draft,
-        message: "Encomenda registrada.",
-        createdPackageId: result.id,
-        notificationPrepared: false,
-      });
-      rememberDeliveryPerson(draft.deliveryPerson.trim());
-      return result.id || null;
-    } catch (error) {
-      if (error instanceof DuplicatePackageError) {
-        updateBulkItem(item.id, {
-          status: "review",
-          draft,
-          allowDuplicate: false,
-          message: error.message,
-        });
-        return null;
-      }
-      updateBulkItem(item.id, {
-        status: "error",
-        draft,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Não foi possível salvar esta foto.",
-      });
-      return null;
-    }
+  function updateBulkTracking(id: string, trackingCode: string) {
+    updateBulkDraft(id, { trackingCode });
+    // O rastreio mudou: a pré-checagem anterior não vale mais.
+    patchBulkItem(id, { duplicate: null });
+    recomputeQueueDuplicates();
   }
 
-  async function processBulkItem(item: BulkItem): Promise<string | null> {
-    if (!account || !condominium) return null;
-    updateBulkItem(item.id, {
+  function applyBulkDefaultsToReview() {
+    if (bulkRunning) return;
+    const deliveryPerson = (
+      bulkDeliveryPerson.trim() || lastDeliveryPerson
+    ).trim();
+    const company = bulkCompany.trim();
+    if (!deliveryPerson && !company) return;
+    commitBulkItems(
+      bulkItemsRef.current.map((item) => {
+        if (item.status !== "review" || !item.draft) return item;
+        return {
+          ...item,
+          draft: {
+            ...item.draft,
+            deliveryPerson: deliveryPerson || item.draft.deliveryPerson,
+            company: company || item.draft.company,
+          },
+        };
+      }),
+    );
+  }
+
+  function acceptAllBulkDuplicates() {
+    if (bulkRunning) return;
+    commitBulkItems(
+      bulkItemsRef.current.map((item) =>
+        item.status === "review" && (item.duplicate || item.duplicateInQueue)
+          ? { ...item, allowDuplicate: true }
+          : item,
+      ),
+    );
+  }
+
+  async function readBulkItem(item: BulkItem) {
+    if (!account || !condominium) return;
+    const source = item.source;
+    if (!source) {
+      patchBulkItem(item.id, {
+        status: "error",
+        message: "A foto não está mais disponível. Remova e escolha de novo.",
+      });
+      return;
+    }
+    patchBulkItem(item.id, {
       status: "processing",
       message: "Lendo a etiqueta...",
     });
 
     let draft: PackageDraft;
     try {
-      draft = await readLabelFromPhoto(item.source, {
+      draft = await readLabelFromPhoto(source, {
         condominium,
         units,
         blocks,
         residents: authorizedResidents,
-        onProgress: (message) => updateBulkItem(item.id, { message }),
+        onProgress: (message) => patchBulkItem(item.id, { message }),
         onSample: collectLabelSampleInBackground,
       });
     } catch (error) {
-      updateBulkItem(item.id, {
+      patchBulkItem(item.id, {
         status: "error",
         draft: null,
         message:
@@ -2001,16 +2423,16 @@ export function PorterReception() {
             ? error.message
             : "Não foi possível ler esta foto.",
       });
-      return null;
+      return;
     }
 
     if (isDeviceResourceError(draft.labelRead?.error)) {
-      updateBulkItem(item.id, {
+      patchBulkItem(item.id, {
         status: "error",
         draft,
         message: DEVICE_RESOURCE_MESSAGE,
       });
-      return null;
+      return;
     }
 
     // Empresa e entregador podem ser definidos uma vez para a fila inteira.
@@ -2021,17 +2443,343 @@ export function PorterReception() {
       company: bulkCompany.trim() || draft.company.trim(),
       deliveryPerson: bulkDeliveryPerson.trim() || lastDeliveryPerson.trim(),
     };
-    const reasons = reviewReasonsFor(item, effective);
-    if (reasons.length) {
-      updateBulkItem(item.id, {
-        status: "review",
-        draft: effective,
-        message: `Confira antes de salvar: ${reasons.join(", ")}.`,
+    patchBulkItem(item.id, {
+      status: "review",
+      draft: effective,
+      message: "Etiqueta lida. Confira os dados.",
+    });
+  }
+
+  /**
+   * Lê a fila com duas leituras simultâneas. O porteiro pode revisar um item
+   * enquanto os próximos ainda estão sendo lidos.
+   */
+  async function readBulkQueue(queue: BulkItem[]) {
+    let cursor = 0;
+    const workers = Array.from(
+      { length: Math.min(BULK_READ_CONCURRENCY, queue.length) },
+      async () => {
+        while (!bulkCancelled.current) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= queue.length) return;
+          await readBulkItem(queue[index]);
+        }
+      },
+    );
+    await Promise.all(workers);
+  }
+
+  /**
+   * Uma chamada para todos os rastreios da fila: o aviso de "já recebido"
+   * aparece antes do primeiro salvamento, não depois.
+   */
+  async function precheckBulkDuplicates() {
+    if (!account) return;
+    const codes = Array.from(
+      new Set(
+        bulkItemsRef.current
+          .map((item) => normalizeTrackingCode(item.draft?.trackingCode))
+          .filter(Boolean),
+      ),
+    );
+    if (!codes.length) return;
+
+    try {
+      const { data, error } = await supabase.rpc("find_duplicate_packages", {
+        p_condominium_id: account.condominium_id,
+        p_tracking_codes: codes,
       });
-      return null;
+      // Migration ainda não aplicada: o lote confere no servidor ao salvar.
+      if (error) return;
+
+      const byCode = new Map<string, BulkDuplicateInfo>();
+      for (const row of (data ?? []) as Array<{
+        tracking_code: string | null;
+        unit_number: string | null;
+        block_name: string | null;
+        received_at: string | null;
+      }>) {
+        const code = normalizeTrackingCode(row.tracking_code);
+        if (!code) continue;
+        byCode.set(code, {
+          unitNumber: row.unit_number ?? "",
+          blockName: row.block_name,
+          receivedAt: row.received_at ?? "",
+        });
+      }
+
+      commitBulkItems(
+        bulkItemsRef.current.map((item) =>
+          item.status === "review"
+            ? {
+                ...item,
+                duplicate:
+                  byCode.get(normalizeTrackingCode(item.draft?.trackingCode)) ??
+                  null,
+              }
+            : item,
+        ),
+      );
+    } catch {
+      // Pré-checagem é conveniência; o servidor continua sendo a autoridade.
+    }
+  }
+
+  function bulkDuplicateMessage(info: BulkDuplicateInfo) {
+    const block = info.blockName ? `${info.blockName} · ` : "";
+    const received = info.receivedAt
+      ? `, recebida em ${formatDate(info.receivedAt)}`
+      : "";
+    return `Já existe uma encomenda com este rastreio: ${block}${info.unitNumber}${received}. Se for outro volume, marque a confirmação.`;
+  }
+
+  function isMissingBulkRpc(error: { code?: string; message?: string }) {
+    return (
+      error.code === "PGRST202" ||
+      /could not find the function|does not exist|schema cache/i.test(
+        error.message ?? "",
+      )
+    );
+  }
+
+  /**
+   * Grava o lote em uma única chamada. Cada foto volta como registrada,
+   * duplicada ou com erro; nenhuma falha derruba as demais.
+   */
+  async function saveBulkBatch(items: BulkItem[]): Promise<string[]> {
+    if (!account || !items.length) return [];
+    const savedIds: string[] = [];
+
+    for (let start = 0; start < items.length; start += BULK_SAVE_LIMIT) {
+      const chunk = items.slice(start, start + BULK_SAVE_LIMIT);
+      const ready = chunk.filter((item) => item.draft);
+      for (const item of chunk) {
+        if (!item.draft) {
+          patchBulkItem(item.id, {
+            status: "error",
+            message: "Os dados desta foto se perderam. Remova e escolha de novo.",
+          });
+        }
+      }
+      if (!ready.length) continue;
+
+      const payload = ready.map((item) => {
+        const draft = item.draft as PackageDraft;
+        return {
+          unit_id: draft.unitId,
+          sender: draft.company.trim(),
+          delivery_person: draft.deliveryPerson.trim(),
+          tracking_code: draft.trackingCode.trim(),
+          resident_name: draft.recipientName.trim(),
+          recipient_is_resident: draft.recipientIsResident,
+          allow_duplicate: item.allowDuplicate,
+          address_acknowledged:
+            draft.addressVerification.status !== "verified" &&
+            bulkAddressAttested,
+          address_status: draft.addressVerification.status,
+        };
+      });
+
+      for (const item of ready) {
+        patchBulkItem(item.id, {
+          status: "processing",
+          message: "Salvando no caderno...",
+        });
+      }
+
+      const { data, error } = await supabase.rpc("create_packages_batch", {
+        p_condominium_id: account.condominium_id,
+        p_items: payload,
+      });
+
+      if (error) {
+        if (isMissingBulkRpc(error)) {
+          await saveBulkBatchFallback(ready, savedIds);
+          continue;
+        }
+        for (const item of ready) {
+          patchBulkItem(item.id, { status: "error", message: error.message });
+        }
+        continue;
+      }
+
+      const results = (data ?? []) as BulkCreateResult[];
+      const byIndex = new Map(results.map((row) => [row.item_index, row]));
+
+      ready.forEach((item, index) => {
+        const result = byIndex.get(index);
+        if (!result) {
+          patchBulkItem(item.id, {
+            status: "error",
+            message: "O servidor não devolveu o resultado desta foto.",
+          });
+          return;
+        }
+
+        if (result.package_id) {
+          savedIds.push(result.package_id);
+          const unit = units.find(
+            (candidate) => candidate.id === item.draft?.unitId,
+          );
+          const blockName = unit
+            ? blocks.find((block) => block.id === unit.block_id)?.name
+            : "";
+          const unitLabel = unit
+            ? `${blockName ? `${blockName} · ` : ""}${unit.unit_number}`
+            : "apartamento";
+          patchBulkItem(item.id, {
+            status: "done",
+            message: `Encomenda registrada para ${unitLabel}.`,
+            createdPackageId: result.package_id,
+            notificationPrepared: false,
+            savedUnitLabel: unitLabel,
+            duplicate: null,
+            duplicateInQueue: false,
+          });
+          rememberDeliveryPerson(item.draft?.deliveryPerson.trim() ?? "");
+          releaseBulkItemFiles(item.id);
+          return;
+        }
+
+        if (result.duplicate_unit_number) {
+          const info: BulkDuplicateInfo = {
+            unitNumber: result.duplicate_unit_number,
+            blockName: result.duplicate_block_name,
+            receivedAt: result.duplicate_received_at ?? "",
+          };
+          patchBulkItem(item.id, {
+            status: "review",
+            allowDuplicate: false,
+            duplicate: info,
+            message: bulkDuplicateMessage(info),
+          });
+          return;
+        }
+
+        patchBulkItem(item.id, {
+          status: "error",
+          message:
+            result.error_message ?? "Não foi possível salvar esta foto.",
+        });
+      });
     }
 
-    return saveBulkItem(item, effective);
+    return savedIds;
+  }
+
+  /**
+   * Caminho antigo, usado só enquanto a migration do lote não estiver
+   * aplicada no projeto. Mantém o app funcionando durante a publicação.
+   */
+  async function saveBulkBatchFallback(
+    items: BulkItem[],
+    savedIds: string[],
+  ) {
+    if (!user || !account) return;
+    for (const item of items) {
+      const draft = item.draft;
+      const unit = draft
+        ? units.find((candidate) => candidate.id === draft.unitId)
+        : undefined;
+      if (!draft || !unit) {
+        patchBulkItem(item.id, {
+          status: "error",
+          message: "Selecione o apartamento desta encomenda.",
+        });
+        continue;
+      }
+      try {
+        const result = await persistPackage(draft, {
+          userId: user.id,
+          condominiumId: account.condominium_id,
+          unit,
+          company: draft.company,
+          deliveryPerson: draft.deliveryPerson,
+          allowDuplicate: item.allowDuplicate,
+          isDamaged: false,
+          damageFile: null,
+        });
+        savedIds.push(result.id);
+        patchBulkItem(item.id, {
+          status: "done",
+          message: `Encomenda registrada para o apartamento ${unit.unit_number}.`,
+          createdPackageId: result.id,
+          notificationPrepared: false,
+          savedUnitLabel: unit.unit_number,
+          duplicate: null,
+          duplicateInQueue: false,
+        });
+        rememberDeliveryPerson(draft.deliveryPerson.trim());
+        releaseBulkItemFiles(item.id);
+      } catch (error) {
+        if (error instanceof DuplicatePackageError) {
+          patchBulkItem(item.id, {
+            status: "review",
+            allowDuplicate: false,
+            duplicate: { unitNumber: "", blockName: null, receivedAt: "" },
+            message: error.message,
+          });
+        } else {
+          patchBulkItem(item.id, {
+            status: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Não foi possível salvar esta foto.",
+          });
+        }
+      }
+    }
+  }
+
+  async function saveReviewedItems() {
+    if (bulkRunning) return;
+    const saveable = bulkItemsRef.current.filter(
+      (item) =>
+        item.status === "review" &&
+        item.draft &&
+        bulkItemReasons(item).length === 0,
+    );
+    if (!saveable.length) return;
+
+    setPageError("");
+    setSuccessMessage("");
+    setBulkRunning(true);
+    try {
+      const savedIds = await saveBulkBatch(saveable);
+      if (savedIds.length && bulkNotifyOnReceive) {
+        await notifyBulkPackages(savedIds);
+      }
+      const remaining = bulkItemsRef.current.filter(
+        (item) => item.status === "review",
+      ).length;
+      setSuccessMessage(
+        savedIds.length
+          ? `${savedIds.length} encomenda(s) registrada(s).${
+              remaining ? ` ${remaining} ainda precisa(m) de revisão.` : ""
+            }`
+          : "Nenhuma encomenda foi salva. Confira os dados.",
+      );
+    } finally {
+      setBulkRunning(false);
+    }
+    await reloadPackages();
+  }
+
+  async function saveSingleBulkItem(item: BulkItem) {
+    if (bulkRunning) return;
+    setPageError("");
+    setBulkRunning(true);
+    try {
+      const savedIds = await saveBulkBatch([item]);
+      if (savedIds.length && bulkNotifyOnReceive) {
+        await notifyBulkPackages(savedIds);
+      }
+    } finally {
+      setBulkRunning(false);
+    }
+    await reloadPackages();
   }
 
   async function notifyBulkPackages(packageIds: string[]) {
@@ -2052,8 +2800,8 @@ export function PorterReception() {
       const preparedPackageIds = new Set(
         notifications.flatMap((notification) => notification.package_ids ?? []),
       );
-      setBulkItems((current) =>
-        current.map((item) =>
+      commitBulkItems(
+        bulkItemsRef.current.map((item) =>
           preparedPackageIds.has(item.createdPackageId)
             ? { ...item, notificationPrepared: true }
             : item,
@@ -2134,35 +2882,58 @@ export function PorterReception() {
 
   async function startBulkImport() {
     if (!account || !condominium || bulkRunning) return;
-    const queue = bulkItems.filter((item) => item.status === "queued");
+    const queue = bulkItemsRef.current.filter(
+      (item) => item.status === "queued",
+    );
     if (!queue.length) return;
 
     setPageError("");
     setSuccessMessage("");
     bulkCancelled.current = false;
     setBulkRunning(true);
-    const shouldNotify = bulkNotifyOnReceive;
-    const savedPackageIds: string[] = [];
     try {
-      for (const item of queue) {
-        if (bulkCancelled.current) break;
-        const packageId = await processBulkItem(item);
-        if (packageId) savedPackageIds.push(packageId);
+      await readBulkQueue(queue);
+
+      if (bulkCancelled.current) {
+        setSuccessMessage(
+          "Leitura interrompida. Confira as fotos já lidas na fila.",
+        );
+      } else {
+        await precheckBulkDuplicates();
+        recomputeQueueDuplicates();
+
+        const saveable = bulkItemsRef.current.filter(
+          (item) =>
+            item.status === "review" &&
+            item.draft &&
+            bulkItemReasons(item).length === 0,
+        );
+        const savedPackageIds = await saveBulkBatch(saveable);
+        if (savedPackageIds.length && bulkNotifyOnReceive) {
+          await notifyBulkPackages(savedPackageIds);
+        }
+
+        const remaining = bulkItemsRef.current.filter(
+          (item) => item.status === "review",
+        ).length;
+        if (remaining) {
+          setSuccessMessage(
+            `${
+              savedPackageIds.length
+                ? `${savedPackageIds.length} encomenda(s) registrada(s). `
+                : ""
+            }${remaining} foto(s) ainda precisa(m) de revisão.`,
+          );
+        } else {
+          setSuccessMessage(
+            savedPackageIds.length
+              ? `${savedPackageIds.length} encomenda(s) registrada(s).`
+              : "Nenhuma encomenda foi registrada. Confira os dados.",
+          );
+        }
       }
     } finally {
       setBulkRunning(false);
-    }
-    if (bulkCancelled.current) {
-      setSuccessMessage(
-        "Importação interrompida. As fotos já processadas foram salvas.",
-      );
-    } else {
-      setSuccessMessage(
-        `${queue.length} foto(s) processada(s). Confira o resultado na fila.`,
-      );
-      if (shouldNotify && savedPackageIds.length) {
-        await notifyBulkPackages(savedPackageIds);
-      }
     }
     await reloadPackages();
   }
@@ -2172,10 +2943,17 @@ export function PorterReception() {
     bulkCancelled.current = false;
     setBulkRunning(true);
     try {
-      // Falha de gravação já tem a etiqueta lida; só falha de leitura precisa
-      // abrir a foto original de novo.
-      if (item.draft) await saveBulkItem(item, item.draft);
-      else await processBulkItem(item);
+      if (item.draft) {
+        // A leitura está boa; o erro foi na gravação. Volta para a revisão.
+        patchBulkItem(item.id, {
+          status: "review",
+          message: "Confira os dados e salve novamente.",
+        });
+      } else {
+        await readBulkItem(item);
+        await precheckBulkDuplicates();
+        recomputeQueueDuplicates();
+      }
     } finally {
       setBulkRunning(false);
     }
@@ -2541,6 +3319,32 @@ export function PorterReception() {
         <div>
           <span>{condominium.name}</span>
           <h1>Olá, {account.name}</h1>
+          {currentPortaria && (
+            <p
+              className="porter-portaria-label"
+              style={{ margin: "6px 0 0", color: "#d3def3", fontSize: 13 }}
+            >
+              Você está na {portariaLabel(currentPortaria)}
+            </p>
+          )}
+          {onPlantation && currentPortaria && (
+            <span
+              className="porter-shift-badge"
+              style={{
+                display: "inline-block",
+                marginTop: 6,
+                padding: "4px 8px",
+                borderRadius: 8,
+                background: "rgba(255, 255, 255, 0.16)",
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Plantão — origem:{" "}
+              {homePortaria ? portariaLabel(homePortaria) : "não identificada"}
+            </span>
+          )}
         </div>
         <div className="porter-header-actions">
           {installPrompt && (
@@ -2636,7 +3440,7 @@ export function PorterReception() {
                     <p className="porter-error">
                       {condominiumAccessBlocked
                         ? "Acesso suspenso. Fale com o suporte técnico."
-                        : "Não há apartamentos ativos vinculados ao seu bloco."}
+                        : "Não há apartamentos ativos nesta portaria."}
                     </p>
                   )}
                 </>
@@ -2759,7 +3563,7 @@ export function PorterReception() {
                               ))}
                             </optgroup>
                           )}
-                          <optgroup label="Todos os apartamentos do seu bloco">
+                          <optgroup label="Apartamentos desta portaria">
                             {units.map((unit) => (
                               <option key={unit.id} value={unit.id}>
                                 {blocks.find((block) => block.id === unit.block_id)?.name
@@ -2776,8 +3580,8 @@ export function PorterReception() {
                             {lastLabelRead?.numericText
                               ? ` (CEP ${lastLabelRead.numericText})`
                               : ""}
-                            , mas esse número não está no cadastro dos blocos
-                            deste porteiro. Confira a etiqueta e selecione o
+                            , mas esse número não está no cadastro desta
+                            portaria. Confira a etiqueta e selecione o
                             apartamento manualmente.
                           </p>
                         )}
@@ -3011,8 +3815,8 @@ export function PorterReception() {
                     <div>
                       <h2>Importar várias fotos</h2>
                       <p>
-                        Selecione várias etiquetas da galeria. O sistema processa
-                        uma por vez e mostra o resultado de cada foto.
+                        Selecione várias etiquetas da galeria. O sistema lê as
+                        etiquetas e você confere tudo antes de salvar.
                       </p>
                     </div>
                     <ClipboardList size={24} aria-hidden="true" />
@@ -3079,146 +3883,276 @@ export function PorterReception() {
                         <span>{bulkCounts.error} com erro</span>
                         <span>{bulkCounts.pending} na fila</span>
                       </div>
+                      {bulkAddressPendingCount > 0 && (
+                        <label
+                          className={`porter-bulk-attest${
+                            bulkAddressAttested
+                              ? " porter-bulk-attest-on"
+                              : ""
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={bulkAddressAttested}
+                            disabled={bulkRunning}
+                            onChange={(event) =>
+                              setBulkAddressAttested(event.target.checked)
+                            }
+                          />
+                          <span>
+                            <strong>
+                              {bulkAddressPendingCount === 1
+                                ? "Confiro que conferi a etiqueta marcada e que ela pertence a este condomínio."
+                                : `Confiro que conferi as ${bulkAddressPendingCount} etiquetas marcadas e que elas pertencem a este condomínio.`}
+                            </strong>
+                            <small>
+                              Cobre endereço divergente ou não confirmado. O
+                              aceite fica registrado.
+                            </small>
+                          </span>
+                        </label>
+                      )}
                       <ul className="porter-bulk-list">
-                        {bulkItems.map((item) => (
-                          <li
-                            key={item.id}
-                            className={`porter-bulk-item porter-bulk-item-${item.status}`}
-                          >
-                            <div className="porter-bulk-item-head">
-                              <strong>{item.name}</strong>
-                              <span>{bulkStatusLabel[item.status]}</span>
-                            </div>
-                            <p>{item.message}</p>
-                            {item.status === "error" && (
-                              <button
-                                className="porter-secondary-button"
-                                type="button"
-                                disabled={bulkRunning}
-                                onClick={() => void retryBulkItem(item)}
-                              >
-                                Tentar novamente
-                              </button>
-                            )}
-                            {item.status === "review" && item.draft && (
-                              <div className="porter-bulk-review">
-                                <label>
-                                  Apartamento
-                                  <select
-                                    value={item.draft.unitId}
-                                    disabled={bulkRunning}
-                                    onChange={(event) =>
-                                      updateBulkDraft(item.id, {
-                                        unitId: event.target.value,
-                                      })
-                                    }
+                        {bulkItems.map((item) => {
+                          const reasons = bulkItemReasons(item);
+                          return (
+                            <li
+                              key={item.id}
+                              className={`porter-bulk-item porter-bulk-item-${item.status}`}
+                            >
+                              <div className="porter-bulk-item-main">
+                                {item.previewUrl ? (
+                                  <img
+                                    className="porter-bulk-thumb"
+                                    src={item.previewUrl}
+                                    alt=""
+                                  />
+                                ) : (
+                                  <span
+                                    className="porter-bulk-thumb porter-bulk-thumb-empty"
+                                    aria-hidden="true"
                                   >
-                                    <option value="">Selecione</option>
-                                    {units.map((unit) => (
-                                      <option key={unit.id} value={unit.id}>
-                                        {blocks.find(
-                                          (block) => block.id === unit.block_id,
-                                        )?.name
-                                          ? `${blocks.find((block) => block.id === unit.block_id)?.name} · `
-                                          : ""}
-                                        {unit.unit_number}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label>
-                                  Empresa (opcional)
-                                  <input
-                                    autoComplete="off"
-                                    maxLength={120}
-                                    value={item.draft.company}
+                                    <PackageCheck size={20} />
+                                  </span>
+                                )}
+                                <div className="porter-bulk-item-body">
+                                  <div className="porter-bulk-item-head">
+                                    <strong>
+                                      {item.savedUnitLabel
+                                        ? `Apartamento ${item.savedUnitLabel}`
+                                        : item.name}
+                                    </strong>
+                                    <span>{bulkStatusLabel[item.status]}</span>
+                                  </div>
+                                  <p>{item.message}</p>
+                                  {item.status === "review" && item.draft && (
+                                    <p className="porter-bulk-read">
+                                      {[
+                                        item.draft.recipientName ||
+                                          "sem nome lido",
+                                        item.draft.trackingCode ||
+                                          "sem rastreio",
+                                        item.draft.addressVerification
+                                          .status === "verified"
+                                          ? "endereço confirmado"
+                                          : item.draft.addressVerification
+                                                .status === "mismatch"
+                                            ? "endereço divergente"
+                                            : "endereço não confirmado",
+                                      ].join(" · ")}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              {item.status !== "done" && (
+                                <button
+                                  className="text-button porter-bulk-remove"
+                                  type="button"
+                                  disabled={bulkRunning}
+                                  onClick={() => removeBulkItem(item.id)}
+                                >
+                                  Remover
+                                </button>
+                              )}
+                              {item.status === "error" && (
+                                <button
+                                  className="porter-secondary-button"
+                                  type="button"
+                                  disabled={bulkRunning}
+                                  onClick={() => void retryBulkItem(item)}
+                                >
+                                  Tentar novamente
+                                </button>
+                              )}
+                              {item.status === "review" && item.draft && (
+                                <div className="porter-bulk-review">
+                                  <BulkUnitField
+                                    units={units}
+                                    blocks={blocks}
+                                    value={item.draft.unitId}
+                                    readUnitNumber={item.draft.readUnitNumber}
+                                    candidates={item.draft.unitCandidates}
+                                    itemId={item.id}
                                     disabled={bulkRunning}
-                                    onChange={(event) =>
-                                      updateBulkDraft(item.id, {
-                                        company: event.target.value,
-                                      })
+                                    onChange={(unitId) =>
+                                      updateBulkDraft(item.id, { unitId })
+                                    }
+                                    onCommit={() =>
+                                      focusNextBulkUnit(item.id)
                                     }
                                   />
-                                </label>
-                                <label>
-                                  Entregador
-                                  <input
-                                    autoComplete="off"
-                                    maxLength={120}
-                                    placeholder="Nome de quem entregou"
-                                    value={item.draft.deliveryPerson}
-                                    disabled={bulkRunning}
-                                    onChange={(event) =>
-                                      updateBulkDraft(item.id, {
-                                        deliveryPerson: event.target.value,
-                                      })
-                                    }
-                                  />
-                                  {lastDeliveryPerson &&
-                                    item.draft.deliveryPerson !==
-                                      lastDeliveryPerson && (
-                                      <button
-                                        className="text-button"
-                                        type="button"
+                                  <label>
+                                    Morador / destinatário (opcional)
+                                    <input
+                                      autoComplete="off"
+                                      maxLength={120}
+                                      placeholder="Nome na etiqueta"
+                                      value={item.draft.recipientName}
+                                      disabled={bulkRunning}
+                                      onChange={(event) =>
+                                        updateBulkDraft(item.id, {
+                                          recipientName: event.target.value,
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Rastreio (opcional)
+                                    <input
+                                      autoComplete="off"
+                                      maxLength={120}
+                                      placeholder="Código da etiqueta"
+                                      value={item.draft.trackingCode}
+                                      disabled={bulkRunning}
+                                      onChange={(event) =>
+                                        updateBulkTracking(
+                                          item.id,
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Empresa (opcional)
+                                    <input
+                                      autoComplete="off"
+                                      maxLength={120}
+                                      value={item.draft.company}
+                                      disabled={bulkRunning}
+                                      onChange={(event) =>
+                                        updateBulkDraft(item.id, {
+                                          company: event.target.value,
+                                        })
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Entregador
+                                    <input
+                                      autoComplete="off"
+                                      maxLength={120}
+                                      placeholder="Nome de quem entregou"
+                                      value={item.draft.deliveryPerson}
+                                      disabled={bulkRunning}
+                                      onChange={(event) =>
+                                        updateBulkDraft(item.id, {
+                                          deliveryPerson: event.target.value,
+                                        })
+                                      }
+                                    />
+                                    {lastDeliveryPerson &&
+                                      item.draft.deliveryPerson !==
+                                        lastDeliveryPerson && (
+                                        <button
+                                          className="text-button"
+                                          type="button"
+                                          disabled={bulkRunning}
+                                          onClick={() =>
+                                            updateBulkDraft(item.id, {
+                                              deliveryPerson:
+                                                lastDeliveryPerson,
+                                            })
+                                          }
+                                        >
+                                          Usar último entregador (
+                                          {lastDeliveryPerson})
+                                        </button>
+                                      )}
+                                  </label>
+                                  <div
+                                    className={`porter-bulk-address porter-bulk-address-${item.draft.addressVerification.status}`}
+                                  >
+                                    <strong>
+                                      {item.draft.addressVerification.status ===
+                                      "verified"
+                                        ? "Endereço confirmado"
+                                        : item.draft.addressVerification
+                                              .status === "mismatch"
+                                          ? "Endereço divergente"
+                                          : "Endereço não confirmado"}
+                                    </strong>
+                                    <span>
+                                      {
+                                        item.draft.addressVerification
+                                          .message
+                                      }
+                                    </span>
+                                  </div>
+                                  {item.duplicate && (
+                                    <p className="porter-bulk-duplicate">
+                                      {item.duplicate.unitNumber
+                                        ? bulkDuplicateMessage(item.duplicate)
+                                        : item.message}
+                                    </p>
+                                  )}
+                                  {item.duplicateInQueue && (
+                                    <p className="porter-bulk-duplicate">
+                                      Outra foto desta fila tem o mesmo
+                                      rastreio.
+                                    </p>
+                                  )}
+                                  {(item.duplicate ||
+                                    item.duplicateInQueue) && (
+                                    <label className="porter-mismatch-check">
+                                      <input
+                                        type="checkbox"
+                                        checked={item.allowDuplicate}
                                         disabled={bulkRunning}
-                                        onClick={() =>
-                                          updateBulkDraft(item.id, {
-                                            deliveryPerson: lastDeliveryPerson,
+                                        onChange={(event) =>
+                                          patchBulkItem(item.id, {
+                                            allowDuplicate:
+                                              event.target.checked,
                                           })
                                         }
-                                      >
-                                        Usar último entregador ({lastDeliveryPerson})
-                                      </button>
-                                    )}
-                                </label>
-                                {item.draft.addressVerification.status ===
-                                  "mismatch" && (
-                                  <label className="porter-mismatch-check">
-                                    <input
-                                      type="checkbox"
-                                      checked={item.acknowledged}
-                                      onChange={(event) =>
-                                        updateBulkItem(item.id, {
-                                          acknowledged: event.target.checked,
-                                        })
+                                      />
+                                      Confirmo que é outro volume com o mesmo
+                                      rastreio.
+                                    </label>
+                                  )}
+                                  <div className="porter-bulk-item-actions">
+                                    <button
+                                      className="porter-primary-button"
+                                      type="button"
+                                      disabled={
+                                        bulkRunning || reasons.length > 0
                                       }
-                                    />
-                                    Confiro que conferi a etiqueta fisicamente e
-                                    a entrega pertence a este condomínio.
-                                  </label>
-                                )}
-                                {isDuplicateBulkMessage(item.message) && (
-                                  <label className="porter-mismatch-check">
-                                    <input
-                                      type="checkbox"
-                                      checked={item.allowDuplicate}
-                                      onChange={(event) =>
-                                        updateBulkItem(item.id, {
-                                          allowDuplicate: event.target.checked,
-                                        })
+                                      onClick={() =>
+                                        void saveSingleBulkItem(item)
                                       }
-                                    />
-                                    Confirmo que é outro volume com o mesmo
-                                    rastreio.
-                                  </label>
-                                )}
-                                <button
-                                  className="porter-primary-button"
-                                  type="button"
-                                  disabled={
-                                    bulkRunning ||
-                                    reviewReasonsFor(item, item.draft).length > 0
-                                  }
-                                  onClick={() => {
-                                    if (item.draft) void saveBulkItem(item, item.draft);
-                                  }}
-                                >
-                                  Salvar este pacote
-                                </button>
-                              </div>
-                            )}
-                          </li>
-                        ))}
+                                    >
+                                      Salvar esta encomenda
+                                    </button>
+                                    <small className="porter-bulk-hint">
+                                      {reasons.length
+                                        ? `Falta: ${reasons.join(", ")}.`
+                                        : "Pronto para salvar."}
+                                    </small>
+                                  </div>
+                                </div>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                       {bulkNotificationMessage && (
                         <p className="porter-success">{bulkNotificationMessage}</p>
@@ -3240,22 +4174,54 @@ export function PorterReception() {
                         </div>
                       )}
                       <div className="porter-bulk-actions">
-                        <button
-                          className="porter-primary-button"
-                          type="button"
-                          disabled={
-                            bulkRunning ||
-                            bulkNotifying ||
-                            bulkCounts.pending === 0
-                          }
-                          onClick={() => void startBulkImport()}
-                        >
-                          {bulkRunning || bulkNotifying
-                            ? bulkNotifying
-                              ? "Enviando avisos..."
-                              : "Processando fila..."
-                            : `Processar ${bulkCounts.pending} foto(s)`}
-                        </button>
+                        {bulkCounts.pending > 0 && (
+                          <button
+                            className="porter-primary-button"
+                            type="button"
+                            disabled={bulkRunning || bulkNotifying}
+                            onClick={() => void startBulkImport()}
+                          >
+                            {bulkRunning || bulkNotifying
+                              ? bulkNotifying
+                                ? "Enviando avisos..."
+                                : "Lendo etiquetas..."
+                              : `Ler ${bulkCounts.pending} foto(s)`}
+                          </button>
+                        )}
+                        {bulkSaveableItems.length > 0 && (
+                          <button
+                            className="porter-primary-button"
+                            type="button"
+                            disabled={bulkRunning || bulkNotifying}
+                            onClick={() => void saveReviewedItems()}
+                          >
+                            {bulkRunning || bulkNotifying
+                              ? bulkNotifying
+                                ? "Enviando avisos..."
+                                : "Salvando..."
+                              : `Salvar ${bulkSaveableItems.length} encomenda(s) revisada(s)`}
+                          </button>
+                        )}
+                        {hasBulkDefaults && bulkCounts.review > 0 && (
+                          <button
+                            className="porter-secondary-button"
+                            type="button"
+                            disabled={bulkRunning || bulkNotifying}
+                            onClick={applyBulkDefaultsToReview}
+                          >
+                            Aplicar entregador e empresa a todos
+                          </button>
+                        )}
+                        {bulkDuplicatePendingCount > 0 && (
+                          <button
+                            className="porter-secondary-button"
+                            type="button"
+                            disabled={bulkRunning || bulkNotifying}
+                            onClick={acceptAllBulkDuplicates}
+                          >
+                            Aceitar {bulkDuplicatePendingCount} duplicado(s)
+                          </button>
+                        )}
                         {bulkRunning ? (
                           <button
                             className="porter-secondary-button"
@@ -3270,6 +4236,7 @@ export function PorterReception() {
                           <button
                             className="porter-secondary-button"
                             type="button"
+                            disabled={bulkNotifying}
                             onClick={clearBulkQueue}
                           >
                             Limpar fila
@@ -3701,12 +4668,14 @@ export function PorterReception() {
 
             {activeView === "ledger" && account ? (
               <PackageNotebook
+                key={`${currentPortaria?.id ?? "sem-portaria"}:${portariaViewToken}`}
                 buildings={[
                   {
                     id: account.condominium_id,
                     name: condominium?.name ?? "Meu condomínio",
                   },
                 ]}
+                initialFilters={{ blockId: currentBlockId }}
               />
             ) : (
               <>

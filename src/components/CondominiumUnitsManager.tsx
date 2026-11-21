@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ChevronDown } from "lucide-react";
 import { ConfirmationDialog } from "./ConfirmationDialog";
+import { Pagination } from "./Pagination";
 import { ResidentsImportPanel } from "./ResidentsImportPanel";
 import { UnitResidentsPanel } from "./UnitResidentsPanel";
 import { generateUnitNumbers, parseUnitRange } from "../lib/unitGeneration";
@@ -20,6 +21,109 @@ type Unit = {
   status: "active" | "inactive";
 };
 
+const BLOCK_PAGE_SIZE = 50;
+const UNIT_PAGE_SIZE = 50;
+const UNIT_COLUMNS = "id, unit_number, block_id, floor_label, status";
+
+async function fetchBlockPage(condominiumId: string, page: number) {
+  const from = (page - 1) * BLOCK_PAGE_SIZE;
+  const { data, error, count } = await supabase
+    .from("blocks")
+    .select("id, name", { count: "exact" })
+    .eq("condominium_id", condominiumId)
+    .order("name")
+    .range(from, from + BLOCK_PAGE_SIZE - 1);
+
+  if (error) throw new Error(error.message);
+  return {
+    blocks: (data ?? []) as Block[],
+    total: count ?? 0,
+  };
+}
+
+async function fetchAllBlocks(condominiumId: string): Promise<Block[]> {
+  const blocks: Block[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error, count } = await supabase
+      .from("blocks")
+      .select("id, name", { count: "exact" })
+      .eq("condominium_id", condominiumId)
+      .order("name")
+      .range(from, from + BLOCK_PAGE_SIZE - 1);
+
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as Block[];
+    blocks.push(...page);
+    const total = count ?? 0;
+    from += BLOCK_PAGE_SIZE;
+    if (!page.length || from >= total) break;
+  }
+
+  return blocks;
+}
+
+async function fetchBlockUnitCounts(condominiumId: string, blocks: Block[]) {
+  const [byBlock, withoutBlock] = await Promise.all([
+    Promise.all(
+      blocks.map(async (block) => {
+        const { count, error } = await supabase
+          .from("units")
+          .select("id", { count: "exact", head: true })
+          .eq("condominium_id", condominiumId)
+          .eq("block_id", block.id);
+        if (error) throw new Error(error.message);
+        return [block.id, count ?? 0] as const;
+      }),
+    ),
+    supabase
+      .from("units")
+      .select("id", { count: "exact", head: true })
+      .eq("condominium_id", condominiumId)
+      .is("block_id", null),
+  ]);
+
+  if (withoutBlock.error) throw new Error(withoutBlock.error.message);
+  return {
+    counts: Object.fromEntries(byBlock) as Record<string, number>,
+    withoutBlock: withoutBlock.count ?? 0,
+  };
+}
+
+async function fetchUnitPage(
+  condominiumId: string,
+  selectedBlockId: string,
+  hasBlocks: boolean,
+  search: string,
+  page: number,
+) {
+  const from = (page - 1) * UNIT_PAGE_SIZE;
+  let query = supabase
+    .from("units")
+    .select(UNIT_COLUMNS, { count: "exact" })
+    .eq("condominium_id", condominiumId);
+
+  if (hasBlocks) {
+    query = selectedBlockId
+      ? query.eq("block_id", selectedBlockId)
+      : query.is("block_id", null);
+  }
+  if (search) {
+    query = query.ilike("unit_number", `%${search}%`);
+  }
+
+  const { data, error, count } = await query
+    .order("unit_number")
+    .range(from, from + UNIT_PAGE_SIZE - 1);
+
+  if (error) throw new Error(error.message);
+  return {
+    units: (data ?? []) as Unit[],
+    total: count ?? 0,
+  };
+}
+
 /**
  * Gestão completa de blocos, unidades e moradores. Usada tanto pelo Super Admin
  * (aba "Blocos e unidades") quanto pelo Síndico (página "Moradores"). Toda
@@ -35,7 +139,15 @@ export function CondominiumUnitsManager({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [blocks, setBlocks] = useState<Block[]>([]);
+  const [allBlocks, setAllBlocks] = useState<Block[]>([]);
+  const [blocksLoaded, setBlocksLoaded] = useState(false);
+  const [blockPage, setBlockPage] = useState(1);
+  const [blockTotal, setBlockTotal] = useState(0);
+  const [blockUnitCounts, setBlockUnitCounts] = useState<Record<string, number>>({});
+  const [noBlockCount, setNoBlockCount] = useState(0);
   const [units, setUnits] = useState<Unit[]>([]);
+  const [unitTotal, setUnitTotal] = useState(0);
+  const [unitPage, setUnitPage] = useState(1);
   const [blockName, setBlockName] = useState("");
   const [blockError, setBlockError] = useState("");
   const [blockSuccess, setBlockSuccess] = useState("");
@@ -61,32 +173,32 @@ export function CondominiumUnitsManager({
   const [deleteUnitTarget, setDeleteUnitTarget] = useState<Unit | null>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react/set-state-in-effect
+    setBlockPage(1);
+    setUnitPage(1);
+    setUnitSearch("");
+    setSelectedBlockId("");
+    setBlocksLoaded(false);
+  }, [condominiumId]);
+
+  useEffect(() => {
     let active = true;
 
     void (async () => {
-      const [blocksResult, unitsResult] = await Promise.all([
-        supabase
-          .from("blocks")
-          .select("id, name")
-          .eq("condominium_id", condominiumId)
-          .order("name"),
-        supabase
-          .from("units")
-          .select("id, unit_number, block_id, floor_label, status")
-          .eq("condominium_id", condominiumId)
-          .order("unit_number"),
+      const [pageResult, allBlocksResult] = await Promise.all([
+        fetchBlockPage(condominiumId, blockPage),
+        fetchAllBlocks(condominiumId),
       ]);
+      const counts = await fetchBlockUnitCounts(condominiumId, allBlocksResult);
 
       if (!active) return;
-      const failed = blocksResult.error ?? unitsResult.error;
-      if (failed) {
-        setLoadError(`Não foi possível carregar os dados. ${failed.message}`);
-      } else {
-        setBlocks((blocksResult.data ?? []) as Block[]);
-        setSelectedBlockId(blocksResult.data?.[0]?.id ?? "");
-        setUnits((unitsResult.data ?? []) as Unit[]);
-      }
-      setLoading(false);
+      setBlocks(pageResult.blocks);
+      setBlockTotal(pageResult.total);
+      setAllBlocks(allBlocksResult);
+      setBlockUnitCounts(counts.counts);
+      setNoBlockCount(counts.withoutBlock);
+      setBlocksLoaded(true);
+      setSelectedBlockId((current) => current || allBlocksResult[0]?.id || "");
     })().catch((error: unknown) => {
       if (!active) return;
       const message =
@@ -98,7 +210,75 @@ export function CondominiumUnitsManager({
     return () => {
       active = false;
     };
-  }, [condominiumId]);
+  }, [condominiumId, blockPage]);
+
+  useEffect(() => {
+    if (!blocksLoaded) return;
+    let active = true;
+
+    void fetchUnitPage(
+      condominiumId,
+      selectedBlockId,
+      allBlocks.length > 0,
+      unitSearch.trim(),
+      unitPage,
+    )
+      .then((result) => {
+        if (!active) return;
+        setUnits(result.units);
+        setUnitTotal(result.total);
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const message =
+          error instanceof Error ? error.message : "Falha inesperada.";
+        setLoadError(`Não foi possível carregar os dados. ${message}`);
+        setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    blocksLoaded,
+    condominiumId,
+    selectedBlockId,
+    unitSearch,
+    unitPage,
+    allBlocks.length,
+  ]);
+
+  async function refreshBlockData(preferredBlockId?: string) {
+    const nextBlocks = await fetchAllBlocks(condominiumId);
+    const counts = await fetchBlockUnitCounts(condominiumId, nextBlocks);
+    const index = preferredBlockId
+      ? nextBlocks.findIndex((block) => block.id === preferredBlockId)
+      : -1;
+    const nextPage =
+      index >= 0 ? Math.floor(index / BLOCK_PAGE_SIZE) + 1 : blockPage;
+    const from = (nextPage - 1) * BLOCK_PAGE_SIZE;
+
+    setAllBlocks(nextBlocks);
+    setBlocks(nextBlocks.slice(from, from + BLOCK_PAGE_SIZE));
+    setBlockPage(nextPage);
+    setBlockTotal(nextBlocks.length);
+    setBlockUnitCounts(counts.counts);
+    setNoBlockCount(counts.withoutBlock);
+    if (preferredBlockId) setSelectedBlockId(preferredBlockId);
+  }
+
+  async function refreshUnits(targetPage = unitPage) {
+    const result = await fetchUnitPage(
+      condominiumId,
+      selectedBlockId,
+      allBlocks.length > 0,
+      unitSearch.trim(),
+      targetPage,
+    );
+    setUnits(result.units);
+    setUnitTotal(result.total);
+  }
 
   async function handleAddBlock(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -123,11 +303,7 @@ export function CondominiumUnitsManager({
         return;
       }
 
-      setBlocks((current) =>
-        [...current, { id: data, name }].sort((a, b) =>
-          a.name.localeCompare(b.name, "pt-BR", { numeric: true }),
-        ),
-      );
+      await refreshBlockData(data);
       setSelectedBlockId(data);
       setBlockName("");
       setBlockSuccess("Bloco cadastrado.");
@@ -165,21 +341,13 @@ export function CondominiumUnitsManager({
         return;
       }
 
-      setUnits((current) =>
-        [...current, {
-          id: data,
-          unit_number: number,
-          block_id: blockId,
-          floor_label: null,
-          status: "active" as const,
-        }].sort((a, b) =>
-          a.unit_number.localeCompare(b.unit_number, "pt-BR", {
-            numeric: true,
-          }),
-        ),
-      );
+      setUnitPage(1);
+      await refreshUnits(1);
+      const counts = await fetchBlockUnitCounts(condominiumId, allBlocks);
+      setBlockUnitCounts(counts.counts);
+      setNoBlockCount(counts.withoutBlock);
       setUnitSuccess(
-        `Unidade ${number} cadastrada${blockId ? ` no bloco ${blocks.find((block) => block.id === blockId)?.name ?? ""}` : ""}.`,
+        `Unidade ${number} cadastrada${blockId ? ` no bloco ${allBlocks.find((block) => block.id === blockId)?.name ?? ""}` : ""}.`,
       );
       setUnitNumber("");
     } catch (error) {
@@ -239,10 +407,20 @@ export function CondominiumUnitsManager({
       const range = parseUnitRange(unitRange);
       const unitNumbers = generateUnitNumbers(range, Number(lastFloor));
       const blockId = selectedBlockId || null;
+      let existingQuery = supabase
+        .from("units")
+        .select("unit_number")
+        .eq("condominium_id", condominiumId)
+        .in("unit_number", unitNumbers);
+      existingQuery = blockId
+        ? existingQuery.eq("block_id", blockId)
+        : existingQuery.is("block_id", null);
+      const { data: existingRows, error: existingError } = await existingQuery;
+      if (existingError) throw new Error(existingError.message);
       const existingNumbers = new Set(
-        units
-          .filter((unit) => unit.block_id === blockId)
-          .map((unit) => unit.unit_number.toLocaleLowerCase("pt-BR")),
+        (existingRows ?? []).map((unit) =>
+          unit.unit_number.toLocaleLowerCase("pt-BR"),
+        ),
       );
       if (
         unitNumbers.some((number) =>
@@ -265,9 +443,10 @@ export function CondominiumUnitsManager({
         return;
       }
 
-      await reloadUnits();
+      const reloaded = await reloadUnits();
+      if (!reloaded) return;
       setUnitSuccess(
-        `${unitNumbers.length} apartamento(s) cadastrado(s) em ${blockId ? blocks.find((block) => block.id === blockId)?.name ?? "bloco selecionado" : "condomínio sem blocos"}.`,
+        `${unitNumbers.length} apartamento(s) cadastrado(s) em ${blockId ? allBlocks.find((block) => block.id === blockId)?.name ?? "bloco selecionado" : "condomínio sem blocos"}.`,
       );
     } catch (error) {
       const message =
@@ -279,43 +458,51 @@ export function CondominiumUnitsManager({
   }
 
   async function reloadUnits(preferredBlockName?: string | null) {
-    const [blocksResult, unitsResult] = await Promise.all([
-      supabase
-        .from("blocks")
-        .select("id, name")
-        .eq("condominium_id", condominiumId)
-        .order("name"),
-      supabase
-        .from("units")
-        .select("id, unit_number, block_id, floor_label, status")
-        .eq("condominium_id", condominiumId)
-        .order("unit_number"),
-    ]);
+    try {
+      const nextBlocks = await fetchAllBlocks(condominiumId);
+      const counts = await fetchBlockUnitCounts(condominiumId, nextBlocks);
+      const pageResult = await fetchBlockPage(condominiumId, 1);
 
-    const error = blocksResult.error ?? unitsResult.error;
-    if (error) {
-      setUnitError(
-        `A importação terminou, mas não foi possível atualizar a lista. ${error.message}`,
-      );
-      return;
-    }
-
-    const nextBlocks = (blocksResult.data ?? []) as Block[];
-    setBlocks(nextBlocks);
-    setUnits((unitsResult.data ?? []) as Unit[]);
-    setSelectedBlockId((current) => {
-      if (preferredBlockName === null) return "";
-      if (preferredBlockName) {
+      let nextBlockId = selectedBlockId;
+      if (preferredBlockName === null) {
+        nextBlockId = "";
+      } else if (preferredBlockName) {
         const normalized = preferredBlockName.toLocaleLowerCase("pt-BR");
-        const match = nextBlocks.find(
-          (block) => block.name.toLocaleLowerCase("pt-BR") === normalized,
-        );
-        if (match) return match.id;
+        nextBlockId =
+          nextBlocks.find(
+            (block) => block.name.toLocaleLowerCase("pt-BR") === normalized,
+          )?.id ?? "";
+      } else if (!nextBlocks.some((block) => block.id === nextBlockId)) {
+        nextBlockId = nextBlocks[0]?.id ?? "";
       }
-      return nextBlocks.some((block) => block.id === current)
-        ? current
-        : (nextBlocks[0]?.id ?? "");
-    });
+
+      const unitResult = await fetchUnitPage(
+        condominiumId,
+        nextBlockId,
+        nextBlocks.length > 0,
+        unitSearch.trim(),
+        1,
+      );
+
+      setAllBlocks(nextBlocks);
+      setBlocks(pageResult.blocks);
+      setBlockPage(1);
+      setBlockTotal(pageResult.total);
+      setBlockUnitCounts(counts.counts);
+      setNoBlockCount(counts.withoutBlock);
+      setSelectedBlockId(nextBlockId);
+      setUnits(unitResult.units);
+      setUnitTotal(unitResult.total);
+      setUnitPage(1);
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Falha inesperada.";
+      setUnitError(
+        `A importação terminou, mas não foi possível atualizar a lista. ${message}`,
+      );
+      return false;
+    }
   }
 
   function requestDeleteUnit(unit: Unit) {
@@ -341,7 +528,10 @@ export function CondominiumUnitsManager({
         return;
       }
 
-      setUnits((current) => current.filter((item) => item.id !== unit.id));
+      await refreshUnits();
+      const counts = await fetchBlockUnitCounts(condominiumId, allBlocks);
+      setBlockUnitCounts(counts.counts);
+      setNoBlockCount(counts.withoutBlock);
       if (expandedResidentsUnitId === unit.id) {
         setExpandedResidentsUnitId(null);
       }
@@ -356,20 +546,10 @@ export function CondominiumUnitsManager({
     }
   }
 
-  const selectedBlock = blocks.find((block) => block.id === selectedBlockId);
-  const noBlockUnits = units.filter((unit) => unit.block_id === null);
-  const displayedUnits = blocks.length
-    ? selectedBlockId === ""
-      ? noBlockUnits
-      : units.filter((unit) => unit.block_id === selectedBlockId)
-    : units;
+  const selectedBlockName =
+    allBlocks.find((block) => block.id === selectedBlockId)?.name ?? "";
   const normalizedUnitSearch = unitSearch.trim().toLocaleLowerCase("pt-BR");
-  const filteredUnits = normalizedUnitSearch
-    ? displayedUnits.filter((unit) =>
-        unit.unit_number.toLocaleLowerCase("pt-BR").includes(normalizedUnitSearch),
-      )
-    : displayedUnits;
-  const floorGroups = groupUnitsByFloor(filteredUnits);
+  const floorGroups = groupUnitsByFloor(units);
   const allFloorsCollapsed =
     floorGroups.length > 0 &&
     floorGroups.every((group) => collapsedFloors.includes(group.key));
@@ -424,58 +604,73 @@ export function CondominiumUnitsManager({
           <div>
             <span className="admin-context-label">Bloco selecionado</span>
             <span className="admin-context-value">
-              {selectedBlock?.name ??
-                (blocks.length
+              {selectedBlockName ||
+                (allBlocks.length
                   ? selectedBlockId === ""
                     ? "Sem bloco"
-                    : "Nenhum bloco selecionado"
+                    : "Bloco selecionado em outra página"
                   : "Sem blocos")}
-              {selectedBlock && (
+              {selectedBlockName && (
                 <span className="admin-context-badge">Bloco atual</span>
               )}
             </span>
           </div>
           <div className="admin-context-meta">
-            {displayedUnits.length} unidade(s) neste bloco
-            {blockCount > blocks.length
+            {unitTotal.toLocaleString("pt-BR")} unidade(s) neste bloco
+            {blockCount > blockTotal
               ? ` · ${blockCount} previsto(s)`
               : ""}
           </div>
         </div>
 
-        {blocks.length > 0 ? (
-          <div className="block-list" aria-label="Blocos cadastrados">
-            {blocks.map((block) => {
-              const blockUnits = units.filter(
-                (unit) => unit.block_id === block.id,
-              ).length;
-              return (
+        {allBlocks.length > 0 ? (
+          <>
+            <div className="block-list" aria-label="Blocos cadastrados">
+              {blocks.map((block) => (
                 <button
                   key={block.id}
                   className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
                   type="button"
                   aria-pressed={selectedBlockId === block.id}
-                  onClick={() => setSelectedBlockId(block.id)}
+                  onClick={() => {
+                    setSelectedBlockId(block.id);
+                    setUnitPage(1);
+                    setCollapsedFloors([]);
+                  }}
                 >
                   <strong>{block.name}</strong>
-                  <span>{blockUnits} apartamento(s)</span>
+                  <span>
+                    {(blockUnitCounts[block.id] ?? 0).toLocaleString("pt-BR")}{" "}
+                    apartamento(s)
+                  </span>
                   {selectedBlockId === block.id && <small>Bloco atual</small>}
                 </button>
-              );
-            })}
-            {noBlockUnits.length > 0 && (
-              <button
-                className={`block-choice${selectedBlockId === "" ? " block-choice-active" : ""}`}
-                type="button"
-                aria-pressed={selectedBlockId === ""}
-                onClick={() => setSelectedBlockId("")}
-              >
-                <strong>Sem bloco</strong>
-                <span>{noBlockUnits.length} apartamento(s)</span>
-                {selectedBlockId === "" && <small>Bloco atual</small>}
-              </button>
-            )}
-          </div>
+              ))}
+              {noBlockCount > 0 && (
+                <button
+                  className={`block-choice${selectedBlockId === "" ? " block-choice-active" : ""}`}
+                  type="button"
+                  aria-pressed={selectedBlockId === ""}
+                  onClick={() => {
+                    setSelectedBlockId("");
+                    setUnitPage(1);
+                    setCollapsedFloors([]);
+                  }}
+                >
+                  <strong>Sem bloco</strong>
+                  <span>{noBlockCount.toLocaleString("pt-BR")} apartamento(s)</span>
+                  {selectedBlockId === "" && <small>Bloco atual</small>}
+                </button>
+              )}
+            </div>
+            <Pagination
+              page={blockPage}
+              total={blockTotal}
+              pageSize={BLOCK_PAGE_SIZE}
+              onChange={setBlockPage}
+              label="Paginação de blocos"
+            />
+          </>
         ) : (
           <p className="field-hint">
             {blockCount > 0
@@ -550,8 +745,8 @@ export function CondominiumUnitsManager({
         <p className="admin-form-context">
           Bloco de trabalho:{" "}
           <strong>
-            {selectedBlock?.name ??
-              (blocks.length ? "Sem bloco" : "condomínio sem blocos")}
+            {selectedBlockName ||
+              (allBlocks.length ? "Sem bloco" : "condomínio sem blocos")}
           </strong>
           .
           {unitMode === "batch"
@@ -572,12 +767,12 @@ export function CondominiumUnitsManager({
 
         {unitMode === "single" ? (
           <form className="inline-form" onSubmit={handleSaveUnit}>
-            {blocks.length === 0 && blockCount > 0 && (
+            {allBlocks.length === 0 && blockCount > 0 && (
               <p className="field-hint">
                 Cadastre ao menos um bloco antes de criar unidades.
               </p>
             )}
-            {blocks.length > 0 && selectedBlockId === "" && (
+            {allBlocks.length > 0 && selectedBlockId === "" && (
               <p className="field-hint">
                 Selecione um bloco para cadastrar novas unidades. As unidades
                 importadas sem bloco aparecem em “Sem bloco”.
@@ -598,8 +793,8 @@ export function CondominiumUnitsManager({
                 className="primary-button"
                 disabled={
                   savingUnit ||
-                  (blockCount > 0 && blocks.length === 0) ||
-                  (blocks.length > 0 && selectedBlockId === "")
+                  (blockCount > 0 && allBlocks.length === 0) ||
+                  (allBlocks.length > 0 && selectedBlockId === "")
                 }
               >
                 {savingUnit ? "Salvando..." : "Cadastrar unidade"}
@@ -645,7 +840,7 @@ export function CondominiumUnitsManager({
                 className="primary-button"
                 disabled={
                   savingBatch ||
-                  ((blockCount > 0 || blocks.length > 0) && !selectedBlockId)
+                  ((blockCount > 0 || allBlocks.length > 0) && !selectedBlockId)
                 }
               >
                 {savingBatch ? "Cadastrando..." : "Gerar apartamentos"}
@@ -668,11 +863,13 @@ export function CondominiumUnitsManager({
           <div>
             <h2>
               Unidades cadastradas
-              {selectedBlock ? ` — ${selectedBlock.name}` : ""} ({displayedUnits.length})
+              {selectedBlockName ? ` — ${selectedBlockName}` : ""} (
+              {unitTotal.toLocaleString("pt-BR")})
             </h2>
             {normalizedUnitSearch && (
               <p>
-                {filteredUnits.length} resultado(s) para “{unitSearch.trim()}”.
+                {unitTotal.toLocaleString("pt-BR")} resultado(s) para “
+                {unitSearch.trim()}”.
               </p>
             )}
           </div>
@@ -685,6 +882,7 @@ export function CondominiumUnitsManager({
               value={unitSearch}
               onChange={(event) => {
                 setUnitSearch(event.target.value);
+                setUnitPage(1);
                 setCollapsedFloors([]);
               }}
             />
@@ -796,6 +994,16 @@ export function CondominiumUnitsManager({
             })}
           </div>
         )}
+        <Pagination
+          page={unitPage}
+          total={unitTotal}
+          pageSize={UNIT_PAGE_SIZE}
+          onChange={(page) => {
+            setUnitPage(page);
+            setCollapsedFloors([]);
+          }}
+          label="Paginação de unidades"
+        />
       </section>
 
       {deleteUnitTarget && (

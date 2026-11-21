@@ -230,57 +230,122 @@ async function loadStats(
   return { ...summary, total: summary.received + summary.collected };
 }
 
+const PAGE_SIZE = 500;
+const PACKAGE_COLUMNS =
+  "id, condominium_id, unit_number, block_name, tracking_code, received_at, is_damaged, receipt_path, photo_expires_at, photo_deleted_at";
+
+async function fetchAllReceived(buildingIds: string[]): Promise<PackageRow[]> {
+  const rows: PackageRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error, count } = await supabase
+      .from("packages")
+      .select(PACKAGE_COLUMNS, { count: "exact" })
+      .eq("status", "received")
+      .in("condominium_id", buildingIds)
+      .order("received_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as PackageRow[];
+    rows.push(...page);
+    const total = count ?? 0;
+    from += PAGE_SIZE;
+    if (!page.length || from >= total) break;
+  }
+
+  return rows;
+}
+
+async function fetchAllDamaged(buildingIds: string[]): Promise<PackageRow[]> {
+  const rows: PackageRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error, count } = await supabase
+      .from("packages")
+      .select(PACKAGE_COLUMNS, { count: "exact" })
+      .eq("is_damaged", true)
+      .in("condominium_id", buildingIds)
+      .order("received_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as PackageRow[];
+    rows.push(...page);
+    const total = count ?? 0;
+    from += PAGE_SIZE;
+    if (!page.length || from >= total) break;
+  }
+
+  return rows;
+}
+
+async function fetchAllEvents(buildingIds: string[]): Promise<EventRow[]> {
+  const rows: EventRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error, count } = await supabase
+      .from("package_events")
+      .select("id, condominium_id, event_type, description, occurred_at", {
+        count: "exact",
+      })
+      .in("condominium_id", buildingIds)
+      .order("occurred_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as EventRow[];
+    rows.push(...page);
+    const total = count ?? 0;
+    from += PAGE_SIZE;
+    if (!page.length || from >= total) break;
+  }
+
+  return rows;
+}
+
+async function fetchNotifiedIds(packageIds: string[]): Promise<Set<string>> {
+  const notified = new Set<string>();
+  const chunkSize = 200;
+
+  for (let start = 0; start < packageIds.length; start += chunkSize) {
+    const chunk = packageIds.slice(start, start + chunkSize);
+    let from = 0;
+
+    while (true) {
+      const { data, error, count } = await supabase
+        .from("package_notifications")
+        .select("package_id", { count: "exact" })
+        .in("package_id", chunk)
+        .range(from, from + PAGE_SIZE - 1);
+
+      if (error) throw new Error(error.message);
+      const page = data ?? [];
+      page.forEach((row) => notified.add(row.package_id));
+      const total = count ?? 0;
+      from += PAGE_SIZE;
+      if (!page.length || from >= total) break;
+    }
+  }
+
+  return notified;
+}
+
 async function loadAttention(
   buildingIds: string[],
   buildingNames: Map<string, string>,
   boundaries: Boundaries,
 ): Promise<AttentionData> {
-  const [receivedResult, damagedResult, eventsResult] = await Promise.all([
-    supabase
-      .from("packages")
-      .select(
-        "id, condominium_id, unit_number, block_name, tracking_code, received_at, is_damaged, receipt_path, photo_expires_at, photo_deleted_at",
-      )
-      .eq("status", "received")
-      .in("condominium_id", buildingIds)
-      .order("received_at", { ascending: false })
-      .limit(200),
-    supabase
-      .from("packages")
-      .select(
-        "id, condominium_id, unit_number, block_name, tracking_code, received_at, is_damaged, receipt_path, photo_expires_at, photo_deleted_at",
-      )
-      .eq("is_damaged", true)
-      .in("condominium_id", buildingIds)
-      .order("received_at", { ascending: false })
-      .limit(100),
-    supabase
-      .from("package_events")
-      .select("id, condominium_id, event_type, description, occurred_at")
-      .in("condominium_id", buildingIds)
-      .order("occurred_at", { ascending: false })
-      .limit(5),
+  const [received, damaged, events] = await Promise.all([
+    fetchAllReceived(buildingIds),
+    fetchAllDamaged(buildingIds),
+    fetchAllEvents(buildingIds),
   ]);
 
-  const failed =
-    receivedResult.error ?? damagedResult.error ?? eventsResult.error;
-  if (failed) throw new Error(failed.message);
-
-  const received = (receivedResult.data ?? []) as PackageRow[];
-  const damaged = (damagedResult.data ?? []) as PackageRow[];
-
-  const notifiedIds = new Set<string>();
-  if (received.length) {
-    const { data, error } = await supabase
-      .from("package_notifications")
-      .select("package_id")
-      .in(
-        "package_id",
-        received.map((item) => item.id),
-      );
-    if (error) throw new Error(error.message);
-    (data ?? []).forEach((row) => notifiedIds.add(row.package_id));
-  }
+  const notifiedIds = await fetchNotifiedIds(received.map((item) => item.id));
 
   const items = new Map<string, AttentionItem>();
   function add(item: AttentionItem) {
@@ -345,7 +410,7 @@ async function loadAttention(
     });
   });
 
-  const latest = ((eventsResult.data ?? []) as EventRow[]).map((event) => ({
+  const latest = events.slice(0, 5).map((event) => ({
     id: event.id,
     title: `${eventLabels[event.event_type] ?? "Evento"}: ${event.description}`,
     occurredAt: event.occurred_at,
