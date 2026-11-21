@@ -146,8 +146,11 @@ export function ResidentsImportPanel({
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    // Captura o arquivo antes de limpar o input: limpar o value esvazia o
+    // FileList do evento e faz o arquivo escolhido "desaparecer".
+    const selected = event.target.files?.[0] ?? null;
     resetFile();
-    setFile(event.target.files?.[0] ?? null);
+    setFile(selected);
   }
 
   async function handleAnalyze() {
@@ -269,7 +272,7 @@ export function ResidentsImportPanel({
             disabled={importing}
           />
           <span className="field-hint">
-            {file ? file.name : "Nenhum arquivo"}
+            {file ? file.name : "Nenhum arquivo selecionado"}
           </span>
         </label>
 
