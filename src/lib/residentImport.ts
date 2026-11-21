@@ -55,6 +55,27 @@ export type ResidentColumnMapping = {
 };
 
 export const NO_COLUMN = -1;
+export const FIRST_BLOCK_NAME = "Bloco 1";
+
+/** Resposta da pergunta mostrada quando a planilha não informa bloco. */
+export type ResidentImportBlockChoice = "none" | "first" | null;
+
+/**
+ * Aplica a escolha de bloco às linhas mapeadas. `none` cria apartamentos sem
+ * bloco; `first` vincula tudo ao Bloco 1; `null` mantém o que veio da planilha.
+ */
+export function applyImportBlockChoice(
+  rows: readonly ResidentImportRow[],
+  choice: ResidentImportBlockChoice,
+): ResidentImportRow[] {
+  if (choice === "none") {
+    return rows.map((row) => ({ ...row, block_name: null }));
+  }
+  if (choice === "first") {
+    return rows.map((row) => ({ ...row, block_name: FIRST_BLOCK_NAME }));
+  }
+  return rows.map((row) => ({ ...row }));
+}
 
 const UNIT_HEADERS = [
   "apartamento",

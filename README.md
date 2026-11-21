@@ -166,6 +166,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 33. `supabase/migrations/20261120170000_bulk_package_notifications.sql`
 34. `supabase/migrations/20261120180000_reset_condominium_data.sql`
 35. `supabase/migrations/20261121000000_optional_block_import.sql`
+36. `supabase/migrations/20261121010000_import_creates_blocks.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -348,11 +349,15 @@ opção). A tela lê o arquivo, mostra os cabeçalhos encontrados e pede o
 **mapeamento explícito das colunas**: unidade/apartamento (obrigatório), bloco,
 nome e telefone/WhatsApp (opcionais). O nome das colunas não precisa seguir um
 padrão: a sugestão inicial pode ser trocada antes de gerar a prévia e confirmar
-a importação. O bloco não é obrigatório — linhas sem bloco criam unidades sem
-bloco mesmo em condomínios que usam blocos; essas unidades aparecem em **Sem
-bloco** no gerenciador e ficam disponíveis aos porteiros com acesso a pelo
-menos um bloco. As unidades ausentes só entram se a opção correspondente estiver
-marcada e os contatos repetidos são ignorados. O resultado informa unidades
+a importação. Não existe mais **bloco padrão**: se a coluna de bloco estiver
+mapeada, todos os blocos encontrados (letras ou números) são criados
+automaticamente pela RPC e as unidades são vinculadas a eles. Se a planilha não
+informar bloco, a tela pergunta se o condomínio é de bloco único — nesse caso
+cria só os apartamentos — ou se está sendo cadastrado o primeiro bloco — nesse
+caso usa **Bloco 1**. As unidades sem bloco aparecem em **Sem bloco** no
+gerenciador e ficam disponíveis aos porteiros com acesso a pelo menos um bloco.
+As unidades ausentes só entram se a opção correspondente estiver marcada e os
+contatos repetidos são ignorados. O resultado informa blocos criados, unidades
 criadas, moradores criados e duplicatas ignoradas.
 
 A retirada é registrada pelo porteiro após confirmação presencial do morador.

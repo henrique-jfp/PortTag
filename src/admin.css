@@ -1220,6 +1220,30 @@
   margin-top: 12px;
 }
 
+.dashboard .resident-import-block-info,
+.dashboard .resident-import-block-choice {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #bfe6cf;
+  border-radius: 12px;
+  background: #f4fbf6;
+}
+
+.dashboard .resident-import-block-info strong,
+.dashboard .resident-import-block-choice legend {
+  color: #176b36;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dashboard .resident-import-block-choice legend {
+  padding: 0 6px;
+}
+
+.dashboard .resident-import-block-choice .choice-options {
+  margin-top: 8px;
+}
+
 @media (max-width: 900px) {
   .dashboard .lab-grid,
   .dashboard .lab-rule-grid {

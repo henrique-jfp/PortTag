@@ -276,20 +276,44 @@ export function CondominiumUnitsManager({
     }
   }
 
-  async function reloadUnits() {
-    const { data, error } = await supabase
-      .from("units")
-      .select("id, unit_number, block_id, status")
-      .eq("condominium_id", condominiumId)
-      .order("unit_number");
+  async function reloadUnits(preferredBlockName?: string | null) {
+    const [blocksResult, unitsResult] = await Promise.all([
+      supabase
+        .from("blocks")
+        .select("id, name")
+        .eq("condominium_id", condominiumId)
+        .order("name"),
+      supabase
+        .from("units")
+        .select("id, unit_number, block_id, status")
+        .eq("condominium_id", condominiumId)
+        .order("unit_number"),
+    ]);
 
+    const error = blocksResult.error ?? unitsResult.error;
     if (error) {
       setUnitError(
         `A importação terminou, mas não foi possível atualizar a lista. ${error.message}`,
       );
       return;
     }
-    setUnits(data ?? []);
+
+    const nextBlocks = (blocksResult.data ?? []) as Block[];
+    setBlocks(nextBlocks);
+    setUnits((unitsResult.data ?? []) as Unit[]);
+    setSelectedBlockId((current) => {
+      if (preferredBlockName === null) return "";
+      if (preferredBlockName) {
+        const normalized = preferredBlockName.toLocaleLowerCase("pt-BR");
+        const match = nextBlocks.find(
+          (block) => block.name.toLocaleLowerCase("pt-BR") === normalized,
+        );
+        if (match) return match.id;
+      }
+      return nextBlocks.some((block) => block.id === current)
+        ? current
+        : (nextBlocks[0]?.id ?? "");
+    });
   }
 
   function requestDeleteUnit(unit: Unit) {
@@ -629,16 +653,11 @@ export function CondominiumUnitsManager({
         ) : (
           <ResidentsImportPanel
             condominiumId={condominiumId}
-            blocks={blocks}
-            hasBlocks={blockCount > 0 || blocks.length > 0}
             onImported={(importedRows) => {
-              if (
-                blocks.length > 0 &&
-                importedRows.some((row) => !row.block_name?.trim())
-              ) {
-                setSelectedBlockId("");
-              }
-              void reloadUnits();
+              const importedBlock =
+                importedRows.find((row) => row.block_name?.trim())?.block_name?.trim() ??
+                null;
+              void reloadUnits(importedBlock);
             }}
           />
         )}

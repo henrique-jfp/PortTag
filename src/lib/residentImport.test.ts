@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   analyzeResidentImport,
+  applyImportBlockChoice,
   guessResidentColumnMapping,
   mapResidentRows,
   normalizePhone,
@@ -129,6 +130,29 @@ describe("readResidentFile + mapeamento explícito", () => {
     await expect(
       readResidentFile(csvFile("Apartamento;Nome\n")),
     ).rejects.toThrow(/não tem linhas de moradores/i);
+  });
+});
+
+describe("applyImportBlockChoice", () => {
+  const rows = [
+    {
+      unit_number: "101",
+      block_name: "A",
+      name: "Ana",
+      whatsapp: null,
+    },
+  ];
+
+  it("mantém os blocos da planilha quando não há escolha", () => {
+    expect(applyImportBlockChoice(rows, null)).toEqual(rows);
+  });
+
+  it("remove o bloco quando o condomínio é de bloco único", () => {
+    expect(applyImportBlockChoice(rows, "none")[0].block_name).toBeNull();
+  });
+
+  it("usa Bloco 1 quando é o primeiro bloco", () => {
+    expect(applyImportBlockChoice(rows, "first")[0].block_name).toBe("Bloco 1");
   });
 });
 

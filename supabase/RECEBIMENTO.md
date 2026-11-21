@@ -134,6 +134,13 @@
     no gerenciador e ficam visíveis aos porteiros com acesso a pelo menos um
     bloco. A tela de importação continua permitindo escolher um bloco padrão,
     mas não o exige mais.
+    Depois execute `20261121010000_import_creates_blocks.sql`: a RPC
+    `import_condominium_residents` passa a criar automaticamente os blocos
+    citados na planilha (letras ou números), atualiza `block_count` e devolve
+    `blocks_created`. Porteiros sem nenhum bloco vinculado recebem os blocos
+    recém-criados. A tela remove o campo **Bloco padrão**: sem bloco na
+    planilha, ela pergunta se é prédio de bloco único ou se deve usar **Bloco
+    1** como primeiro bloco.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

@@ -1,6 +1,7 @@
-import { useRef, useState, type ChangeEvent } from "react";
+import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   analyzeResidentImport,
+  applyImportBlockChoice,
   guessResidentColumnMapping,
   mapResidentRows,
   readResidentFile,
@@ -8,6 +9,7 @@ import {
   NO_COLUMN,
   type ResidentColumnMapping,
   type ResidentImportAnalysis,
+  type ResidentImportBlockChoice,
   type ResidentImportRow,
   type ResidentImportSource,
 } from "../lib/residentImport";
@@ -15,12 +17,11 @@ import { supabase } from "../lib/supabase";
 
 type ResidentsImportPanelProps = {
   condominiumId: string;
-  blocks: { id: string; name: string }[];
-  hasBlocks: boolean;
   onImported: (rows: readonly ResidentImportRow[]) => void | Promise<void>;
 };
 
 type ImportRpcResult = {
+  blocks_created?: number;
   units_created?: number;
   residents_created?: number;
   duplicates_skipped?: number;
@@ -41,7 +42,7 @@ const MAPPING_FIELDS: {
   {
     key: "block",
     label: "Bloco / Torre",
-    hint: "Opcional. Linhas sem bloco ficam sem bloco.",
+    hint: "Opcional. Os blocos encontrados são criados automaticamente.",
   },
   {
     key: "name",
@@ -68,26 +69,76 @@ function errorMessage(cause: unknown, fallback: string) {
 
 export function ResidentsImportPanel({
   condominiumId,
-  blocks,
-  hasBlocks,
   onImported,
 }: ResidentsImportPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [source, setSource] = useState<ResidentImportSource | null>(null);
   const [mapping, setMapping] = useState<ResidentColumnMapping>(EMPTY_MAPPING);
+  const [blockChoice, setBlockChoice] =
+    useState<ResidentImportBlockChoice>(null);
   const [analysis, setAnalysis] = useState<ResidentImportAnalysis | null>(null);
-  const [selectedBlockId, setSelectedBlockId] = useState("");
   const [createMissingUnits, setCreateMissingUnits] = useState(true);
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
 
+  const mappedRows = useMemo(
+    () =>
+      source && mapping.unit >= 0 ? mapResidentRows(source, mapping) : [],
+    [source, mapping],
+  );
+
+  const effectiveRows = useMemo(
+    () => applyImportBlockChoice(mappedRows, blockChoice),
+    [mappedRows, blockChoice],
+  );
+
+  const preview = useMemo(
+    () => analyzeResidentImport(effectiveRows),
+    [effectiveRows],
+  );
+
+  const blockValues = useMemo(() => {
+    if (!source || mapping.block < 0) return [];
+    const values = new Set<string>();
+    source.rows.forEach((row) => {
+      const cell = row[mapping.block];
+      const value =
+        cell === null || cell === undefined ? "" : String(cell).trim();
+      if (value) values.add(value);
+    });
+    return [...values];
+  }, [source, mapping]);
+
+  const emptyBlockRows = useMemo(
+    () =>
+      source && mapping.block >= 0
+        ? source.rows.filter((row) => {
+            const cell = row[mapping.block];
+            return !(cell !== null && cell !== undefined && String(cell).trim());
+          }).length
+        : 0,
+    [source, mapping],
+  );
+
+  const needsBlockQuestion = Boolean(
+    source && mapping.unit >= 0 && blockValues.length === 0,
+  );
+
+  const canImport = Boolean(
+    analysis &&
+      analysis.importableRows.length > 0 &&
+      analysis.counts.errors === 0 &&
+      (!needsBlockQuestion || blockChoice !== null),
+  );
+
   function resetFile() {
     setFile(null);
     setSource(null);
     setMapping(EMPTY_MAPPING);
+    setBlockChoice(null);
     setAnalysis(null);
     setError("");
     setSummary("");
@@ -109,6 +160,7 @@ export function ResidentsImportPanel({
     setError("");
     setSummary("");
     setAnalysis(null);
+    setBlockChoice(null);
     try {
       const nextSource = await readResidentFile(file);
       setSource(nextSource);
@@ -130,20 +182,33 @@ export function ResidentsImportPanel({
       ...current,
       [field]: Number.parseInt(value, 10),
     }));
+    setBlockChoice(null);
     setAnalysis(null);
     setSummary("");
     setError("");
   }
 
+  function chooseBlock(choice: Exclude<ResidentImportBlockChoice, null>) {
+    setBlockChoice(choice);
+    if (source && mapping.unit >= 0) {
+      setAnalysis(
+        analyzeResidentImport(
+          applyImportBlockChoice(mapResidentRows(source, mapping), choice),
+        ),
+      );
+    }
+    setSummary("");
+    setError("");
+  }
+
   function handlePreview() {
-    if (!source || mapping.unit < 0) return;
-    setAnalysis(analyzeResidentImport(mapResidentRows(source, mapping)));
+    setAnalysis(preview);
     setError("");
     setSummary("");
   }
 
   async function handleImport() {
-    if (!analysis || analysis.importableRows.length === 0) return;
+    if (!analysis || !canImport) return;
 
     const importedRows = analysis.importableRows;
     setImporting(true);
@@ -154,9 +219,9 @@ export function ResidentsImportPanel({
         "import_condominium_residents",
         {
           p_condominium_id: condominiumId,
-          p_block_id: selectedBlockId || null,
+          p_block_id: null,
           p_create_missing_units: createMissingUnits,
-          p_rows: toRpcResidentRows(analysis.importableRows),
+          p_rows: toRpcResidentRows(importedRows),
         },
       );
 
@@ -164,7 +229,8 @@ export function ResidentsImportPanel({
 
       const result = (data ?? {}) as ImportRpcResult;
       setSummary(
-        `Importação concluída: ${result.units_created ?? 0} unidade(s) criada(s), ` +
+        `Importação concluída: ${result.blocks_created ?? 0} bloco(s) criado(s), ` +
+          `${result.units_created ?? 0} unidade(s) criada(s), ` +
           `${result.residents_created ?? 0} morador(es) cadastrado(s) e ` +
           `${result.duplicates_skipped ?? 0} duplicata(s) ignorada(s).`,
       );
@@ -185,7 +251,8 @@ export function ResidentsImportPanel({
           <p>
             Envie um CSV ou XLSX, analise o arquivo e informe em qual coluna está
             cada dado. Nada é adivinhado: as sugestões podem ser trocadas antes
-            da importação. Nome e WhatsApp são opcionais: uma linha sem ambos
+            da importação. Blocos citados na planilha são criados
+            automaticamente. Nome e WhatsApp são opcionais: uma linha sem ambos
             cria apenas a unidade. O porteiro não faz esse cadastro.
           </p>
         </div>
@@ -201,30 +268,10 @@ export function ResidentsImportPanel({
             onChange={handleFileChange}
             disabled={importing}
           />
-          <span className="field-hint">{file ? file.name : "Nenhum arquivo"}</span>
+          <span className="field-hint">
+            {file ? file.name : "Nenhum arquivo"}
+          </span>
         </label>
-
-        {hasBlocks && (
-          <div className="form-field">
-            Bloco padrão
-            <select
-              value={selectedBlockId}
-              onChange={(event) => setSelectedBlockId(event.target.value)}
-              disabled={importing}
-            >
-              <option value="">Selecione um bloco</option>
-              {blocks.map((block) => (
-                <option key={block.id} value={block.id}>
-                  {block.name}
-                </option>
-              ))}
-            </select>
-            <span className="field-hint">
-              Opcional. Se preenchido, é usado apenas nas linhas sem bloco; as
-              demais usam o bloco da planilha. Pode ficar em branco.
-            </span>
-          </div>
-        )}
 
         <div className="form-field">
           Opções
@@ -263,12 +310,7 @@ export function ResidentsImportPanel({
           <button
             className="primary-button"
             type="button"
-            disabled={
-              !analysis ||
-              analysis.importableRows.length === 0 ||
-              analysis.counts.errors > 0 ||
-              importing
-            }
+            disabled={!canImport || importing}
             onClick={() => void handleImport()}
           >
             {importing ? "Importando..." : "Importar"}
@@ -317,6 +359,54 @@ export function ResidentsImportPanel({
               .join(" · ")}
           </p>
         </div>
+      )}
+
+      {source && mapping.unit >= 0 && blockValues.length > 0 && (
+        <div className="resident-import-block-info">
+          <strong>Blocos encontrados na planilha</strong>
+          <p className="field-hint">
+            {blockValues.length} bloco(s): {blockValues.join(" · ")}. Eles serão
+            criados automaticamente se ainda não existirem.
+          </p>
+          {emptyBlockRows > 0 && (
+            <p className="field-hint">
+              {emptyBlockRows} linha(s) sem bloco ficarão sem bloco.
+            </p>
+          )}
+        </div>
+      )}
+
+      {needsBlockQuestion && (
+        <fieldset className="resident-import-block-choice">
+          <legend>
+            O condomínio não tem bloco ou você está cadastrando o primeiro bloco?
+          </legend>
+          <label className="choice-options">
+            <input
+              type="radio"
+              name="resident-import-block-choice"
+              checked={blockChoice === "none"}
+              onChange={() => chooseBlock("none")}
+              disabled={importing}
+            />
+            Não tem bloco: criar só os apartamentos (prédio de bloco único)
+          </label>
+          <label className="choice-options">
+            <input
+              type="radio"
+              name="resident-import-block-choice"
+              checked={blockChoice === "first"}
+              onChange={() => chooseBlock("first")}
+              disabled={importing}
+            />
+            Estou criando o primeiro bloco: cadastrar como Bloco 1
+          </label>
+          {!blockChoice && (
+            <p className="field-hint">
+              Escolha uma das opções acima para liberar a importação.
+            </p>
+          )}
+        </fieldset>
       )}
 
       {error && (
