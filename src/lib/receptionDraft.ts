@@ -23,6 +23,8 @@ export type ReceptionDraft = {
   unitCandidates: DraftUnit[];
   /** Opcional para não invalidar rascunhos salvos antes desta versão. */
   readUnitNumber?: string;
+  /** Bloco escolhido/preenchido pela leitura, quando o condomínio usa blocos. */
+  selectedBlockId?: string;
   recipientName: string;
   recipientNameDetected: boolean;
   recipientIsResident: boolean;

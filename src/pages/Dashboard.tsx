@@ -3,6 +3,7 @@ import { ArrowUpRight, Building2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PackageNotebook, type NotebookBuilding } from "../components/PackageNotebook";
 import { useAuth } from "../contexts/AuthContext";
+import { cepDigits, lookupCepAddress } from "../lib/addressLookup";
 import { supabase } from "../lib/supabase";
 
 type AccessDuration =
@@ -167,14 +168,6 @@ const resetPreviewLabels: { key: keyof ResetPreview; label: string }[] = [
   { key: "storage_objects", label: "Fotos e arquivos privados" },
 ];
 
-type ViaCepResponse = {
-  logradouro?: string;
-  bairro?: string;
-  localidade?: string;
-  uf?: string;
-  erro?: boolean;
-};
-
 type CepLookupStatus = "idle" | "loading" | "success" | "not-found" | "error";
 
 type CondominiumForm = {
@@ -307,7 +300,7 @@ export function Dashboard() {
   }, [user]);
 
   useEffect(() => {
-    const cep = form.cep.replace(/\D/g, "");
+    const cep = cepDigits(form.cep);
     if (cep.length !== 8) return;
 
     const controller = new AbortController();
@@ -316,28 +309,20 @@ export function Dashboard() {
     const timeout = window.setTimeout(() => {
       void (async () => {
         try {
-          const response = await fetch(
-            `https://viacep.com.br/ws/${cep}/json/`,
-            { signal: controller.signal },
-          );
-          if (!response.ok) {
-            throw new Error("Falha na consulta do CEP.");
-          }
-
-          const address = (await response.json()) as ViaCepResponse;
+          const address = await lookupCepAddress(cep, controller.signal);
           if (!active) return;
 
-          if (address.erro) {
+          if (!address) {
             setCepLookupStatus("not-found");
             return;
           }
 
           setForm((current) => ({
             ...current,
-            street: current.street || address.logradouro || "",
-            neighborhood: current.neighborhood || address.bairro || "",
-            city: current.city || address.localidade || "",
-            state: current.state || address.uf || "",
+            street: current.street || address.street,
+            neighborhood: current.neighborhood || address.neighborhood,
+            city: current.city || address.city,
+            state: current.state || address.state,
           }));
           setCepLookupStatus("success");
         } catch {
@@ -354,6 +339,26 @@ export function Dashboard() {
       controller.abort();
     };
   }, [form.cep]);
+
+  function applyCepValue(cep: string) {
+    setCepLookupStatus(cepDigits(cep).length === 8 ? "loading" : "idle");
+    setForm((current) => {
+      const replaceAddress =
+        cepDigits(current.cep).length === 8 && current.cep !== cep;
+      return {
+        ...current,
+        cep,
+        ...(replaceAddress
+          ? {
+              street: "",
+              neighborhood: "",
+              city: "",
+              state: "",
+            }
+          : {}),
+      };
+    });
+  }
 
   async function refreshNotebookData(rows: Condominium[]) {
     if (!rows.length) {
@@ -805,31 +810,18 @@ export function Dashboard() {
                       autoComplete="postal-code"
                       inputMode="numeric"
                       value={form.cep}
-                      onChange={(event) => {
-                        const cep = event.target.value;
-                        setCepLookupStatus(
-                          cep.replace(/\D/g, "").length === 8 ? "loading" : "idle",
-                        );
-                        setForm((current) => {
-                          const replaceAddress =
-                            current.cep.replace(/\D/g, "").length === 8 &&
-                            current.cep !== cep;
-                          return {
-                            ...current,
-                            cep,
-                            ...(replaceAddress
-                              ? {
-                                  street: "",
-                                  neighborhood: "",
-                                  city: "",
-                                  state: "",
-                                }
-                              : {}),
-                          };
-                        });
+                      onChange={(event) => applyCepValue(event.target.value)}
+                      onBlur={(event) => {
+                        // Alguns navegadores preenchem o CEP via autocomplete
+                        // sem disparar o evento que o React observa.
+                        if (event.target.value !== form.cep) {
+                          applyCepValue(event.target.value);
+                        }
                       }}
                     />
                     <span className="field-hint" aria-live="polite">
+                      {cepLookupStatus === "idle" &&
+                        "Digite o CEP para preencher o endereço."}
                       {cepLookupStatus === "loading" &&
                         "Buscando endereço pelo CEP..."}
                       {cepLookupStatus === "success" &&

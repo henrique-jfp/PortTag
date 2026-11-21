@@ -3,6 +3,7 @@ import { ConfirmationDialog } from "../components/ConfirmationDialog";
 import { useAuth } from "../contexts/AuthContext";
 import {
   normalizePorterUsername,
+  resolvePorterUsername,
   suggestPorterUsername,
 } from "../lib/porterAccounts";
 import { supabase } from "../lib/supabase";
@@ -315,6 +316,14 @@ export function CondominiumOperators({
     };
   }, [isSuperAdmin, listVersion, selectedCondominiumId]);
 
+  // A portaria pertence a um condomínio: um id selecionado antes da troca de
+  // condomínio não pode chegar ao servidor, que o rejeitaria.
+  const effectivePortariaId = portarias.some(
+    (portaria) => portaria.id === selectedPortariaId,
+  )
+    ? selectedPortariaId
+    : (portarias[0]?.id ?? "");
+
   const selectedCondominium = condominiums.find(
     (condominium) => condominium.id === selectedCondominiumId,
   );
@@ -323,7 +332,7 @@ export function CondominiumOperators({
     name,
     selectedCondominium?.number ?? "",
   );
-  const username = usernameOverride ?? suggestedUsername;
+  const username = resolvePorterUsername(usernameOverride, suggestedUsername);
 
   function requestConfirmation(
     title: string,
@@ -393,7 +402,7 @@ export function CondominiumOperators({
           condominiumId: selectedCondominiumId,
           name: name.trim(),
           username,
-          portariaId: selectedPortariaId,
+          portariaId: effectivePortariaId,
           accessExpiresAt,
         },
       });
@@ -904,7 +913,7 @@ export function CondominiumOperators({
                 Portaria de origem
                 <select
                   required
-                  value={selectedPortariaId}
+                  value={effectivePortariaId}
                   onChange={(event) => setSelectedPortariaId(event.target.value)}
                   disabled={portarias.length === 0}
                 >
@@ -929,7 +938,7 @@ export function CondominiumOperators({
                 <button
                   className="primary-button"
                   disabled={
-                    saving || !selectedCondominiumId || !selectedPortariaId
+                    saving || !selectedCondominiumId || !effectivePortariaId
                   }
                 >
                   {saving ? "Criando conta..." : "Cadastrar porteiro"}

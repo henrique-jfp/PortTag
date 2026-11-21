@@ -41,6 +41,18 @@ export function suggestPorterUsername(
   return `${streetInitials.slice(0, availableInitials)}${normalizedFirstName}${normalizedNumber}`;
 }
 
+/**
+ * O campo de usuário começa vazio e acompanha a sugestão automática. Se a
+ * pessoa apagar o que digitou, voltamos a sugerir em vez de travar o campo
+ * vazio para sempre.
+ */
+export function resolvePorterUsername(
+  override: string | null,
+  suggested: string,
+) {
+  return override?.trim() ? override : suggested;
+}
+
 export function porterLoginEmail(username: string) {
   return `porter-${normalizePorterUsername(username)}@porter.invalid`;
 }

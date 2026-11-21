@@ -3,6 +3,7 @@ import { emptyLabelLabRules } from "./labelLabRules";
 import {
   detectDeliveryCompany,
   extractTrackingCode,
+  findAiBlockId,
   matchAiUnits,
   matchKnownBarcode,
   type AiPackageLabel,
@@ -165,5 +166,15 @@ describe("associação da unidade lida com o cadastro", () => {
 
   it("não inventa unidade quando o número não está no cadastro", () => {
     expect(matchAiUnits(labelWithUnit("999"), units, [], [])).toEqual([]);
+  });
+
+  it("resolve o bloco lido na etiqueta para o bloco do cadastro", () => {
+    const blocks = [
+      { id: "b1", name: "Bloco 1" },
+      { id: "b2", name: "Bloco B" },
+    ];
+    expect(findAiBlockId("BLOCO B", blocks)).toBe("b2");
+    expect(findAiBlockId("Bl. 1", blocks)).toBe("b1");
+    expect(findAiBlockId("Torre inexistente", blocks)).toBe("");
   });
 });

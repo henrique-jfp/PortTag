@@ -611,6 +611,23 @@ function blockKey(value: string) {
     .trim();
 }
 
+/** Resolve o nome de bloco lido na etiqueta para um bloco do cadastro. */
+export function findAiBlockId<B extends AiLabelBlock>(
+  blockName: string,
+  blocks: B[],
+): string {
+  const block = blockKey(blockName);
+  if (!block) return "";
+  return (
+    blocks.find((candidate) => {
+      const key = blockKey(candidate.name);
+      return (
+        Boolean(key) && (key === block || key.includes(block) || block.includes(key))
+      );
+    })?.id ?? ""
+  );
+}
+
 /**
  * Casa a unidade devolvida pela IA com o cadastro local. A IA lê "APTO 901" ou
  * "Bloco B, 102"; o banco guarda "901" e "Bloco B". A comparação é por chaves
@@ -623,14 +640,8 @@ export function matchAiUnits<T extends AiLabelUnit>(
   blocks: AiLabelBlock[],
   residents: AiLabelResident[],
 ) {
-  const block = label.blockName ? blockKey(label.blockName) : "";
-  const blockId = block
-    ? blocks.find((candidate) => {
-        const key = blockKey(candidate.name);
-        return (
-          Boolean(key) && (key === block || key.includes(block) || block.includes(key))
-        );
-      })?.id
+  const blockId = label.blockName
+    ? findAiBlockId(label.blockName, blocks)
     : "";
 
   const scoped = blockId

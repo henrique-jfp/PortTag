@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { cepDigits, lookupCepAddress } from "../../lib/addressLookup";
 import { supabase } from "../../lib/supabase";
 
 type Condominium = {
@@ -96,26 +97,17 @@ export function ManagerCondominiumPanel({
   }, [condominiumId]);
 
   useEffect(() => {
-    const digits = (form?.cep ?? "").replace(/\D/g, "");
+    const digits = cepDigits(form?.cep ?? "");
     if (digits.length !== 8) return;
     const controller = new AbortController();
+    let active = true;
 
     void (async () => {
       setCepStatus("Consultando CEP...");
       try {
-        const response = await fetch(
-          `https://viacep.com.br/ws/${digits}/json/`,
-          { signal: controller.signal },
-        );
-        if (!response.ok) throw new Error("Falha na consulta.");
-        const address = (await response.json()) as {
-          logradouro?: string;
-          bairro?: string;
-          localidade?: string;
-          uf?: string;
-          erro?: boolean;
-        };
-        if (address.erro) {
+        const address = await lookupCepAddress(digits, controller.signal);
+        if (!active) return;
+        if (!address) {
           setCepStatus("CEP não encontrado.");
           return;
         }
@@ -123,22 +115,25 @@ export function ManagerCondominiumPanel({
           current
             ? {
                 ...current,
-                street: current.street || address.logradouro || "",
-                neighborhood: current.neighborhood || address.bairro || "",
-                city: current.city || address.localidade || "",
-                state: current.state || address.uf || "",
+                street: current.street || address.street,
+                neighborhood: current.neighborhood || address.neighborhood,
+                city: current.city || address.city,
+                state: current.state || address.state,
               }
             : current,
         );
         setCepStatus("Endereço preenchido. Confira os campos.");
       } catch {
-        if (!controller.signal.aborted) {
+        if (active && !controller.signal.aborted) {
           setCepStatus("Não foi possível consultar o CEP. Preencha manualmente.");
         }
       }
     })();
 
-    return () => controller.abort();
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [form?.cep]);
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
@@ -282,10 +277,17 @@ export function ManagerCondominiumPanel({
             <label>
               CEP
               <input
+                autoComplete="postal-code"
+                inputMode="numeric"
                 value={form.cep}
                 onChange={(event) =>
                   setForm({ ...form, cep: event.target.value })
                 }
+                onBlur={(event) => {
+                  if (event.target.value !== form.cep) {
+                    setForm({ ...form, cep: event.target.value });
+                  }
+                }}
                 required
               />
             </label>

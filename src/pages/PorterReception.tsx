@@ -35,6 +35,7 @@ import {
   detectDeliveryCompany,
   extractPackageLabelWithAi,
   extractTrackingCode,
+  findAiBlockId,
   matchKnownBarcode,
   preparePackageImage,
   readPackageCodes,
@@ -276,6 +277,9 @@ type PackageDraft = {
   unitCandidates: Unit[];
   /** Número lido na etiqueta (inclusive "Complemento: 307"), mesmo sem match. */
   readUnitNumber?: string;
+  /** Bloco lido na etiqueta e encontrado no cadastro do condomínio. */
+  blockId?: string;
+  readBlockName?: string;
   recipientName: string;
   recipientIsResident: boolean;
   company: string;
@@ -334,8 +338,11 @@ type BulkCreateResult = {
   duplicate_received_at: string | null;
 };
 
-/** Duas leituras ao mesmo tempo economizam a espera sem estourar a memória. */
-const BULK_READ_CONCURRENCY = 2;
+/**
+ * Uma leitura por vez. Duas leituras simultâneas mantinham duas fotos, dois
+ * bitmaps e dois base64 na memória e derrubavam o WebView de aparelhos fracos.
+ */
+const BULK_READ_CONCURRENCY = 1;
 const BULK_SAVE_LIMIT = 50;
 
 type BulkPackageNotification = {
@@ -415,6 +422,7 @@ function draftFromAi(
   barcodeValues: string[],
   file: File,
   source: File,
+  blocks: Block[],
 ): PackageDraft {
   const detectedRecipient = ai.recipientName.trim();
   const barcodeMatch = matchKnownBarcode(barcodeValues);
@@ -427,6 +435,17 @@ function draftFromAi(
     barcodeMatch?.carrier ||
     ai.carrier ||
     detectDeliveryCompany(`${barcodeValues.join("\n")}\n${code}`);
+
+  // Quando a etiqueta traz o bloco, ele desempata apartamentos repetidos em
+  // torres diferentes e passa a valer também no seletor da tela.
+  const blockId = findAiBlockId(ai.blockName, blocks);
+  let unitId = ai.unitId;
+  if (!unitId && blockId) {
+    const inBlock = ai.unitCandidates.filter(
+      (unit) => unit.block_id === blockId,
+    );
+    if (inBlock.length === 1) unitId = inBlock[0].id;
+  }
 
   const diag = ai.diagnostics;
   const transcript = [
@@ -469,7 +488,7 @@ function draftFromAi(
 
   const detectedFields = [
     detectedRecipient ? "destinatário" : "",
-    ai.unitCandidates.length === 1 ? "apartamento" : "",
+    unitId ? "apartamento" : "",
     carrier ? "empresa" : "",
     code ? "rastreio" : "",
     barcodeMatch ? "código de barras" : "",
@@ -480,9 +499,9 @@ function draftFromAi(
   // aparece em mais de uma unidade). Nesse caso o campo não pode ser preenchido
   // sozinho — mas o porteiro precisa saber qual número foi lido.
   const unitHint =
-    ai.unitNumber && ai.unitCandidates.length === 0
+    ai.unitNumber && !unitId && ai.unitCandidates.length === 0
       ? ` A etiqueta indica a unidade ${ai.unitNumber}, que não está no cadastro deste condomínio; selecione o apartamento manualmente.`
-      : ai.unitNumber && ai.unitCandidates.length > 1
+      : ai.unitNumber && !unitId && ai.unitCandidates.length > 1
         ? ` A etiqueta indica a unidade ${ai.unitNumber}; escolha entre as sugestões acima.`
         : "";
   const readMessage = detectedFields.length
@@ -492,9 +511,11 @@ function draftFromAi(
   return {
     source,
     file,
-    unitId: ai.unitId,
+    unitId,
     unitCandidates: ai.unitCandidates,
     readUnitNumber: ai.unitNumber,
+    blockId,
+    readBlockName: ai.blockName,
     recipientName: detectedRecipient,
     recipientIsResident: false,
     company: carrier,
@@ -553,6 +574,8 @@ function draftFromBarcodeOnly(
     unitId: "",
     unitCandidates: [],
     readUnitNumber: "",
+    blockId: "",
+    readBlockName: "",
     recipientName: "",
     recipientIsResident: false,
     company: detectedCompany,
@@ -565,6 +588,19 @@ function draftFromBarcodeOnly(
     labelRead: label,
     ocrMessage,
   };
+}
+
+/**
+ * A leitura pode devolver mais de um candidato quando dois blocos têm o mesmo
+ * número de apartamento. Com o bloco identificado na etiqueta, escolher o
+ * candidato daquele bloco evita deixar o campo só com sugestões.
+ */
+function resolveDraftUnitId(draft: PackageDraft): string {
+  if (draft.unitId) return draft.unitId;
+  const scoped = draft.blockId
+    ? draft.unitCandidates.filter((unit) => unit.block_id === draft.blockId)
+    : draft.unitCandidates;
+  return scoped.length === 1 ? scoped[0].id : "";
 }
 
 type Settled<T> =
@@ -667,7 +703,7 @@ async function readLabelFromPhoto(
         aiError: ai.diagnostics?.aiError,
         aiSkipped: ai.diagnostics?.aiSkipped,
       });
-      return draftFromAi(ai, barcodeValues, compressed.file, image);
+      return draftFromAi(ai, barcodeValues, compressed.file, image, ctx.blocks);
     }
 
     const detail =
@@ -872,6 +908,7 @@ export function PorterReception() {
   const [unitCandidates, setUnitCandidates] = useState<Unit[]>([]);
   const [unitId, setUnitId] = useState("");
   const [readUnitNumber, setReadUnitNumber] = useState("");
+  const [selectedBlockId, setSelectedBlockId] = useState("");
   const [deliveryPerson, setDeliveryPerson] = useState("");
   const [company, setCompany] = useState("");
   const [trackingCode, setTrackingCode] = useState("");
@@ -943,6 +980,13 @@ export function PorterReception() {
   // Toda consulta e todo caderno do porteiro usam a portaria atual — inclusive
   // quando ele está em plantão fora da portaria de origem.
   const currentBlockId = currentPortaria?.block_id ?? null;
+  const hasBlocks = Boolean(condominium?.block_count || blocks.length);
+  const availableBlocks = currentBlockId
+    ? blocks.filter((block) => block.id === currentBlockId)
+    : blocks;
+  const selectableUnits = selectedBlockId
+    ? units.filter((unit) => unit.block_id === selectedBlockId)
+    : units;
   const includeBlocklessUnits = condominium
     ? allowsBlocklessUnits(condominium.operation_mode, condominium.block_count)
     : false;
@@ -1227,6 +1271,7 @@ export function PorterReception() {
         null;
       setCurrentPortaria(activePortaria);
       setHomePortaria(originPortaria);
+      setSelectedBlockId(activePortaria?.block_id ?? "");
       portariaSignatureRef.current = portariaSignature(
         porterData.current_portaria_id,
         porterData.home_portaria_id,
@@ -1412,6 +1457,7 @@ export function PorterReception() {
         );
         setCurrentPortaria(nextCurrent);
         setHomePortaria(nextHome);
+        setSelectedBlockId(nextCurrent?.block_id ?? "");
         setPortariaViewToken((token) => token + 1);
 
         const ctx = gatehouseContextRef.current;
@@ -1847,10 +1893,18 @@ export function PorterReception() {
   }
 
   function applyDraftToForm(draft: PackageDraft, preview: string) {
+    const readBlockId = availableBlocks.some((block) => block.id === draft.blockId)
+      ? (draft.blockId as string)
+      : draft.unitCandidates.find((unit) => unit.id === draft.unitId)
+          ?.block_id ?? "";
+    if (readBlockId) setSelectedBlockId(readBlockId);
+    const resolvedDraft: PackageDraft = readBlockId
+      ? { ...draft, blockId: readBlockId }
+      : draft;
     setFile(draft.file);
     setPreviewUrl(preview);
     setUnitCandidates(draft.unitCandidates);
-    setUnitId(draft.unitId);
+    setUnitId(resolveDraftUnitId(resolvedDraft));
     setReadUnitNumber(draft.readUnitNumber ?? "");
     setDeliveryPerson(draft.deliveryPerson || lastDeliveryPerson);
     setCompany(draft.company);
@@ -1882,6 +1936,7 @@ export function PorterReception() {
       unitId,
       unitCandidates: unitCandidates as DraftUnit[],
       readUnitNumber,
+      selectedBlockId,
       recipientName,
       recipientNameDetected,
       recipientIsResident,
@@ -1931,6 +1986,7 @@ export function PorterReception() {
     );
     setUnitId(draft.unitId);
     setReadUnitNumber(draft.readUnitNumber ?? "");
+    setSelectedBlockId(draft.selectedBlockId || currentBlockId || "");
     setRecipientName(draft.recipientName);
     setRecipientNameDetected(draft.recipientNameDetected);
     setRecipientIsResident(draft.recipientIsResident);
@@ -2048,12 +2104,15 @@ export function PorterReception() {
     } catch (error) {
       if (requestId === readRequestId.current) {
         setIsReading(false);
-        setPageError(
-          friendlyError(
-            error,
-            "Não foi possível preparar a foto. Tente novamente.",
-          ),
+        const message = friendlyError(
+          error,
+          "Não foi possível preparar a foto. Tente novamente.",
         );
+        setPageError(message);
+        if (isDeviceResourceError(error)) {
+          clearPreviewUrl();
+          setFile(null);
+        }
       }
       return;
     }
@@ -2084,6 +2143,8 @@ export function PorterReception() {
       logRead("leitura concluída");
       if (isDeviceResourceError(draft.labelRead?.error)) {
         setPageError(DEVICE_RESOURCE_MESSAGE);
+        clearPreviewUrl();
+        setFile(null);
       }
     } catch (error) {
       if (requestId !== readRequestId.current) return;
@@ -2092,6 +2153,10 @@ export function PorterReception() {
         "Não foi possível processar a foto. Tente novamente.",
       );
       setPageError(message);
+      if (isDeviceResourceError(error)) {
+        clearPreviewUrl();
+        setFile(null);
+      }
       setAddressVerification({
         status: "unknown",
         message: defaultAddressMessage("unknown"),
@@ -2263,6 +2328,21 @@ export function PorterReception() {
     patchBulkItem(id, { source: null, draft: null, previewUrl: "" });
   }
 
+  /**
+   * Depois da leitura, a miniatura passa a usar o JPEG comprimido. A foto
+   * original do celular (até 10 MB) deixa de ficar presa ao blob URL e ao
+   * estado do item, o que derrubava o WebView em aparelhos com pouca memória.
+   */
+  function compressedBulkPreview(item: BulkItem, file: File) {
+    const previewUrl = URL.createObjectURL(file);
+    bulkPreviewUrls.current.add(previewUrl);
+    if (item.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl);
+      bulkPreviewUrls.current.delete(item.previewUrl);
+    }
+    return { source: file, previewUrl };
+  }
+
   function handleBulkFilesChange(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
@@ -2427,6 +2507,7 @@ export function PorterReception() {
     }
 
     if (isDeviceResourceError(draft.labelRead?.error)) {
+      bulkCancelled.current = true;
       patchBulkItem(item.id, {
         status: "error",
         draft,
@@ -2438,12 +2519,18 @@ export function PorterReception() {
     // Empresa e entregador podem ser definidos uma vez para a fila inteira.
     // A leitura preenche o que faltar. Empresa não é obrigatória: a etiqueta
     // nem sempre traz a transportadora e isso não pode travar a fila.
+    const readBlockId = availableBlocks.some((block) => block.id === draft.blockId)
+      ? (draft.blockId as string)
+      : "";
     const effective: PackageDraft = {
       ...draft,
+      blockId: readBlockId,
+      unitId: resolveDraftUnitId(readBlockId ? { ...draft, blockId: readBlockId } : draft),
       company: bulkCompany.trim() || draft.company.trim(),
       deliveryPerson: bulkDeliveryPerson.trim() || lastDeliveryPerson.trim(),
     };
     patchBulkItem(item.id, {
+      ...compressedBulkPreview(item, effective.file),
       status: "review",
       draft: effective,
       message: "Etiqueta lida. Confira os dados.",
@@ -2451,8 +2538,8 @@ export function PorterReception() {
   }
 
   /**
-   * Lê a fila com duas leituras simultâneas. O porteiro pode revisar um item
-   * enquanto os próximos ainda estão sendo lidos.
+   * Lê a fila uma foto por vez. O porteiro pode revisar um item enquanto os
+   * próximos ainda estão sendo lidos, sem acumular bitmaps na memória.
    */
   async function readBulkQueue(queue: BulkItem[]) {
     let cursor = 0;
@@ -2746,10 +2833,13 @@ export function PorterReception() {
     setPageError("");
     setSuccessMessage("");
     setBulkRunning(true);
+    let savedIds: string[] = [];
+    let notified = false;
     try {
-      const savedIds = await saveBulkBatch(saveable);
+      savedIds = await saveBulkBatch(saveable);
       if (savedIds.length && bulkNotifyOnReceive) {
         await notifyBulkPackages(savedIds);
+        notified = true;
       }
       const remaining = bulkItemsRef.current.filter(
         (item) => item.status === "review",
@@ -2764,22 +2854,26 @@ export function PorterReception() {
     } finally {
       setBulkRunning(false);
     }
-    await reloadPackages();
+    // Só recarrega o caderno se algo mudou; o aviso já recarrega quando envia.
+    if (savedIds.length && !notified) await reloadPackages();
   }
 
   async function saveSingleBulkItem(item: BulkItem) {
     if (bulkRunning) return;
     setPageError("");
     setBulkRunning(true);
+    let savedIds: string[] = [];
+    let notified = false;
     try {
-      const savedIds = await saveBulkBatch([item]);
+      savedIds = await saveBulkBatch([item]);
       if (savedIds.length && bulkNotifyOnReceive) {
         await notifyBulkPackages(savedIds);
+        notified = true;
       }
     } finally {
       setBulkRunning(false);
     }
-    await reloadPackages();
+    if (savedIds.length && !notified) await reloadPackages();
   }
 
   async function notifyBulkPackages(packageIds: string[]) {
@@ -2891,6 +2985,8 @@ export function PorterReception() {
     setSuccessMessage("");
     bulkCancelled.current = false;
     setBulkRunning(true);
+    let savedPackageIds: string[] = [];
+    let notified = false;
     try {
       await readBulkQueue(queue);
 
@@ -2908,9 +3004,10 @@ export function PorterReception() {
             item.draft &&
             bulkItemReasons(item).length === 0,
         );
-        const savedPackageIds = await saveBulkBatch(saveable);
+        savedPackageIds = await saveBulkBatch(saveable);
         if (savedPackageIds.length && bulkNotifyOnReceive) {
           await notifyBulkPackages(savedPackageIds);
+          notified = true;
         }
 
         const remaining = bulkItemsRef.current.filter(
@@ -2935,7 +3032,7 @@ export function PorterReception() {
     } finally {
       setBulkRunning(false);
     }
-    await reloadPackages();
+    if (savedPackageIds.length && !notified) await reloadPackages();
   }
 
   async function retryBulkItem(item: BulkItem) {
@@ -3543,6 +3640,48 @@ export function PorterReception() {
                       className="porter-form"
                       onSubmit={handleReceive}
                     >
+                      {hasBlocks && availableBlocks.length > 0 && (
+                        <label>
+                          Bloco
+                          <select
+                            value={selectedBlockId}
+                            onChange={(event) => {
+                              const nextBlockId = event.target.value;
+                              setSelectedBlockId(nextBlockId);
+                              const inBlock = nextBlockId
+                                ? unitCandidates.filter(
+                                    (unit) => unit.block_id === nextBlockId,
+                                  )
+                                : unitCandidates;
+                              if (
+                                unitId &&
+                                !inBlock.some((unit) => unit.id === unitId)
+                              ) {
+                                setUnitId(
+                                  inBlock.length === 1 ? inBlock[0].id : "",
+                                );
+                              } else if (!unitId && inBlock.length === 1) {
+                                setUnitId(inBlock[0].id);
+                              }
+                            }}
+                          >
+                            {!currentBlockId && (
+                              <option value="">Todos os blocos</option>
+                            )}
+                            {availableBlocks.map((block) => (
+                              <option key={block.id} value={block.id}>
+                                {block.name}
+                              </option>
+                            ))}
+                          </select>
+                          {currentBlockId && (
+                            <small>
+                              Bloco definido pela portaria e preenchido pela
+                              leitura da etiqueta.
+                            </small>
+                          )}
+                        </label>
+                      )}
                       <label>
                         Apartamento
                         <select
@@ -3564,7 +3703,7 @@ export function PorterReception() {
                             </optgroup>
                           )}
                           <optgroup label="Apartamentos desta portaria">
-                            {units.map((unit) => (
+                            {selectableUnits.map((unit) => (
                               <option key={unit.id} value={unit.id}>
                                 {blocks.find((block) => block.id === unit.block_id)?.name
                                   ? `${blocks.find((block) => block.id === unit.block_id)?.name} · `
@@ -3990,13 +4129,39 @@ export function PorterReception() {
                                     units={units}
                                     blocks={blocks}
                                     value={item.draft.unitId}
+                                    blockId={item.draft.blockId ?? ""}
                                     readUnitNumber={item.draft.readUnitNumber}
                                     candidates={item.draft.unitCandidates}
                                     itemId={item.id}
                                     disabled={bulkRunning}
+                                    showBlock={hasBlocks}
+                                    allowAnyBlock={!currentBlockId}
                                     onChange={(unitId) =>
                                       updateBulkDraft(item.id, { unitId })
                                     }
+                                    onBlockChange={(blockId) => {
+                                      const candidates =
+                                        item.draft?.unitCandidates ?? [];
+                                      const inBlock = blockId
+                                        ? candidates.filter(
+                                            (unit) => unit.block_id === blockId,
+                                          )
+                                        : candidates;
+                                      const currentUnit = item.draft?.unitId;
+                                      const unitId =
+                                        currentUnit &&
+                                        inBlock.some(
+                                          (unit) => unit.id === currentUnit,
+                                        )
+                                          ? currentUnit
+                                          : inBlock.length === 1
+                                            ? inBlock[0].id
+                                            : "";
+                                      updateBulkDraft(item.id, {
+                                        blockId,
+                                        unitId,
+                                      });
+                                    }}
                                     onCommit={() =>
                                       focusNextBulkUnit(item.id)
                                     }

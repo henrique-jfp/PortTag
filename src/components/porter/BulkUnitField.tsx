@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type KeyboardEvent } from "react";
+import { useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 type UnitOption = {
   id: string;
@@ -15,11 +15,15 @@ type BulkUnitFieldProps = {
   units: UnitOption[];
   blocks: BlockOption[];
   value: string;
+  blockId?: string;
   readUnitNumber?: string;
   candidates: UnitOption[];
   itemId: string;
   disabled?: boolean;
+  showBlock?: boolean;
+  allowAnyBlock?: boolean;
   onChange: (unitId: string) => void;
+  onBlockChange: (blockId: string) => void;
   onCommit: () => void;
 };
 
@@ -32,21 +36,48 @@ function unitLabel(unit: UnitOption, blocks: BlockOption[]) {
  * Campo de apartamento da revisão em lote. Digitar o número é mais rápido do
  * que rolar a lista inteira do condomínio no celular; as sugestões da leitura
  * ficam a um toque e o Enter passa para a próxima foto.
+ *
+ * O valor vem do OCR depois de o componente já estar montado, então o texto
+ * precisa acompanhar `value` — guardá-lo só no estado inicial fazia o
+ * apartamento aparecer como sugestão em vez de vir preenchido.
  */
 export function BulkUnitField({
   units,
   blocks,
   value,
+  blockId = "",
   readUnitNumber,
   candidates,
   itemId,
   disabled,
+  showBlock = false,
+  allowAnyBlock = false,
   onChange,
+  onBlockChange,
   onCommit,
 }: BulkUnitFieldProps) {
   const inputId = useId();
+  const blockSelectId = useId();
   const selected = units.find((unit) => unit.id === value) ?? null;
-  const [query, setQuery] = useState(selected?.unit_number ?? "");
+  const [draftQuery, setDraftQuery] = useState<string | null>(null);
+  const previousValue = useRef(value);
+  // A leitura chega depois de o campo existir. Quando o valor selecionado muda,
+  // o texto digitado deixa de valer e o número reconhecido aparece preenchido.
+  if (previousValue.current !== value) {
+    previousValue.current = value;
+    setDraftQuery(null);
+  }
+  const query = draftQuery ?? selected?.unit_number ?? "";
+
+  const visibleUnits = useMemo(
+    () => (blockId ? units.filter((unit) => unit.block_id === blockId) : units),
+    [units, blockId],
+  );
+
+  const visibleBlocks = useMemo(
+    () => blocks.filter((block) => units.some((unit) => unit.block_id === block.id)),
+    [blocks, units],
+  );
 
   const term = query.trim().toLocaleLowerCase("pt-BR");
   const matches = useMemo(() => {
@@ -56,7 +87,7 @@ export function BulkUnitField({
       if (number === term) return 0;
       return number.startsWith(term) ? 1 : 2;
     };
-    return units
+    return visibleUnits
       .filter((unit) =>
         unit.unit_number.toLocaleLowerCase("pt-BR").includes(term),
       )
@@ -68,7 +99,7 @@ export function BulkUnitField({
           }),
       )
       .slice(0, 6);
-  }, [term, units]);
+  }, [term, visibleUnits]);
 
   const readCandidates = useMemo(() => {
     const map = new Map<string, UnitOption>();
@@ -85,12 +116,12 @@ export function BulkUnitField({
     : true;
 
   function select(unit: UnitOption) {
-    setQuery(unit.unit_number);
+    setDraftQuery(null);
     onChange(unit.id);
   }
 
   function handleQuery(next: string) {
-    setQuery(next);
+    setDraftQuery(next);
     if (selected && next.trim() !== selected.unit_number) onChange("");
   }
 
@@ -105,6 +136,24 @@ export function BulkUnitField({
 
   return (
     <div className="porter-bulk-unit">
+      {showBlock && visibleBlocks.length > 0 && (
+        <label className="porter-bulk-block" htmlFor={blockSelectId}>
+          Bloco
+          <select
+            id={blockSelectId}
+            value={blockId}
+            disabled={disabled}
+            onChange={(event) => onBlockChange(event.target.value)}
+          >
+            {allowAnyBlock && <option value="">Todos os blocos</option>}
+            {visibleBlocks.map((block) => (
+              <option key={block.id} value={block.id}>
+                {block.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label htmlFor={inputId}>Apartamento</label>
       <input
         id={inputId}
