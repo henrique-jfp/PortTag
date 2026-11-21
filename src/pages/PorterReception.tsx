@@ -826,7 +826,9 @@ export function PorterReception() {
   const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkNotifying, setBulkNotifying] = useState(false);
-  const [bulkNotifyOnReceive, setBulkNotifyOnReceive] = useState(false);
+  // No fluxo de lote, avisar é a ação esperada. A caixa continua disponível
+  // para o porteiro desmarcar quando for necessário apenas registrar.
+  const [bulkNotifyOnReceive, setBulkNotifyOnReceive] = useState(true);
   const [bulkNotificationMessage, setBulkNotificationMessage] = useState("");
   const [bulkManualNotifications, setBulkManualNotifications] = useState<
     BulkManualNotification[]
