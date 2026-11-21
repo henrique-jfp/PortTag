@@ -46,12 +46,16 @@ export type ResidentImportSource = {
   rows: readonly (readonly unknown[])[];
 };
 
-/** Índices das colunas escolhidas; `-1` significa "não usar". */
+/**
+ * Índices das colunas escolhidas; `-1` significa "não usar".
+ * `names` e `phones` são listas porque uma mesma linha pode conter Morador 1,
+ * Morador 2, Morador 3 etc. e seus respectivos telefones.
+ */
 export type ResidentColumnMapping = {
   unit: number;
   block: number;
-  name: number;
-  phone: number;
+  names: number[];
+  phones: number[];
 };
 
 export const NO_COLUMN = -1;
@@ -116,6 +120,13 @@ function cellToString(value: unknown): string {
   return value === null || value === undefined ? "" : String(value).trim();
 }
 
+function columnMatches(header: string, aliases: string[]): boolean {
+  return (
+    aliases.includes(header) ||
+    aliases.some((alias) => alias.length > 2 && header.includes(alias))
+  );
+}
+
 function findColumn(
   headers: string[],
   aliases: string[],
@@ -127,9 +138,17 @@ function findColumn(
   if (exact >= 0) return exact;
 
   return headers.findIndex(
-    (header, index) =>
-      !used.has(index) &&
-      aliases.some((alias) => alias.length > 2 && header.includes(alias)),
+    (header, index) => !used.has(index) && columnMatches(header, aliases),
+  );
+}
+
+function findColumns(
+  headers: string[],
+  aliases: string[],
+  used: Set<number>,
+): number[] {
+  return headers.flatMap((header, index) =>
+    !used.has(index) && columnMatches(header, aliases) ? [index] : [],
   );
 }
 
@@ -147,11 +166,12 @@ export function guessResidentColumnMapping(
   if (unit >= 0) used.add(unit);
   const block = findColumn(normalized, BLOCK_HEADERS, used);
   if (block >= 0) used.add(block);
-  const name = findColumn(normalized, NAME_HEADERS, used);
-  if (name >= 0) used.add(name);
-  const phone = findColumn(normalized, PHONE_HEADERS, used);
 
-  return { unit, block, name, phone };
+  const names = findColumns(normalized, NAME_HEADERS, used);
+  names.forEach((index) => used.add(index));
+  const phones = findColumns(normalized, PHONE_HEADERS, used);
+
+  return { unit, block, names, phones };
 }
 
 /** Converte as colunas escolhidas nas linhas enviadas para a RPC. */
@@ -162,12 +182,25 @@ export function mapResidentRows(
   const valueAt = (row: readonly unknown[], index: number) =>
     index >= 0 && index < row.length ? cellToString(row[index]) : "";
 
-  return source.rows.map((row) => ({
-    unit_number: valueAt(row, mapping.unit),
-    block_name: mapping.block >= 0 ? valueAt(row, mapping.block) : null,
-    name: mapping.name >= 0 ? valueAt(row, mapping.name) : null,
-    whatsapp: mapping.phone >= 0 ? normalizePhone(valueAt(row, mapping.phone)) : null,
-  }));
+  return source.rows.flatMap((row) => {
+    const unit_number = valueAt(row, mapping.unit);
+    const block_name = mapping.block >= 0 ? valueAt(row, mapping.block) : null;
+    const residentCount = Math.max(mapping.names.length, mapping.phones.length, 1);
+
+    return Array.from({ length: residentCount }, (_, index) => {
+      const nameIndex = mapping.names[index] ?? NO_COLUMN;
+      const phoneIndex = mapping.phones[index] ?? NO_COLUMN;
+      return {
+        unit_number,
+        block_name,
+        name: nameIndex >= 0 ? valueAt(row, nameIndex) || null : null,
+        whatsapp:
+          phoneIndex >= 0
+            ? normalizePhone(valueAt(row, phoneIndex)) || null
+            : null,
+      };
+    });
+  });
 }
 
 function sourceFromMatrix(

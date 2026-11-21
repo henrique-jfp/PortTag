@@ -27,41 +27,30 @@ type ImportRpcResult = {
   duplicates_skipped?: number;
 };
 
-const MAPPING_FIELDS: {
-  key: keyof ResidentColumnMapping;
-  label: string;
-  hint: string;
-  required?: boolean;
-}[] = [
-  {
-    key: "unit",
-    label: "Unidade / Apartamento",
-    hint: "Obrigatório. Ex.: 101, Apto 201, Nº do imóvel.",
-    required: true,
-  },
-  {
-    key: "block",
-    label: "Bloco / Torre",
-    hint: "Opcional. Os blocos encontrados são criados automaticamente.",
-  },
-  {
-    key: "name",
-    label: "Nome do morador",
-    hint: "Opcional. Linhas sem nome criam apenas a unidade.",
-  },
-  {
-    key: "phone",
-    label: "Telefone / WhatsApp",
-    hint: "Opcional. Números são normalizados ao importar.",
-  },
-];
+const UNIT_FIELD = {
+  key: "unit" as const,
+  label: "Unidade / Apartamento",
+  hint: "Obrigatório. Ex.: 101, Apto 201, Nº do imóvel.",
+  required: true,
+};
+
+const BLOCK_FIELD = {
+  key: "block" as const,
+  label: "Bloco / Torre",
+  hint: "Opcional. Os blocos encontrados são criados automaticamente.",
+  required: false,
+};
 
 const EMPTY_MAPPING: ResidentColumnMapping = {
   unit: NO_COLUMN,
   block: NO_COLUMN,
-  name: NO_COLUMN,
-  phone: NO_COLUMN,
+  names: [],
+  phones: [],
 };
+
+function ensureOneSlot(values: readonly number[]): number[] {
+  return values.length > 0 ? [...values] : [NO_COLUMN];
+}
 
 function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? `${fallback} ${cause.message}` : fallback;
@@ -180,15 +169,49 @@ export function ResidentsImportPanel({
     }
   }
 
-  function updateMapping(field: keyof ResidentColumnMapping, value: string) {
-    setMapping((current) => ({
-      ...current,
-      [field]: Number.parseInt(value, 10),
-    }));
+  function invalidatePreview() {
     setBlockChoice(null);
     setAnalysis(null);
     setSummary("");
     setError("");
+  }
+
+  function updateSimpleMapping(field: "unit" | "block", value: string) {
+    setMapping((current) => ({
+      ...current,
+      [field]: Number.parseInt(value, 10),
+    }));
+    invalidatePreview();
+  }
+
+  function updateListMapping(
+    field: "names" | "phones",
+    index: number,
+    value: string,
+  ) {
+    setMapping((current) => {
+      const list = ensureOneSlot(current[field]);
+      list[index] = Number.parseInt(value, 10);
+      return { ...current, [field]: list };
+    });
+    invalidatePreview();
+  }
+
+  function addListSlot(field: "names" | "phones") {
+    setMapping((current) => ({
+      ...current,
+      [field]: [...ensureOneSlot(current[field]), NO_COLUMN],
+    }));
+    invalidatePreview();
+  }
+
+  function removeListSlot(field: "names" | "phones", index: number) {
+    setMapping((current) => {
+      const list = ensureOneSlot(current[field]);
+      list.splice(index, 1);
+      return { ...current, [field]: ensureOneSlot(list) };
+    });
+    invalidatePreview();
   }
 
   function chooseBlock(choice: Exclude<ResidentImportBlockChoice, null>) {
@@ -329,18 +352,21 @@ export function ResidentsImportPanel({
               <p>
                 Encontramos {source.headers.length} coluna(s). Escolha em qual
                 coluna está cada informação; apenas a unidade é obrigatória.
+                Se houver Morador 1, Morador 2 etc., adicione uma coluna de
+                morador para cada um. Cada nome é pareado com o telefone da
+                mesma posição.
               </p>
             </div>
           </div>
           <div className="resident-import-mapping-grid">
-            {MAPPING_FIELDS.map((field) => (
+            {[UNIT_FIELD, BLOCK_FIELD].map((field) => (
               <label className="form-field" key={field.key}>
                 {field.label}
                 {field.required ? " *" : ""}
                 <select
                   value={mapping[field.key]}
                   onChange={(event) =>
-                    updateMapping(field.key, event.target.value)
+                    updateSimpleMapping(field.key, event.target.value)
                   }
                   disabled={importing}
                 >
@@ -354,6 +380,118 @@ export function ResidentsImportPanel({
                 <span className="field-hint">{field.hint}</span>
               </label>
             ))}
+          </div>
+
+          <div className="resident-import-mapping-list">
+            <div className="resident-import-list-heading">
+              <h5>Colunas de morador</h5>
+              <p className="field-hint">
+                Uma linha da planilha pode gerar vários moradores no mesmo
+                apartamento.
+              </p>
+            </div>
+            <div className="resident-import-mapping-grid">
+              {ensureOneSlot(mapping.names).map((value, index) => (
+                <div className="form-field" key={`name-${index}`}>
+                  Nome do morador {mapping.names.length > 1 ? index + 1 : ""}
+                  <div className="mapping-slot-row">
+                    <select
+                      value={value}
+                      onChange={(event) =>
+                        updateListMapping("names", index, event.target.value)
+                      }
+                      disabled={importing}
+                    >
+                      <option value={NO_COLUMN}>Não usar</option>
+                      {source.headers.map((header, headerIndex) => (
+                        <option
+                          key={`${header}-${headerIndex}`}
+                          value={headerIndex}
+                        >
+                          {headerIndex + 1}. {header || `(coluna ${headerIndex + 1})`}
+                        </option>
+                      ))}
+                    </select>
+                    {mapping.names.length > 1 && (
+                      <button
+                        className="icon-button"
+                        type="button"
+                        aria-label={`Remover coluna de morador ${index + 1}`}
+                        title="Remover esta coluna de morador"
+                        disabled={importing}
+                        onClick={() => removeListSlot("names", index)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              className="text-button"
+              type="button"
+              disabled={importing}
+              onClick={() => addListSlot("names")}
+            >
+              + Adicionar outra coluna de morador
+            </button>
+          </div>
+
+          <div className="resident-import-mapping-list">
+            <div className="resident-import-list-heading">
+              <h5>Colunas de telefone / WhatsApp</h5>
+              <p className="field-hint">
+                Opcional. O telefone 1 fica com o morador 1, o 2 com o morador 2
+                e assim por diante.
+              </p>
+            </div>
+            <div className="resident-import-mapping-grid">
+              {ensureOneSlot(mapping.phones).map((value, index) => (
+                <div className="form-field" key={`phone-${index}`}>
+                  Telefone / WhatsApp {mapping.phones.length > 1 ? index + 1 : ""}
+                  <div className="mapping-slot-row">
+                    <select
+                      value={value}
+                      onChange={(event) =>
+                        updateListMapping("phones", index, event.target.value)
+                      }
+                      disabled={importing}
+                    >
+                      <option value={NO_COLUMN}>Não usar</option>
+                      {source.headers.map((header, headerIndex) => (
+                        <option
+                          key={`${header}-${headerIndex}`}
+                          value={headerIndex}
+                        >
+                          {headerIndex + 1}. {header || `(coluna ${headerIndex + 1})`}
+                        </option>
+                      ))}
+                    </select>
+                    {mapping.phones.length > 1 && (
+                      <button
+                        className="icon-button"
+                        type="button"
+                        aria-label={`Remover coluna de telefone ${index + 1}`}
+                        title="Remover esta coluna de telefone"
+                        disabled={importing}
+                        onClick={() => removeListSlot("phones", index)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              className="text-button"
+              type="button"
+              disabled={importing}
+              onClick={() => addListSlot("phones")}
+            >
+              + Adicionar outro telefone / WhatsApp
+            </button>
           </div>
           <p className="field-hint">
             Cabeçalhos encontrados:{" "}

@@ -46,7 +46,7 @@ describe("readResidentFile + mapeamento explícito", () => {
     ]);
 
     const mapping = guessResidentColumnMapping(source.headers);
-    expect(mapping).toEqual({ unit: 0, block: 1, name: 2, phone: 3 });
+    expect(mapping).toEqual({ unit: 0, block: 1, names: [2], phones: [3] });
     expect(mapResidentRows(source, mapping)).toEqual([
       {
         unit_number: "101",
@@ -75,8 +75,8 @@ describe("readResidentFile + mapeamento explícito", () => {
     const mapping = {
       unit: 1,
       block: 2,
-      name: 3,
-      phone: 4,
+      names: [3],
+      phones: [4],
     };
 
     expect(mapResidentRows(source, mapping)).toEqual([
@@ -85,6 +85,39 @@ describe("readResidentFile + mapeamento explícito", () => {
         block_name: "A",
         name: "Marina",
         whatsapp: "21988887777",
+      },
+    ]);
+  });
+
+  it("gera um morador por coluna quando a planilha usa Morador 1, 2 e 3", async () => {
+    const source = await readResidentFile(
+      csvFile(
+        "Apto;Morador 1;Morador 2;Morador 3;WhatsApp 1;WhatsApp 2;WhatsApp 3\n101;Ana;Bruno;Carla;21911112222;21933334444;21955556666\n",
+      ),
+    );
+
+    const mapping = guessResidentColumnMapping(source.headers);
+    expect(mapping.names).toEqual([1, 2, 3]);
+    expect(mapping.phones).toEqual([4, 5, 6]);
+
+    expect(mapResidentRows(source, mapping)).toEqual([
+      {
+        unit_number: "101",
+        block_name: null,
+        name: "Ana",
+        whatsapp: "21911112222",
+      },
+      {
+        unit_number: "101",
+        block_name: null,
+        name: "Bruno",
+        whatsapp: "21933334444",
+      },
+      {
+        unit_number: "101",
+        block_name: null,
+        name: "Carla",
+        whatsapp: "21955556666",
       },
     ]);
   });
@@ -98,8 +131,8 @@ describe("readResidentFile + mapeamento explícito", () => {
 
     expect(mapping.unit).toBe(0);
     expect(mapping.block).toBe(1);
-    expect(mapping.name).toBe(-1);
-    expect(mapping.phone).toBe(-1);
+    expect(mapping.names).toEqual([]);
+    expect(mapping.phones).toEqual([]);
     expect(mapResidentRows(source, mapping)).toEqual([
       {
         unit_number: "302",
