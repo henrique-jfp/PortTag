@@ -3804,6 +3804,16 @@ button.overview-stat:disabled {
   padding-left: 18px;
 }
 
+.burst-read-detail {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f5f9ff;
+  color: #35415a;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .burst-suggestion {
   display: flex;
   align-items: center;

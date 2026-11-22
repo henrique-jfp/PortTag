@@ -475,6 +475,8 @@ type LabelReadContext = {
     sample: LabelSample,
     compressed: Awaited<ReturnType<typeof compressPackagePhoto>>,
   ) => void;
+  /** Prazo da chamada de IA. A rajada usa mais tempo que o recebimento isolado. */
+  timeoutMs?: number;
 };
 
 function draftFromAi(
@@ -731,6 +733,7 @@ async function readLabelFromPhoto(
         units: ctx.units,
         blocks: ctx.blocks,
         residents: ctx.residents,
+        timeoutMs: ctx.timeoutMs,
       }),
     );
 
@@ -754,7 +757,9 @@ async function readLabelFromPhoto(
         carrier: ai.carrier,
         trackingCode: ai.trackingCode,
         recipientName: ai.recipientName,
-        unitNumber: ai.unitId ? matchedUnit?.unit_number ?? ai.unitNumber : "",
+        // Mesmo quando o número não existe no cadastro (ou é ambíguo), a
+        // amostra deve registrar o que foi lido — não um campo vazio.
+        unitNumber: matchedUnit?.unit_number || ai.unitNumber,
         unitCandidateCount: ai.unitCandidates.length,
         addressStatus: ai.addressStatus,
         ocrChars: ai.diagnostics?.ocrChars ?? 0,
@@ -2466,30 +2471,47 @@ export function PorterReception() {
     setBurstStage("reading");
     setBurstBusy(true);
     try {
-      const compressed = await compressPackagePhoto(image);
-      const draft = await readLabelFromPhoto(
-        image,
-        {
-          condominium,
-          units,
-          blocks,
-          residents: authorizedResidents,
-          onProgress: (message) => setBurstMessage(message),
-          onSample: collectLabelSampleInBackground,
-        },
-        { compressed },
-      );
+      // Mesmo caminho do recebimento em lote: a própria leitura prepara a
+      // imagem. Passar uma foto comprimida antes tornava a extração da rajada
+      // menos confiável que a do recebimento manual.
+      const readContext = {
+        condominium,
+        units,
+        blocks,
+        residents: authorizedResidents,
+        onProgress: (message: string) => setBurstMessage(message),
+        onSample: collectLabelSampleInBackground,
+        timeoutMs: 20000,
+      };
+      let draft = await readLabelFromPhoto(image, readContext);
+      // A nuvem pode falhar por um instante. Uma segunda tentativa antes de
+      // cair no leitor de código de barras evita perder apartamento e nome.
+      if (
+        draft.labelRead?.error &&
+        !isDeviceResourceError(draft.labelRead.error)
+      ) {
+        setBurstMessage(
+          "A leitura na nuvem não respondeu. Tentando novamente...",
+        );
+        draft = await readLabelFromPhoto(image, {
+          ...readContext,
+          timeoutMs: 30000,
+        });
+      }
       if (isDeviceResourceError(draft.labelRead?.error)) {
         setPageError(DEVICE_RESOURCE_MESSAGE);
         setBurstStage("ready");
         return;
       }
 
+      // O manual também usa os candidatos da leitura para desempatar o bloco
+      // quando a IA identificou a unidade mas não o nome da torre.
       const readBlockId = availableBlocks.some(
         (block) => block.id === draft.blockId,
       )
         ? (draft.blockId as string)
-        : "";
+        : draft.unitCandidates.find((unit) => unit.id === draft.unitId)
+            ?.block_id ?? "";
       const resolved: PackageDraft = {
         ...draft,
         // A foto original é liberada: a miniatura e a leitura usam o JPEG.
@@ -5402,6 +5424,11 @@ export function PorterReception() {
                     </ul>
                   </div>
                 </div>
+                {burstWork.draft.ocrMessage && (
+                  <p className="burst-read-detail" role="status">
+                    {burstWork.draft.ocrMessage}
+                  </p>
+                )}
                 {burstWork.suggestion && (
                   <button
                     className="burst-suggestion"
