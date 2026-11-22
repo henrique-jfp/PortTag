@@ -176,6 +176,15 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 40. `supabase/migrations/20261121150000_gatehouse_scoped_queries.sql`
 41. `supabase/migrations/20261121160000_notebook_retention_and_reset.sql`
 42. `supabase/migrations/20261121170000_reset_label_lab_queue.sql`
+43. `supabase/migrations/20261122000000_burst_package_reception.sql`
+
+A migração 43 acrescenta `batch_id` em `packages` e `package_notifications`, o
+sinalizador `burst_group` na fila de avisos e o status `grouped`. Cria as RPCs
+`create_burst_package`, `register_burst_package_notification`,
+`update_burst_package` e `close_burst_batch`. Cada volume da rajada é gravado na
+hora com aviso pendente; o fechamento do lote substitui esses avisos por uma
+mensagem consolidada por apartamento. Não é preciso redeploy de Edge Function.
+Ela já está aplicada no projeto de produção.
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -243,6 +252,18 @@ sendo conferência física das etiquetas: a decisão determinística permanece e
 `verifyPackageDestinationAddress`, no app. Sem a migration aplicada, o lote usa
 o caminho antigo, foto a foto; por isso execute-a no SQL Editor antes de
 publicar o frontend para teste em produção.
+
+A migração 43 implanta o recebimento em massa (captura em rajada). O toggle na
+tela inicial do porteiro abre o loop foto → confirmação curta → próxima foto. Cada
+volume é gravado na hora com `batch_id` e aviso pendente na fila; o botão
+**Finalizar** agrupa as encomendas do lote por bloco/apartamento e registra uma
+mensagem consolidada por unidade. A tela de exceção destaca somente os campos
+inválidos e sugere a unidade provável a partir do nome do destinatário. O
+entregador pode ser único para o lote ou informado por pacote, e a barra fixa
+permite trocá-lo no meio do recebimento. Se houver instância Evolution conectada,
+o aviso sai automaticamente; sem ela, o texto é aberto via `wa.me` (sem custo por
+mensagem). Correções depois de salvar usam `update_burst_package`, que preserva
+data de recebimento, retirada e foto.
 
 As migrações 39 a 41 implantam a operação por portaria. A 39 cria `portarias`
 (`condominium_id`, `block_id`, `name`, `active`), os campos de modo de operação e

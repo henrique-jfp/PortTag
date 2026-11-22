@@ -176,6 +176,16 @@
     `cleanup_expired_notebook_records`). A exclusão de acesso **não apaga** nada
     que o porteiro registrou: bloqueia o login e conserva os dados do caderno
     pelo prazo definido pelo síndico.
+    Por fim, execute `20261122000000_burst_package_reception.sql` (migração 43).
+    Ela cria `batch_id` em `packages` e `package_notifications`, `burst_group` na
+    fila e o status `grouped`, além das RPCs `create_burst_package`,
+    `register_burst_package_notification`, `update_burst_package` e
+    `close_burst_batch`. O porteiro grava cada foto da rajada imediatamente com
+    aviso pendente; ao finalizar, uma única mensagem por apartamento substitui
+    os avisos individuais. A decisão de endereço permanece determinística no app
+    e a correção de um volume já salvo passa por `update_burst_package`, sem
+    alterar `received_at` nem retirada. Não há redeploy de Edge Function nesta
+    etapa.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

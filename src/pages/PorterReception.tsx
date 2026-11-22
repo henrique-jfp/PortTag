@@ -51,6 +51,14 @@ import {
 } from "../lib/packageNotifications";
 import { supabase } from "../lib/supabase";
 import {
+  burstConfirmationLabel,
+  burstDeliveryLabel,
+  burstIssues,
+  suggestBurstUnit,
+  type BurstDeliveryPerson,
+  type BurstIssue,
+} from "../lib/burstReception";
+import {
   decideLabelSample,
   maybeCollectLabelSample,
   type LabelSample,
@@ -192,6 +200,11 @@ const packageFields =
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("pt-BR");
+}
+
+function nullifEmpty(value: string | null | undefined) {
+  const trimmed = (value ?? "").trim();
+  return trimmed || null;
 }
 
 function getPorterViewFromLocation(): PorterView {
@@ -361,6 +374,53 @@ type BulkManualNotification = {
   unitLabel: string;
   packageCount: number;
   link: string;
+};
+
+type BurstStage =
+  | "setup"
+  | "ready"
+  | "reading"
+  | "confirm"
+  | "exception"
+  | "finished";
+
+type BurstRecord = {
+  id: string;
+  label: string;
+  unitId: string;
+  recipientName: string;
+  carrier: string;
+  trackingCode: string;
+};
+
+type BurstWork = {
+  draft: PackageDraft;
+  issues: BurstIssue[];
+  suggestion: { unitId: string; reason: string } | null;
+  addressAcknowledged: boolean;
+  duplicate: boolean;
+  duplicateAcknowledged: boolean;
+  savedId: string | null;
+};
+
+type BurstSummary = {
+  totalPackages: number;
+  unitsNotified: number;
+  unitsWithoutWhatsapp: Array<{
+    unitId?: string;
+    unitLabel: string;
+    packageCount: number;
+  }>;
+  groups: Array<{
+    unitId: string;
+    unitLabel: string;
+    notificationId: string;
+    channel: string;
+    recipient: string;
+    message: string;
+    packageCount: number;
+    status: string;
+  }>;
 };
 
 function buildWhatsappLink({
@@ -845,6 +905,7 @@ export function PorterReception() {
   const imageInput = useRef<HTMLInputElement>(null);
   const damageInput = useRef<HTMLInputElement>(null);
   const bulkInput = useRef<HTMLInputElement>(null);
+  const burstInput = useRef<HTMLInputElement>(null);
   const signatureCanvas = useRef<HTMLCanvasElement>(null);
   const signatureHasInk = useRef(false);
   const hasInternalHistory = useRef(false);
@@ -955,6 +1016,21 @@ export function PorterReception() {
   >([]);
   const [bulkCompany, setBulkCompany] = useState("");
   const [bulkDeliveryPerson, setBulkDeliveryPerson] = useState("");
+  // Recebimento em rajada: foto -> gravação imediata -> confirmação curta.
+  const [burstEnabled, setBurstEnabled] = useState(false);
+  const [burstStage, setBurstStage] = useState<BurstStage>("setup");
+  const [burstBatchId, setBurstBatchId] = useState("");
+  const [burstSameDelivery, setBurstSameDelivery] = useState(true);
+  const [burstDelivery, setBurstDelivery] = useState<BurstDeliveryPerson>({
+    name: "",
+    document: "",
+  });
+  const [burstRecords, setBurstRecords] = useState<BurstRecord[]>([]);
+  const [burstWork, setBurstWork] = useState<BurstWork | null>(null);
+  const [burstBusy, setBurstBusy] = useState(false);
+  const [burstMessage, setBurstMessage] = useState("");
+  const [burstSummary, setBurstSummary] = useState<BurstSummary | null>(null);
+  const [burstPreviewUrl, setBurstPreviewUrl] = useState("");
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(
     null,
   );
@@ -2328,6 +2404,387 @@ export function PorterReception() {
     patchBulkItem(id, { source: null, draft: null, previewUrl: "" });
   }
 
+  // ---------------------------------------------------------------------------
+  // Recebimento em rajada
+  // ---------------------------------------------------------------------------
+
+  function releaseBurstPreview() {
+    if (burstPreviewUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(burstPreviewUrl);
+    }
+    setBurstPreviewUrl("");
+  }
+
+  function updateBurstDraft(patch: Partial<PackageDraft>) {
+    setBurstWork((current) =>
+      current ? { ...current, draft: { ...current.draft, ...patch } } : current,
+    );
+  }
+
+  function startBurstSession(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!burstDelivery.name.trim() && !burstDelivery.document.trim()) {
+      setPageError("Informe o nome ou o documento do entregador.");
+      return;
+    }
+    setPageError("");
+    setBurstMessage("");
+    setBurstBatchId(crypto.randomUUID());
+    setBurstRecords([]);
+    setBurstWork(null);
+    setBurstSummary(null);
+    setBurstStage("ready");
+  }
+
+  /** O clique do botão abre a câmera nativa de dentro do gesto do usuário. */
+  function openBurstCamera() {
+    setPageError("");
+    burstInput.current?.click();
+  }
+
+  function handleBurstPhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const image = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    if (image) void processBurstPhoto(image);
+  }
+
+  async function processBurstPhoto(image: File) {
+    if (!account || !condominium || burstBusy) return;
+    setPageError("");
+    setBurstMessage("");
+    if (!acceptedImageTypes.has(image.type)) {
+      setPageError("A foto precisa ser JPG, PNG ou WEBP.");
+      setBurstStage("ready");
+      return;
+    }
+    if (image.size > maximumImageSize) {
+      setPageError("A foto precisa ter no máximo 10 MB.");
+      setBurstStage("ready");
+      return;
+    }
+
+    setBurstStage("reading");
+    setBurstBusy(true);
+    try {
+      const compressed = await compressPackagePhoto(image);
+      const draft = await readLabelFromPhoto(
+        image,
+        {
+          condominium,
+          units,
+          blocks,
+          residents: authorizedResidents,
+          onProgress: (message) => setBurstMessage(message),
+          onSample: collectLabelSampleInBackground,
+        },
+        { compressed },
+      );
+      if (isDeviceResourceError(draft.labelRead?.error)) {
+        setPageError(DEVICE_RESOURCE_MESSAGE);
+        setBurstStage("ready");
+        return;
+      }
+
+      const readBlockId = availableBlocks.some(
+        (block) => block.id === draft.blockId,
+      )
+        ? (draft.blockId as string)
+        : "";
+      const resolved: PackageDraft = {
+        ...draft,
+        // A foto original é liberada: a miniatura e a leitura usam o JPEG.
+        source: draft.file,
+        blockId: readBlockId,
+        unitId: resolveDraftUnitId(
+          readBlockId ? { ...draft, blockId: readBlockId } : draft,
+        ),
+        deliveryPerson: burstSameDelivery ? burstDeliveryLabel(burstDelivery) : "",
+      };
+
+      const code = normalizeTrackingCode(resolved.trackingCode);
+      let duplicated = false;
+      if (code) {
+        const { data } = await supabase.rpc("find_duplicate_package", {
+          p_condominium_id: condominium.id,
+          p_tracking_code: code,
+        });
+        duplicated =
+          (data ?? []).length > 0 ||
+          burstRecords.some(
+            (record) => normalizeTrackingCode(record.trackingCode) === code,
+          );
+      }
+
+      const unitExists = units.some((unit) => unit.id === resolved.unitId);
+      const issues = burstIssues({
+        address: resolved.addressVerification,
+        addressAcknowledged: false,
+        unitId: resolved.unitId,
+        unitExists,
+        readUnitNumber: resolved.readUnitNumber,
+        trackingCode: resolved.trackingCode,
+        duplicated,
+        carrier: resolved.company,
+        deliveryPerson: resolved.deliveryPerson,
+      });
+
+      releaseBurstPreview();
+      setBurstPreviewUrl(URL.createObjectURL(resolved.file));
+
+      if (issues.length) {
+        const suggestion = suggestBurstUnit({
+          recipientName: resolved.recipientName,
+          readUnitNumber: resolved.readUnitNumber,
+          units,
+          residents: authorizedResidents,
+        });
+        setBurstWork({
+          draft: resolved,
+          issues,
+          suggestion,
+          addressAcknowledged: false,
+          duplicate: duplicated,
+          duplicateAcknowledged: false,
+          savedId: null,
+        });
+        setBurstStage("exception");
+        return;
+      }
+
+      await persistBurst(resolved, false, duplicated);
+    } catch (error) {
+      const message = friendlyError(
+        error,
+        "Não foi possível ler a etiqueta. Tire outra foto.",
+      );
+      setPageError(message);
+      if (isDeviceResourceError(error)) {
+        releaseBurstPreview();
+      }
+      setBurstStage("ready");
+    } finally {
+      setBurstBusy(false);
+    }
+  }
+
+  async function persistBurst(
+    draft: PackageDraft,
+    addressAcknowledged: boolean,
+    duplicated: boolean,
+  ) {
+    if (!condominium || !user || !burstBatchId) {
+      setPageError("Sessão de lote encerrada. Comece um novo recebimento.");
+      return false;
+    }
+    const { data, error } = await supabase.rpc("create_burst_package", {
+      p_condominium_id: condominium.id,
+      p_unit_id: draft.unitId,
+      p_receipt_path: null,
+      p_sender: nullifEmpty(draft.company),
+      p_delivery_person: draft.deliveryPerson.trim(),
+      p_batch_id: burstBatchId,
+      p_tracking_code: nullifEmpty(normalizeTrackingCode(draft.trackingCode)),
+      p_resident_name: nullifEmpty(draft.recipientName),
+      p_recipient_is_resident: draft.recipientIsResident,
+      p_is_damaged: false,
+      p_address_status: draft.addressVerification?.status ?? "unknown",
+      p_duplicate_tracking: duplicated,
+    });
+    if (error || !data) {
+      setPageError(
+        friendlyError(error, "Não foi possível registrar a encomenda."),
+      );
+      return false;
+    }
+
+    const packageId = String(data);
+    const { error: notificationError } = await supabase.rpc(
+      "register_burst_package_notification",
+      {
+        p_package_id: packageId,
+        p_batch_id: burstBatchId,
+      },
+    );
+
+    const unit = units.find((candidate) => candidate.id === draft.unitId);
+    const blockName = blocks.find(
+      (candidate) => candidate.id === unit?.block_id,
+    )?.name ?? null;
+    const record: BurstRecord = {
+      id: packageId,
+      label: burstConfirmationLabel({
+        blockName,
+        unitNumber: unit?.unit_number ?? draft.readUnitNumber ?? "",
+        recipientName: draft.recipientName,
+        carrier: draft.company,
+      }),
+      unitId: draft.unitId,
+      recipientName: draft.recipientName,
+      carrier: draft.company,
+      trackingCode: draft.trackingCode,
+    };
+    setBurstRecords((current) => [...current, record]);
+    setBurstWork({
+      draft,
+      issues: [],
+      suggestion: null,
+      addressAcknowledged,
+      duplicate: duplicated,
+      duplicateAcknowledged: duplicated,
+      savedId: packageId,
+    });
+    setBurstMessage(
+      notificationError
+        ? "Encomenda salva, mas o aviso não pôde ser preparado. Tente finalizar o lote novamente."
+        : "",
+    );
+    setBurstStage("confirm");
+    releaseBurstPreview();
+    return true;
+  }
+
+  async function submitBurstCorrection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const work = burstWork;
+    if (!work || !condominium || burstBusy) return;
+    setPageError("");
+    setBurstBusy(true);
+    try {
+      const draft = work.draft;
+      const unit = units.find((candidate) => candidate.id === draft.unitId);
+      const issues = burstIssues({
+        address: draft.addressVerification,
+        addressAcknowledged: work.addressAcknowledged,
+        unitId: draft.unitId,
+        unitExists: Boolean(unit),
+        readUnitNumber: draft.readUnitNumber,
+        trackingCode: draft.trackingCode,
+        duplicated: work.duplicate && !work.duplicateAcknowledged,
+        carrier: draft.company,
+        deliveryPerson: draft.deliveryPerson,
+      });
+      if (issues.length) {
+        setBurstWork({ ...work, issues });
+        return;
+      }
+
+      if (!work.savedId) {
+        await persistBurst(draft, work.addressAcknowledged, work.duplicate);
+        return;
+      }
+
+      const { error } = await supabase.rpc("update_burst_package", {
+        p_package_id: work.savedId,
+        p_unit_id: draft.unitId,
+        p_sender: nullifEmpty(draft.company),
+        p_delivery_person: draft.deliveryPerson.trim(),
+        p_tracking_code: nullifEmpty(normalizeTrackingCode(draft.trackingCode)),
+        p_resident_name: nullifEmpty(draft.recipientName),
+        p_recipient_is_resident: draft.recipientIsResident,
+        p_address_status: draft.addressVerification?.status ?? "mismatch",
+      });
+      if (error) {
+        setPageError(
+          friendlyError(error, "Não foi possível salvar a correção."),
+        );
+        return;
+      }
+
+      const blockName = blocks.find(
+        (candidate) => candidate.id === unit?.block_id,
+      )?.name ?? null;
+      setBurstRecords((current) =>
+        current.map((record) =>
+          record.id === work.savedId
+            ? {
+                ...record,
+                label: burstConfirmationLabel({
+                  blockName,
+                  unitNumber: unit?.unit_number ?? "",
+                  recipientName: draft.recipientName,
+                  carrier: draft.company,
+                }),
+                unitId: draft.unitId,
+                recipientName: draft.recipientName,
+                carrier: draft.company,
+                trackingCode: draft.trackingCode,
+              }
+            : record,
+        ),
+      );
+      setBurstWork({ ...work, issues: [] });
+      setBurstStage("confirm");
+    } catch (error) {
+      setPageError(friendlyError(error, "Não foi possível salvar a correção."));
+    } finally {
+      setBurstBusy(false);
+    }
+  }
+
+  async function finishBurst() {
+    if (!burstBatchId || burstBusy) return;
+    setBurstBusy(true);
+    setPageError("");
+    setBurstMessage("");
+    try {
+      const { data, error } = await supabase.rpc("close_burst_batch", {
+        p_batch_id: burstBatchId,
+      });
+      if (error || !data) {
+        setPageError(
+          friendlyError(error, "Não foi possível finalizar o lote."),
+        );
+        return;
+      }
+
+      const summary = data as BurstSummary;
+      let automatic = 0;
+      let failed = 0;
+      for (const group of summary.groups ?? []) {
+        if (group.channel !== "whatsapp" || group.status !== "pending") {
+          continue;
+        }
+        try {
+          const { error: sendError } = await supabase.functions.invoke(
+            "send-package-notification",
+            { body: { notificationId: group.notificationId } },
+          );
+          if (sendError) failed += 1;
+          else automatic += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+
+      setBurstSummary(summary);
+      setBurstMessage(
+        `Lote encerrado: ${summary.totalPackages} encomenda(s), ` +
+          `${summary.unitsNotified} apartamento(s) avisado(s)` +
+          `${automatic ? `, ${automatic} mensagem(ns) automática(s)` : ""}` +
+          `${failed ? `, ${failed} falha(s) de envio` : ""}.`,
+      );
+      setBurstStage("finished");
+      releaseBurstPreview();
+      await reloadPackages();
+    } catch (error) {
+      setPageError(friendlyError(error, "Não foi possível finalizar o lote."));
+    } finally {
+      setBurstBusy(false);
+    }
+  }
+
+  function resetBurst() {
+    releaseBurstPreview();
+    setBurstEnabled(false);
+    setBurstStage("setup");
+    setBurstBatchId("");
+    setBurstRecords([]);
+    setBurstWork(null);
+    setBurstSummary(null);
+    setBurstMessage("");
+    setPageError("");
+  }
+
   /**
    * Depois da leitura, a miniatura passa a usar o JPEG comprimido. A foto
    * original do celular (até 10 MB) deixa de ficar presa ao blob URL e ao
@@ -3464,6 +3921,29 @@ export function PorterReception() {
         </div>
       </header>
 
+      {burstEnabled && burstStage !== "setup" && burstStage !== "finished" && (
+        <div className="burst-session-bar" role="status">
+          <div className="burst-session-info">
+            <strong>{burstRecords.length} pacote(s) no lote</strong>
+            <span>
+              Entregador: {burstDeliveryLabel(burstDelivery) || "não informado"}
+            </span>
+          </div>
+          <button
+            className="burst-session-switch"
+            type="button"
+            onClick={() => {
+              setBurstSameDelivery(false);
+              setBurstDelivery({ name: "", document: "" });
+              updateBurstDraft({ deliveryPerson: "" });
+              setBurstStage("ready");
+            }}
+          >
+            Trocar entregador
+          </button>
+        </div>
+      )}
+
       <div className="porter-content">
         {pageError && <p className="porter-error" role="alert">{pageError}</p>}
         {successMessage && (
@@ -3501,6 +3981,43 @@ export function PorterReception() {
                 </p>
               </section>
             )}
+
+            <input
+              ref={burstInput}
+              className="porter-hidden-input"
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={handleBurstPhotoChange}
+            />
+
+            <label className="burst-toggle-row">
+              <input
+                type="checkbox"
+                checked={burstEnabled}
+                disabled={
+                  burstStage !== "setup" && burstStage !== "finished"
+                }
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    setBurstEnabled(true);
+                    setBurstStage("setup");
+                  } else {
+                    resetBurst();
+                  }
+                }}
+              />
+              <span>
+                <strong>Recebimento em massa</strong>
+                <small>
+                  Uma foto por pacote, sem repetir formulário. Avisos agrupados
+                  por apartamento ao finalizar.
+                </small>
+              </span>
+            </label>
+
+            {!burstEnabled ? (
+              <>
             <section className="porter-card porter-receive-card">
               {!file && (
                 <div className="porter-home-hero-heading">
@@ -4676,6 +5193,464 @@ export function PorterReception() {
                   </button>
                 </nav>
               </>
+            )}
+              </>
+            ) : null}
+
+            {burstEnabled && burstStage === "setup" && (
+              <div className="burst-modal-backdrop">
+                <section className="burst-modal" role="dialog" aria-modal="true">
+                  <h2>Recebimento em massa</h2>
+                  <form onSubmit={startBurstSession}>
+                    <p className="burst-question">
+                      É o mesmo entregador para todos os pacotes?
+                    </p>
+                    <div className="burst-choice-row">
+                      <label>
+                        <input
+                          type="radio"
+                          name="burst-same-delivery"
+                          checked={burstSameDelivery}
+                          onChange={() => setBurstSameDelivery(true)}
+                        />
+                        Sim, é o mesmo
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="burst-same-delivery"
+                          checked={!burstSameDelivery}
+                          onChange={() => setBurstSameDelivery(false)}
+                        />
+                        Não, muda por pacote
+                      </label>
+                    </div>
+                    {burstSameDelivery && (
+                      <div className="burst-delivery-fields">
+                        <label>
+                          Nome do entregador
+                          <input
+                            value={burstDelivery.name}
+                            onChange={(event) =>
+                              setBurstDelivery((current) => ({
+                                ...current,
+                                name: event.target.value,
+                              }))
+                            }
+                            placeholder="Ex.: João da Silva"
+                          />
+                        </label>
+                        <label>
+                          Documento (opcional)
+                          <input
+                            value={burstDelivery.document}
+                            onChange={(event) =>
+                              setBurstDelivery((current) => ({
+                                ...current,
+                                document: event.target.value,
+                              }))
+                            }
+                            placeholder="CPF, RG ou CNH"
+                          />
+                        </label>
+                      </div>
+                    )}
+                    <div className="burst-modal-actions">
+                      <button
+                        className="porter-primary-button"
+                        type="submit"
+                        disabled={!units.length}
+                      >
+                        Iniciar recebimento
+                      </button>
+                      <button
+                        className="porter-secondary-button"
+                        type="button"
+                        onClick={resetBurst}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                    {!units.length && (
+                      <p className="porter-error">
+                        Não há apartamentos ativos nesta portaria.
+                      </p>
+                    )}
+                  </form>
+                </section>
+              </div>
+            )}
+
+            {burstEnabled &&
+              (burstStage === "ready" || burstStage === "reading") && (
+                <section className="porter-card burst-card">
+                  <div className="burst-ready-heading">
+                    <Camera size={30} aria-hidden="true" />
+                    <h2>Fotografar etiqueta</h2>
+                    <p>
+                      A câmera nativa abre a cada pacote. A leitura confere
+                      endereço, unidade, rastreio e transportadora antes de
+                      registrar.
+                    </p>
+                  </div>
+                  {burstStage === "reading" ? (
+                    <div className="burst-reading" role="status">
+                      <span className="burst-spinner" aria-hidden="true" />
+                      <strong>Lendo etiqueta...</strong>
+                      <p>{burstMessage || "Aguarde um instante."}</p>
+                    </div>
+                  ) : (
+                    <button
+                      className="burst-primary-action"
+                      type="button"
+                      onClick={openBurstCamera}
+                    >
+                      <Camera size={26} aria-hidden="true" />
+                      <span>
+                        <strong>Fotografar próxima encomenda</strong>
+                        <small>Abre a câmera do aparelho</small>
+                      </span>
+                    </button>
+                  )}
+                  <div className="burst-footer-actions">
+                    <button
+                      className="porter-secondary-button"
+                      type="button"
+                      disabled={!burstRecords.length || burstBusy}
+                      onClick={() => void finishBurst()}
+                    >
+                      Finalizar lote ({burstRecords.length})
+                    </button>
+                  </div>
+                </section>
+              )}
+
+            {burstEnabled && burstStage === "confirm" && burstWork && (
+              <section className="porter-card burst-card burst-confirm">
+                <div className="burst-success-heading" role="status">
+                  <PackageCheck size={38} aria-hidden="true" />
+                  <h2>Encomenda registrada</h2>
+                </div>
+                {burstPreviewUrl && (
+                  <div className="burst-thumb">
+                    <img src={burstPreviewUrl} alt="Etiqueta lida" />
+                  </div>
+                )}
+                <p className="burst-highlight">
+                  {burstConfirmationLabel({
+                    blockName:
+                      blocks.find(
+                        (block) =>
+                          block.id ===
+                          units.find(
+                            (unit) => unit.id === burstWork.draft.unitId,
+                          )?.block_id,
+                      )?.name ?? null,
+                    unitNumber:
+                      units.find((unit) => unit.id === burstWork.draft.unitId)
+                        ?.unit_number ?? burstWork.draft.readUnitNumber ?? "",
+                    recipientName: burstWork.draft.recipientName,
+                    carrier: burstWork.draft.company,
+                  })}
+                </p>
+                <button
+                  className="burst-correct-button"
+                  type="button"
+                  onClick={() => setBurstStage("exception")}
+                >
+                  Corrigir
+                </button>
+                {burstMessage && (
+                  <p className="porter-warning" role="status">
+                    {burstMessage}
+                  </p>
+                )}
+                <div className="burst-action-grid">
+                  <button
+                    className="burst-primary-action"
+                    type="button"
+                    onClick={openBurstCamera}
+                  >
+                    <Camera size={26} aria-hidden="true" />
+                    <span>
+                      <strong>Outra encomenda</strong>
+                      <small>Fotografar o próximo pacote</small>
+                    </span>
+                  </button>
+                  <button
+                    className="burst-secondary-action"
+                    type="button"
+                    disabled={burstBusy}
+                    onClick={() => void finishBurst()}
+                  >
+                    Finalizar
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {burstEnabled && burstStage === "exception" && burstWork && (
+              <section className="porter-card burst-card">
+                <div className="burst-alert" role="alert">
+                  <AlertTriangle size={24} aria-hidden="true" />
+                  <div>
+                    <strong>Atenção: confira os campos abaixo</strong>
+                    <ul>
+                      {burstWork.issues.map((issue) => (
+                        <li key={issue.code}>{issue.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                {burstWork.suggestion && (
+                  <button
+                    className="burst-suggestion"
+                    type="button"
+                    onClick={() =>
+                      updateBurstDraft({
+                        unitId: burstWork.suggestion?.unitId ?? "",
+                      })
+                    }
+                  >
+                    <Check size={18} aria-hidden="true" />
+                    <span>
+                      <strong>Sugestão: apartamento provável</strong>
+                      <small>{burstWork.suggestion.reason}</small>
+                    </span>
+                  </button>
+                )}
+                <form
+                  className="burst-form"
+                  onSubmit={(event) => void submitBurstCorrection(event)}
+                >
+                  <div
+                    className={`burst-field${
+                      burstWork.issues.some((issue) => issue.field === "unitId")
+                        ? " burst-field-invalid"
+                        : ""
+                    }`}
+                  >
+                    <BulkUnitField
+                      units={units}
+                      blocks={blocks}
+                      value={burstWork.draft.unitId}
+                      blockId={burstWork.draft.blockId}
+                      readUnitNumber={burstWork.draft.readUnitNumber}
+                      candidates={burstWork.draft.unitCandidates}
+                      itemId="burst-correction"
+                      showBlock={hasBlocks}
+                      allowAnyBlock={!hasBlocks}
+                      onChange={(unitId) => {
+                        const unit = units.find((candidate) => candidate.id === unitId);
+                        updateBurstDraft({
+                          unitId,
+                          blockId: unit?.block_id ?? burstWork.draft.blockId,
+                        });
+                      }}
+                      onBlockChange={(blockId) =>
+                        updateBurstDraft({
+                          blockId,
+                          unitId: "",
+                        })
+                      }
+                      onCommit={() => undefined}
+                    />
+                  </div>
+                  <label
+                    className={`burst-field${
+                      burstWork.issues.some(
+                        (issue) => issue.field === "deliveryPerson",
+                      )
+                        ? " burst-field-invalid"
+                        : ""
+                    }`}
+                  >
+                    Entregador
+                    <input
+                      value={burstWork.draft.deliveryPerson}
+                      onChange={(event) =>
+                        updateBurstDraft({ deliveryPerson: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label
+                    className={`burst-field${
+                      burstWork.issues.some((issue) => issue.field === "company")
+                        ? " burst-field-invalid"
+                        : ""
+                    }`}
+                  >
+                    Transportadora
+                    <input
+                      value={burstWork.draft.company}
+                      onChange={(event) =>
+                        updateBurstDraft({ company: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label
+                    className={`burst-field${
+                      burstWork.issues.some(
+                        (issue) => issue.field === "trackingCode",
+                      )
+                        ? " burst-field-invalid"
+                        : ""
+                    }`}
+                  >
+                    Código de rastreio
+                    <input
+                      value={burstWork.draft.trackingCode}
+                      onChange={(event) =>
+                        updateBurstDraft({ trackingCode: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="burst-field">
+                    Nome do destinatário
+                    <input
+                      value={burstWork.draft.recipientName}
+                      onChange={(event) =>
+                        updateBurstDraft({ recipientName: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="burst-checkbox-field">
+                    <input
+                      type="checkbox"
+                      checked={burstWork.draft.recipientIsResident}
+                      onChange={(event) =>
+                        updateBurstDraft({
+                          recipientIsResident: event.target.checked,
+                        })
+                      }
+                    />
+                    O destinatário é morador da unidade
+                  </label>
+                  {burstWork.issues.some((issue) => issue.field === "address") && (
+                    <label className="burst-attest">
+                      <input
+                        type="checkbox"
+                        checked={burstWork.addressAcknowledged}
+                        onChange={(event) =>
+                          setBurstWork((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  addressAcknowledged: event.target.checked,
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <span>
+                        Confiro que conferi fisicamente a etiqueta e o endereço
+                        deste condomínio.
+                      </span>
+                    </label>
+                  )}
+                  {burstWork.duplicate && (
+                    <label className="burst-attest">
+                      <input
+                        type="checkbox"
+                        checked={burstWork.duplicateAcknowledged}
+                        onChange={(event) =>
+                          setBurstWork((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  duplicateAcknowledged: event.target.checked,
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <span>
+                        Confiro que o código de rastreio já existe, mas conferi a
+                        etiqueta e desejo registrar este volume assim mesmo.
+                      </span>
+                    </label>
+                  )}
+                  <div className="burst-form-actions">
+                    <button
+                      className="porter-primary-button"
+                      type="submit"
+                      disabled={burstBusy}
+                    >
+                      {burstBusy ? "Salvando..." : "Confirmar e continuar"}
+                    </button>
+                    <button
+                      className="porter-secondary-button"
+                      type="button"
+                      disabled={burstBusy}
+                      onClick={() => setBurstStage("ready")}
+                    >
+                      Descartar foto
+                    </button>
+                  </div>
+                </form>
+              </section>
+            )}
+
+            {burstEnabled && burstStage === "finished" && (
+              <section className="porter-card burst-card burst-finished">
+                <div className="burst-success-heading" role="status">
+                  <Check size={40} aria-hidden="true" />
+                  <h2>Lote finalizado</h2>
+                </div>
+                <p>{burstMessage}</p>
+                <div className="burst-summary-grid">
+                  <div>
+                    <strong>{burstSummary?.totalPackages ?? burstRecords.length}</strong>
+                    <span>encomendas registradas</span>
+                  </div>
+                  <div>
+                    <strong>{burstSummary?.unitsNotified ?? 0}</strong>
+                    <span>apartamentos notificados</span>
+                  </div>
+                  <div>
+                    <strong>{burstSummary?.unitsWithoutWhatsapp.length ?? 0}</strong>
+                    <span>sem WhatsApp cadastrado</span>
+                  </div>
+                </div>
+                {!!burstSummary?.unitsWithoutWhatsapp.length && (
+                  <ul className="burst-without-list">
+                    {burstSummary.unitsWithoutWhatsapp.map((unit) => (
+                      <li key={unit.unitId ?? unit.unitLabel}>
+                        {unit.unitLabel} — {unit.packageCount} encomenda(s)
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {!!burstSummary?.groups.some(
+                  (group) => group.channel === "whatsapp_link",
+                ) && (
+                  <div className="burst-manual-notifications">
+                    <p>Mensagens consolidadas (abra para enviar pelo WhatsApp):</p>
+                    {burstSummary.groups
+                      .filter((group) => group.channel === "whatsapp_link")
+                      .map((group) => (
+                      <a
+                        key={group.notificationId}
+                        className="porter-whatsapp-link"
+                        href={whatsappLink(group.recipient, group.message)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Avisar {group.unitLabel} ({group.packageCount} encomenda(s))
+                      </a>
+                    ))}
+                  </div>
+                )}
+                <div className="burst-footer-actions">
+                  <button
+                    className="porter-primary-button"
+                    type="button"
+                    onClick={resetBurst}
+                  >
+                    Novo recebimento
+                  </button>
+                </div>
+              </section>
             )}
           </>
         )}
