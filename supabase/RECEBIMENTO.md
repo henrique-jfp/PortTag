@@ -159,8 +159,9 @@
     migration o frontend cai para o registro foto a foto, então aplique-a
     antes de publicar a versão de teste. Depois execute
     `20261121140000_gatehouse_operation.sql`,
-    `20261121150000_gatehouse_scoped_queries.sql` e
-    `20261121160000_notebook_retention_and_reset.sql`, nesta ordem. A 39 cria
+    `20261121150000_gatehouse_scoped_queries.sql`,
+    `20261121160000_notebook_retention_and_reset.sql` e
+    `20261121170000_reset_label_lab_queue.sql`, nesta ordem. A 39 cria
     `portarias` e faz a autorização de bloco usar a portaria **atual** do
     porteiro; a origem fica em `home_portaria_id` para o botão **Voltar à
     portaria de origem**. `create_condominium` ganha `p_operation_mode` e a
@@ -469,6 +470,19 @@ Edge Function `admin-label-lab`. **Analisar** mostra o OCR e as sugestões sem
 guardar nada; **Salvar como amostra** grava a imagem no bucket privado
 `label-lab-private` e cria a tarefa na fila. As amostras vindas do porteiro
 também aparecem na lista e podem ser reanalisadas ou descartadas.
+
+O botão **Zerar fila**, no topo da Central, descarta todas as amostras ativas
+de uma vez — inclusive as já analisadas e as em processamento — com o mesmo
+efeito do descarte individual: a foto, o OCR e a análise são removidos do cofre
+e a linha fica marcada como `deleted`. Antes de abrir a confirmação, a tela
+chama `get_label_lab_queue_preview()` para mostrar o contador exato (a lista é
+limitada a 60 linhas). A execução usa `discard_all_label_lab_samples`, restrita
+ao Super Admin, com `FOR UPDATE SKIP LOCKED` para não competir com o worker e
+auditoria agregada `queue_reset`. Amostras já publicadas/descartadas, versões,
+regras ativas e o artefato publicado não são tocados; o OCR das amostras
+consumidas segue disponível para regressão. A migração 42 também corrige a
+purga da publicação, que havia perdido o `set_config('storage.allow_delete_query',
+'true', true)` necessário com a trigger `storage.protect_delete()` ativa.
 
 O fluxo de calibração é: analisar → incluir sugestões no editor de regex →
 criar casos de regressão a partir das amostras → **Testar** (a regex roda

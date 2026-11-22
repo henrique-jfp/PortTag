@@ -41,6 +41,17 @@ type Sample = {
   condominiums: { name: string } | null;
 };
 
+type QueuePreview = {
+  total: number;
+  pending: number;
+  processing: number;
+  analyzed: number;
+  failed: number;
+  with_ocr: number;
+  photos: number;
+  preserved: number;
+};
+
 type Suggestion = {
   field: string;
   pattern: string;
@@ -192,6 +203,7 @@ export function LabelLab() {
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [publishedArtifact, setPublishedArtifact] = useState<Record<string, unknown> | null>(null);
   const [discardTarget, setDiscardTarget] = useState<Sample | null>(null);
+  const [resetQueueTarget, setResetQueueTarget] = useState<QueuePreview | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Ruleset | null>(null);
   const [activationTarget, setActivationTarget] = useState<Ruleset | null>(null);
   const [activationText, setActivationText] = useState("");
@@ -728,6 +740,43 @@ export function LabelLab() {
     }
   }
 
+  async function handleOpenResetQueue() {
+    setBusyState("reset-queue-preview");
+    try {
+      const { data, error } = await supabase.rpc("get_label_lab_queue_preview");
+      if (error) throw new Error(error.message);
+      setResetQueueTarget((data ?? null) as QueuePreview | null);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Falha ao contar a fila.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function handleResetQueue() {
+    if (!resetQueueTarget) return;
+    const total = resetQueueTarget.total;
+    setBusyState("reset-queue");
+    try {
+      const { error } = await supabase.rpc("discard_all_label_lab_samples", {
+        p_ack: true,
+      });
+      if (error) throw new Error(error.message);
+      selectSample("");
+      setResetQueueTarget(null);
+      setSuccessMessage(
+        `${total} amostra(s) descartada(s): foto, OCR e análise removidos. ` +
+          "Amostras já consumidas e as regras ativas permanecem intactas.",
+      );
+      await reloadData();
+    } catch (error) {
+      setResetQueueTarget(null);
+      setPageError(error instanceof Error ? error.message : "Falha ao zerar fila.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function handleDeleteRuleset() {
     if (!deleteTarget) return;
     setBusyState("delete-ruleset");
@@ -875,6 +924,14 @@ export function LabelLab() {
           </p>
         </div>
         <div className="admin-header-actions">
+          <button
+            type="button"
+            className="danger-button"
+            disabled={Boolean(busy)}
+            onClick={() => void handleOpenResetQueue()}
+          >
+            {busy === "reset-queue-preview" ? "Contando..." : "Zerar fila"}
+          </button>
           <Link className="secondary-button button-link" to="/">Voltar ao painel</Link>
         </div>
       </header>
@@ -1508,6 +1565,25 @@ export function LabelLab() {
           loading={busy === "discard"}
           onConfirm={() => void handleDiscard()}
           onCancel={() => setDiscardTarget(null)}
+        />
+      ) : null}
+
+      {resetQueueTarget ? (
+        <ConfirmationDialog
+          title="Zerar fila do Label Lab"
+          description={
+            `Há ${resetQueueTarget.total} amostra(s) ativa(s) na fila ` +
+            `(${resetQueueTarget.pending} pendente(s), ${resetQueueTarget.processing} em processamento, ` +
+            `${resetQueueTarget.analyzed} analisada(s), ${resetQueueTarget.failed} com falha). ` +
+            `Todas serão descartadas: a foto, o OCR e a análise sairão do cofre privado. ` +
+            `As amostras já consumidas (${resetQueueTarget.preserved}) e as regras ativas não são alteradas. ` +
+            "Esta ação não pode ser desfeita."
+          }
+          confirmLabel="Zerar fila"
+          busyLabel="Zerando fila..."
+          loading={busy === "reset-queue"}
+          onConfirm={() => void handleResetQueue()}
+          onCancel={() => setResetQueueTarget(null)}
         />
       ) : null}
 

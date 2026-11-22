@@ -175,6 +175,7 @@ No SQL Editor do Supabase, execute as migrações nesta ordem:
 39. `supabase/migrations/20261121140000_gatehouse_operation.sql`
 40. `supabase/migrations/20261121150000_gatehouse_scoped_queries.sql`
 41. `supabase/migrations/20261121160000_notebook_retention_and_reset.sql`
+42. `supabase/migrations/20261121170000_reset_label_lab_queue.sql`
 
 A migração 21 delega ao síndico ativo, somente no próprio condomínio, as RPCs
 de cadastro (dados do condomínio, blocos, unidades e moradores), cria o
@@ -297,15 +298,29 @@ alcançar amostras que entraram depois) e disponibiliza o artefato JSON
 versionado para download. Nenhuma regra publicada altera CEP, logradouro ou
 número.
 
+O botão **Zerar fila** no topo da Central descarta em massa todas as amostras
+ainda ativas (`deleted_at` nulo), inclusive as já analisadas ou em
+processamento, com o mesmo efeito do descarte individual: foto, OCR e análise
+saem do cofre. A confirmação mostra o contador exato devolvido por
+`get_label_lab_queue_preview()` — a lista da tela é limitada a 60 linhas e não
+serve de contador. A RPC `discard_all_label_lab_samples` exige Super Admin e
+aceite, usa `FOR UPDATE SKIP LOCKED` para não disputar com o worker do cron e
+grava uma auditoria agregada `queue_reset`. Amostras já publicadas/descartadas,
+versões, regras ativas e o artefato publicado permanecem intactos; o OCR
+preservado das amostras consumidas continua disponível para regressão. A
+migração 42 também restaura o `set_config` de exclusão do Storage na purga da
+publicação, perdido quando o OCR passou a ser preservado.
+
 A Edge Function `admin-label-lab` (`verify_jwt = true`) valida o JWT, exige
 `profiles.is_super_admin`, chama `label-lab` com o segredo já existente
 `LABEL_LAB_SECRET`, lê as fotos do bucket privado e chama as RPCs; nenhum
 segredo chega ao frontend. Para implantar, aplique as migrations
 `20261119140000_label_lab_console.sql`,
-`20261119150000_fix_label_lab_storage_deletion.sql` (esta última habilita a
-exclusão das fotos nas RPCs de descarte e purga, exigida pelo trigger
-`storage.protect_delete`) e `20261119160000_delete_label_lab_ruleset.sql`, e
-publique a função:
+`20261119150000_fix_label_lab_storage_deletion.sql` (habilita a exclusão das
+fotos no descarte, exigida pelo trigger `storage.protect_delete`),
+`20261119160000_delete_label_lab_ruleset.sql` e
+`20261121170000_reset_label_lab_queue.sql` (restaura o `set_config` na purga e
+cria as RPCs do **Zerar fila**), e publique a função:
 
 ```powershell
 supabase functions deploy admin-label-lab
