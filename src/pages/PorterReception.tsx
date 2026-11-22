@@ -10,6 +10,7 @@ import {
   Download,
   LogOut,
   PackageCheck,
+  Pencil,
   Search,
   X,
 } from "lucide-react";
@@ -381,6 +382,7 @@ type BurstStage =
   | "ready"
   | "reading"
   | "confirm"
+  | "acknowledge"
   | "exception"
   | "finished";
 
@@ -2553,6 +2555,23 @@ export function PorterReception() {
       releaseBurstPreview();
       setBurstPreviewUrl(URL.createObjectURL(resolved.file));
 
+      // Quando a leitura trouxe todos os dados e só o endereço precisa de
+      // conferência física, não há motivo para abrir o formulário inteiro.
+      // O aceite continua explícito e a auditoria registra o status divergente.
+      if (issues.length && issues.every((issue) => issue.code === "address")) {
+        setBurstWork({
+          draft: resolved,
+          issues,
+          suggestion: null,
+          addressAcknowledged: false,
+          duplicate: duplicated,
+          duplicateAcknowledged: duplicated,
+          savedId: null,
+        });
+        setBurstStage("acknowledge");
+        return;
+      }
+
       if (issues.length) {
         const suggestion = suggestBurstUnit({
           recipientName: resolved.recipientName,
@@ -2663,6 +2682,20 @@ export function PorterReception() {
     setBurstStage("confirm");
     releaseBurstPreview();
     return true;
+  }
+
+  async function confirmBurstAddress() {
+    const work = burstWork;
+    if (!work || burstBusy) return;
+    setPageError("");
+    setBurstBusy(true);
+    try {
+      // O aceite físico substitui o formulário neste caso, mas continua
+      // sendo enviado ao banco junto com o status determinístico da etiqueta.
+      await persistBurst(work.draft, true, work.duplicate);
+    } finally {
+      setBurstBusy(false);
+    }
   }
 
   async function submitBurstCorrection(event: FormEvent<HTMLFormElement>) {
@@ -5380,7 +5413,8 @@ export function PorterReception() {
                   type="button"
                   onClick={() => setBurstStage("exception")}
                 >
-                  Corrigir
+                  <Pencil size={14} aria-hidden="true" />
+                  Editar dados
                 </button>
                 {burstMessage && (
                   <p className="porter-warning" role="status">
@@ -5406,6 +5440,86 @@ export function PorterReception() {
                     onClick={() => void finishBurst()}
                   >
                     Finalizar
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {burstEnabled && burstStage === "acknowledge" && burstWork && (
+              <section className="porter-card burst-card burst-acknowledge">
+                <div className="burst-alert" role="alert">
+                  <AlertTriangle size={24} aria-hidden="true" />
+                  <div>
+                    <strong>Dados lidos. Confira o endereço.</strong>
+                    <ul>
+                      {burstWork.issues.map((issue) => (
+                        <li key={issue.code}>{issue.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                {burstWork.draft.ocrMessage && (
+                  <p className="burst-read-detail" role="status">
+                    {burstWork.draft.ocrMessage}
+                  </p>
+                )}
+                <p className="burst-highlight">
+                  {burstConfirmationLabel({
+                    blockName:
+                      blocks.find(
+                        (block) =>
+                          block.id ===
+                          units.find(
+                            (unit) => unit.id === burstWork.draft.unitId,
+                          )?.block_id,
+                      )?.name ?? null,
+                    unitNumber:
+                      units.find((unit) => unit.id === burstWork.draft.unitId)
+                        ?.unit_number ?? burstWork.draft.readUnitNumber ?? "",
+                    recipientName: burstWork.draft.recipientName,
+                    carrier: burstWork.draft.company,
+                  })}
+                </p>
+                <label className="burst-attest">
+                  <input
+                    type="checkbox"
+                    checked={burstWork.addressAcknowledged}
+                    onChange={(event) =>
+                      setBurstWork((current) =>
+                        current
+                          ? {
+                              ...current,
+                              addressAcknowledged: event.target.checked,
+                            }
+                          : current,
+                      )
+                    }
+                  />
+                  <span>
+                    Confiro que conferi fisicamente a etiqueta e o endereço
+                    deste condomínio.
+                  </span>
+                </label>
+                <div className="burst-action-grid">
+                  <button
+                    className="burst-primary-action"
+                    type="button"
+                    disabled={!burstWork.addressAcknowledged || burstBusy}
+                    onClick={() => void confirmBurstAddress()}
+                  >
+                    <Check size={26} aria-hidden="true" />
+                    <span>
+                      <strong>Registrar encomenda</strong>
+                      <small>Continuar no lote</small>
+                    </span>
+                  </button>
+                  <button
+                    className="burst-secondary-action"
+                    type="button"
+                    onClick={() => setBurstStage("exception")}
+                  >
+                    <Pencil size={18} aria-hidden="true" />
+                    Editar dados
                   </button>
                 </div>
               </section>

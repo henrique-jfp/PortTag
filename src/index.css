@@ -3779,7 +3779,10 @@ button.overview-stat:disabled {
 }
 
 .burst-correct-button {
+  display: inline-flex;
+  align-items: center;
   justify-self: center;
+  gap: 5px;
   border: 0;
   background: transparent;
   color: #5a6b85;
