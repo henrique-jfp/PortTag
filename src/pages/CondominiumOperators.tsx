@@ -114,6 +114,7 @@ export function CondominiumOperators({
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
   const [selectedCondominiumId, setSelectedCondominiumId] = useState("");
   const [portarias, setPortarias] = useState<Portaria[]>([]);
+  const [blocks, setBlocks] = useState<Array<{ id: string; name: string }>>([]);
   const [porters, setPorters] = useState<Porter[]>([]);
   const [managers, setManagers] = useState<Manager[]>([]);
   const [name, setName] = useState("");
@@ -230,8 +231,12 @@ export function CondominiumOperators({
       }
 
       setPageError("");
-      const [portariasResult, portersResult, managerMembershipsResult] =
-        await Promise.all([
+      const [
+        portariasResult,
+        portersResult,
+        managerMembershipsResult,
+        blocksResult,
+      ] = await Promise.all([
         supabase
           .from("portarias")
           .select("id, name, block_id, active")
@@ -252,13 +257,19 @@ export function CondominiumOperators({
           .eq("condominium_id", selectedCondominiumId)
           .eq("role", "admin")
           .order("created_at"),
+        supabase
+          .from("blocks")
+          .select("id, name")
+          .eq("condominium_id", selectedCondominiumId)
+          .order("name"),
       ]);
 
       if (!active) return;
       const loadError =
         portariasResult.error ??
         portersResult.error ??
-        managerMembershipsResult.error;
+        managerMembershipsResult.error ??
+        blocksResult.error;
       if (loadError) {
         setPageError(loadError.message);
         return;
@@ -271,6 +282,7 @@ export function CondominiumOperators({
         activePortarias.map((portaria) => [portaria.id, portaria.name]),
       );
       setPortarias(activePortarias);
+      setBlocks((blocksResult.data ?? []) as Array<{ id: string; name: string }>);
       setPorters(
         (portersResult.data ?? []).map((porter) => ({
           ...porter,
@@ -327,10 +339,16 @@ export function CondominiumOperators({
   const selectedCondominium = condominiums.find(
     (condominium) => condominium.id === selectedCondominiumId,
   );
+  const selectedPortaria = portarias.find(
+    (portaria) => portaria.id === effectivePortariaId,
+  );
+  const selectedBlockName =
+    blocks.find((block) => block.id === selectedPortaria?.block_id)?.name ?? "";
   const suggestedUsername = suggestPorterUsername(
     selectedCondominium?.street ?? "",
     name,
     selectedCondominium?.number ?? "",
+    selectedBlockName,
   );
   const username = resolvePorterUsername(usernameOverride, suggestedUsername);
 

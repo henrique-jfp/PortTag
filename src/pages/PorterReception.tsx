@@ -214,7 +214,7 @@ function getPorterViewFromLocation(): PorterView {
 }
 
 const DEVICE_RESOURCE_MESSAGE =
-  "O navegador ficou sem memória para processar a etiqueta. Feche outros aplicativos e tente novamente.";
+  "O aparelho ficou sem memória/espaço para processar a foto. Libere espaço, feche outros aplicativos e tente novamente. As encomendas já salvas no lote não foram perdidas.";
 
 function isDeviceResourceError(error: unknown) {
   const message =
@@ -394,6 +394,59 @@ type BurstRecord = {
   carrier: string;
   trackingCode: string;
 };
+
+type PersistedBurst = {
+  batchId: string;
+  sameDelivery: boolean;
+  delivery: BurstDeliveryPerson;
+  records: BurstRecord[];
+  savedAt: number;
+};
+
+const BURST_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function burstStateKey(condominiumId: string) {
+  return `encomenda-burst-${condominiumId}`;
+}
+
+function readPersistedBurst(condominiumId: string): PersistedBurst | null {
+  try {
+    const raw = window.localStorage.getItem(burstStateKey(condominiumId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedBurst;
+    if (
+      !parsed?.batchId ||
+      !Array.isArray(parsed.records) ||
+      Date.now() - parsed.savedAt > BURST_STATE_TTL_MS
+    ) {
+      window.localStorage.removeItem(burstStateKey(condominiumId));
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedBurst(condominiumId: string, state: PersistedBurst) {
+  try {
+    window.localStorage.setItem(
+      burstStateKey(condominiumId),
+      JSON.stringify({ ...state, savedAt: Date.now() }),
+    );
+  } catch {
+    // Estado do lote é conveniência: se o aparelho não gravar, o recebimento
+    // continua normalmente — o banco já tem as encomendas salvas.
+  }
+}
+
+function clearPersistedBurst(condominiumId: string) {
+  try {
+    window.localStorage.removeItem(burstStateKey(condominiumId));
+  } catch {
+    // Nada a fazer.
+  }
+}
 
 type BurstWork = {
   draft: PackageDraft;
@@ -1038,6 +1091,7 @@ export function PorterReception() {
   const [burstMessage, setBurstMessage] = useState("");
   const [burstSummary, setBurstSummary] = useState<BurstSummary | null>(null);
   const [burstPreviewUrl, setBurstPreviewUrl] = useState("");
+  const burstRestoredRef = useRef(false);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(
     null,
   );
@@ -1224,6 +1278,49 @@ export function PorterReception() {
       urls.clear();
     };
   }, []);
+
+  // Um lote não pode depender só da memória da aba: se o WebView for
+  // reiniciado, as encomendas já salvas continuam no banco e o lote precisa
+  // voltar para poder ser finalizado.
+  useEffect(() => {
+    if (!condominium?.id || loading) return;
+    burstRestoredRef.current = true;
+    const saved = readPersistedBurst(condominium.id);
+    if (!saved) return;
+    setBurstEnabled(true);
+    setBurstBatchId(saved.batchId);
+    setBurstSameDelivery(saved.sameDelivery);
+    setBurstDelivery(saved.delivery ?? { name: "", document: "" });
+    setBurstRecords(saved.records ?? []);
+    setBurstWork(null);
+    setBurstStage("ready");
+    setBurstMessage(
+      "Lote recuperado. Continue fotografando ou finalize as encomendas já salvas.",
+    );
+  }, [condominium?.id, loading]);
+
+  useEffect(() => {
+    if (!burstRestoredRef.current || !condominium?.id) return;
+    if (!burstEnabled || !burstBatchId || burstStage === "finished") {
+      clearPersistedBurst(condominium.id);
+      return;
+    }
+    writePersistedBurst(condominium.id, {
+      batchId: burstBatchId,
+      sameDelivery: burstSameDelivery,
+      delivery: burstDelivery,
+      records: burstRecords,
+      savedAt: Date.now(),
+    });
+  }, [
+    condominium?.id,
+    burstEnabled,
+    burstBatchId,
+    burstStage,
+    burstSameDelivery,
+    burstDelivery,
+    burstRecords,
+  ]);
 
   // O Chrome só dispara este evento quando considera o app instalável. Usar o
   // prompt dele garante um app standalone, e não um atalho com barra de URL.
@@ -2837,6 +2934,7 @@ export function PorterReception() {
 
   function resetBurst() {
     releaseBurstPreview();
+    if (condominium?.id) clearPersistedBurst(condominium.id);
     setBurstEnabled(false);
     setBurstStage("setup");
     setBurstBatchId("");

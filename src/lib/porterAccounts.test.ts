@@ -5,9 +5,23 @@ import {
 } from "./porterAccounts";
 
 describe("usuário automático do porteiro", () => {
-  it("sugere iniciais do endereço, primeiro nome e número", () => {
+  it("sugere iniciais do endereço, nome, inicial do sobrenome e número", () => {
     expect(
       suggestPorterUsername("Avenida Paulista", "João Silva", "1000"),
+    ).toBe("apjoaos1000");
+  });
+
+  it("inclui o bloco quando a portaria tem bloco", () => {
+    expect(
+      suggestPorterUsername(
+        "Avenida Paulista",
+        "João Silva",
+        "1000",
+        "Bloco B",
+      ),
+    ).toBe("apjoaosblocob1000");
+    expect(
+      suggestPorterUsername("Avenida Paulista", "João", "1000", ""),
     ).toBe("apjoao1000");
   });
 

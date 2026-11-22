@@ -7,15 +7,28 @@ export function normalizePorterUsername(value: string) {
     .slice(0, 32);
 }
 
+/**
+ * Sugestão padrão: iniciais do endereço + primeiro nome + inicial do
+ * sobrenome + bloco (quando há) + número do prédio. O porteiro pode editar.
+ */
 export function suggestPorterUsername(
   street: string,
   porterName: string,
   buildingNumber: string,
+  blockName?: string,
 ) {
+  const nameParts = porterName.trim().split(/\s+/).filter(Boolean);
   const firstName = normalizePorterUsername(
-    porterName.trim().split(/\s+/)[0] ?? "",
+    nameParts[0] ?? "",
   ).replace(/[^a-z0-9]/g, "");
   if (!firstName) return "";
+
+  const surnameInitial = nameParts.length > 1
+    ? (normalizePorterUsername(nameParts[nameParts.length - 1]).replace(
+        /[^a-z0-9]/g,
+        "",
+      )[0] ?? "")
+    : "";
 
   const streetInitials = (
     street
@@ -26,19 +39,25 @@ export function suggestPorterUsername(
   )
     .map((word) => word[0])
     .join("");
+
+  const normalizedBlock = normalizePorterUsername(blockName ?? "")
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 8);
   const normalizedNumber = normalizePorterUsername(buildingNumber)
     .replace(/[^a-z0-9]/g, "")
     .slice(0, 12);
+
+  const suffix = `${surnameInitial}${normalizedBlock}${normalizedNumber}`;
   const normalizedFirstName = firstName.slice(
     0,
-    Math.max(0, 32 - normalizedNumber.length),
+    Math.max(0, 32 - suffix.length),
   );
   const availableInitials = Math.max(
     0,
-    32 - normalizedFirstName.length - normalizedNumber.length,
+    32 - normalizedFirstName.length - suffix.length,
   );
 
-  return `${streetInitials.slice(0, availableInitials)}${normalizedFirstName}${normalizedNumber}`;
+  return `${streetInitials.slice(0, availableInitials)}${normalizedFirstName}${suffix}`;
 }
 
 /**

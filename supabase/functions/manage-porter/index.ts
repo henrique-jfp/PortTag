@@ -94,6 +94,28 @@ function porterEmail(username: string) {
   return `porter-${username}@porter.invalid`;
 }
 
+function nextPorterUsername(base: string, suffix: number) {
+  const suffixText = String(suffix);
+  return `${base.slice(0, 32 - suffixText.length)}${suffixText}`;
+}
+
+/**
+ * O "zerar condomínio" remove os vínculos locais, mas mantém a conta em
+ * auth.users. Sem isso, o mesmo usuário geraria o mesmo e-mail e o Supabase
+ * recusaria a criação com "already registered".
+ */
+function isDuplicatePorterEmail(
+  error: { message?: string; code?: string } | null | undefined,
+) {
+  const message = (error?.message ?? "").toLowerCase();
+  return (
+    error?.code === "email_exists" ||
+    /already (registered|exists)|já (está )?cadastrad|email.*(existe|cadastrad)/i.test(
+      message,
+    )
+  );
+}
+
 function escapeLikePattern(value: string) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
@@ -301,51 +323,66 @@ Deno.serve(async (request: Request) => {
 
     let resolvedUsername = username;
     let suffix = 1;
-    while (suffix <= 9999) {
+    let createdAuthUserId = "";
+    let password = "";
+
+    while (suffix <= 9999 && !createdAuthUserId) {
       const { data: existingAccount, error: existingError } = await serviceClient
         .from("porter_accounts")
         .select("id")
         .ilike("username", escapeLikePattern(resolvedUsername))
         .maybeSingle();
       if (existingError) return respond({ error: existingError.message }, 500);
-      if (!existingAccount) break;
 
-      suffix += 1;
-      if (suffix <= 9999) {
-        const suffixText = String(suffix);
-        resolvedUsername = `${username.slice(0, 32 - suffixText.length)}${suffixText}`;
+      if (existingAccount) {
+        suffix += 1;
+        if (suffix <= 9999) resolvedUsername = nextPorterUsername(username, suffix);
+        continue;
       }
+
+      password = createTemporaryPassword();
+      const { data: createdUser, error: createUserError } =
+        await serviceClient.auth.admin.createUser({
+          email: porterEmail(resolvedUsername),
+          password,
+          email_confirm: true,
+          user_metadata: {
+            display_name: name,
+            username: resolvedUsername,
+            account_type: "porter",
+          },
+        });
+
+      if (!createUserError && createdUser?.user) {
+        createdAuthUserId = createdUser.user.id;
+        break;
+      }
+      if (createUserError && !isDuplicatePorterEmail(createUserError)) {
+        return respond(
+          { error: createUserError.message || "Não foi possível criar a conta." },
+          400,
+        );
+      }
+      if (!createdUser?.user && !createUserError) {
+        return respond({ error: "Não foi possível criar a conta." }, 400);
+      }
+
+      // E-mail já existe em auth.users (comum após zerar o condomínio).
+      suffix += 1;
+      if (suffix <= 9999) resolvedUsername = nextPorterUsername(username, suffix);
     }
-    if (suffix > 9999) {
+
+    if (suffix > 9999 || !createdAuthUserId) {
       return respond(
         { error: "Não foi possível gerar um usuário único. Edite o nome de usuário e tente novamente." },
         409,
       );
     }
 
-    const password = createTemporaryPassword();
-    const { data: createdUser, error: createUserError } =
-      await serviceClient.auth.admin.createUser({
-        email: porterEmail(resolvedUsername),
-        password,
-        email_confirm: true,
-        user_metadata: {
-          display_name: name,
-          username: resolvedUsername,
-          account_type: "porter",
-        },
-      });
-    if (createUserError || !createdUser.user) {
-      return respond(
-        { error: createUserError?.message ?? "Não foi possível criar a conta." },
-        400,
-      );
-    }
-
     const { data: account, error: accountError } = await serviceClient
       .from("porter_accounts")
       .insert({
-        auth_user_id: createdUser.user.id,
+        auth_user_id: createdAuthUserId,
         condominium_id: condominiumId,
         username: resolvedUsername,
         name,
@@ -358,7 +395,7 @@ Deno.serve(async (request: Request) => {
       .single();
 
     if (accountError || !account) {
-      await serviceClient.auth.admin.deleteUser(createdUser.user.id);
+      await serviceClient.auth.admin.deleteUser(createdAuthUserId);
       return respond(
         { error: accountError?.message ?? "Não foi possível salvar o cadastro." },
         500,
@@ -369,14 +406,14 @@ Deno.serve(async (request: Request) => {
       .from("condominium_users")
       .insert({
         condominium_id: condominiumId,
-        user_id: createdUser.user.id,
+        user_id: createdAuthUserId,
         role: "operator",
         status: "active",
         created_by: userData.user.id,
       });
 
     if (membershipError) {
-      await serviceClient.auth.admin.deleteUser(createdUser.user.id);
+      await serviceClient.auth.admin.deleteUser(createdAuthUserId);
       return respond({ error: membershipError.message }, 500);
     }
 
@@ -390,7 +427,7 @@ Deno.serve(async (request: Request) => {
           })),
         );
       if (assignmentsError) {
-        await serviceClient.auth.admin.deleteUser(createdUser.user.id);
+        await serviceClient.auth.admin.deleteUser(createdAuthUserId);
         return respond({ error: assignmentsError.message }, 500);
       }
     }
