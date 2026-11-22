@@ -2422,6 +2422,13 @@ export function PorterReception() {
     setBurstPreviewUrl("");
   }
 
+  /** Sai da foto atual sem salvar e volta ao botão de fotografar o próximo. */
+  function discardBurstPhoto() {
+    releaseBurstPreview();
+    setBurstWork(null);
+    setBurstStage("ready");
+  }
+
   function updateBurstDraft(patch: Partial<PackageDraft>) {
     setBurstWork((current) =>
       current ? { ...current, draft: { ...current.draft, ...patch } } : current,
@@ -5521,6 +5528,14 @@ export function PorterReception() {
                     <Pencil size={18} aria-hidden="true" />
                     Editar dados
                   </button>
+                  <button
+                    className="porter-secondary-button"
+                    type="button"
+                    disabled={burstBusy}
+                    onClick={discardBurstPhoto}
+                  >
+                    Descartar foto e seguir
+                  </button>
                 </div>
               </section>
             )}
@@ -5723,7 +5738,7 @@ export function PorterReception() {
                       className="porter-secondary-button"
                       type="button"
                       disabled={burstBusy}
-                      onClick={() => setBurstStage("ready")}
+                      onClick={discardBurstPhoto}
                     >
                       Descartar foto
                     </button>
