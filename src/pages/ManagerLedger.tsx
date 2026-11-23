@@ -135,7 +135,6 @@ export function ManagerLedger() {
   const [buildings, setBuildings] = useState<NotebookBuilding[]>([]);
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [blockOptions, setBlockOptions] = useState<BlockOption[]>([]);
-  const [notebookBlockId, setNotebookBlockId] = useState("");
   const [section, setSection] = useState<Section>("overview");
   const [notebookTab, setNotebookTab] = useState<NotebookTab>("records");
   const [notebookPreset, setNotebookPreset] = useState<PackageFilterPreset | null>(
@@ -451,50 +450,22 @@ export function ManagerLedger() {
                 </button>
               </div>
               {notebookTab === "records" && (
-                <>
-                  <div className="manager-context">
-                    <label>
-                      Bloco
-                      <select
-                        value={notebookBlockId}
-                        onChange={(event) =>
-                          setNotebookBlockId(event.target.value)
-                        }
-                      >
-                        <option value="">Todos os blocos</option>
-                        {blockOptions.map((block) => (
-                          <option key={block.id} value={block.id}>
-                            {block.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <span>
-                      Filtro estruturado aplicado ao caderno e aos relatórios.
-                    </span>
-                  </div>
-                  <PackageNotebook
-                    key={`${notebookPreset?.label ?? "all-records"}-${notebookBlockId || "all-blocks"}`}
-                    buildings={buildings}
-                    notebooks={notebooks}
-                    blockOptions={blockOptions.map((block) => ({
-                      id: block.id,
-                      name: block.name,
-                    }))}
-                    initialFilters={
-                      {
-                        ...notebookPreset?.filters,
-                        blockId: notebookBlockId || null,
-                      } as LedgerFilters
-                    }
-                    presetLabel={notebookPreset?.label ?? ""}
-                    onClearPreset={() => {
-                      setNotebookPreset(null);
-                      setNotebookBlockId("");
-                    }}
-                    allowReceiptPrint
-                  />
-                </>
+                <PackageNotebook
+                  key={notebookPreset?.label ?? "all-records"}
+                  buildings={buildings}
+                  notebooks={notebooks}
+                  blockOptions={blockOptions.map((block) => ({
+                    id: block.id,
+                    name: block.name,
+                  }))}
+                  initialFilters={
+                    notebookPreset?.filters as LedgerFilters | undefined
+                  }
+                  presetLabel={notebookPreset?.label ?? ""}
+                  onClearPreset={() => setNotebookPreset(null)}
+                  allowReceiptPrint
+                  hierarchicalNavigation
+                />
               )}
               {notebookTab === "audit" && activeBuildingId && (
                 <ManagerHistoryPanel

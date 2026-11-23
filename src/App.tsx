@@ -54,8 +54,8 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 function AdminLayout() {
   const { user } = useAuth();
   const location = useLocation();
-  const painelActive =
-    location.pathname === "/" || location.pathname.startsWith("/condominiums/");
+  const painelActive = location.pathname === "/";
+  const condominiumsActive = location.pathname.startsWith("/condominiums");
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     isActive ? "is-active" : undefined;
 
@@ -67,6 +67,14 @@ function AdminLayout() {
         className={painelActive ? "is-active" : linkClass({ isActive: false })}
       >
         <LayoutDashboard size={17} /> Painel
+      </NavLink>
+      <NavLink
+        to="/condominiums"
+        className={
+          condominiumsActive ? "is-active" : linkClass({ isActive: false })
+        }
+      >
+        <Building2 size={17} /> Condomínios
       </NavLink>
       <NavLink to="/notebook" className={linkClass}>
         <ClipboardList size={17} /> Caderno
@@ -117,6 +125,8 @@ export default function App() {
 
       <Route element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
         <Route path="/" element={<Dashboard />} />
+
+        <Route path="/condominiums" element={<Dashboard listView />} />
 
         <Route
           path="/notebook"

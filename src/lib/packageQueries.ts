@@ -125,8 +125,10 @@ export async function fetchDrawers(
   condominiumId: string,
   filters: PackageFilters,
   page: number,
+  pageSize: number = DRAWER_PAGE_SIZE,
 ): Promise<PageResult<DrawerRecord>> {
   const { from, to } = dateBounds(filters);
+  const size = Math.min(Math.max(Math.trunc(pageSize), 1), 100);
   const { data, error } = await supabase.rpc("search_package_drawers", {
     arg_condominium_id: condominiumId,
     arg_date_from: from,
@@ -137,8 +139,8 @@ export async function fetchDrawers(
     arg_porter_query: filters.porter || null,
     arg_status: filters.status || null,
     arg_block_id: filters.blockId ?? null,
-    arg_limit: DRAWER_PAGE_SIZE,
-    arg_offset: (page - 1) * DRAWER_PAGE_SIZE,
+    arg_limit: size,
+    arg_offset: (page - 1) * size,
   });
   if (error) throw new Error(error.message);
   const rows = (data ?? []) as Array<DrawerRecord & { total_drawers: number }>;
@@ -146,6 +148,35 @@ export async function fetchDrawers(
     items: rows.map(({ total_drawers: _total, ...drawer }) => drawer),
     total: rows[0]?.total_drawers ?? 0,
   };
+}
+
+/**
+ * Modo hierárquico do caderno: carrega todas as gavetas visíveis para montar
+ * blocos → andares → apartamentos sem depender de paginação da RPC (limite 100
+ * por chamada). O teto evita consultas intermináveis se o cadastro crescer.
+ */
+export async function fetchAllDrawers(
+  condominiumId: string,
+  filters: PackageFilters,
+): Promise<DrawerRecord[]> {
+  const pageSize = 100;
+  const maxDrawers = 5_000;
+  const first = await fetchDrawers(condominiumId, filters, 1, pageSize);
+  const items = [...first.items];
+  while (
+    items.length < Math.min(first.total, maxDrawers) &&
+    first.items.length === pageSize
+  ) {
+    const next = await fetchDrawers(
+      condominiumId,
+      filters,
+      Math.floor(items.length / pageSize) + 1,
+      pageSize,
+    );
+    if (next.items.length === 0) break;
+    items.push(...next.items);
+  }
+  return items;
 }
 
 export async function fetchPackageRecords(options: {

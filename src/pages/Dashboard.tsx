@@ -140,7 +140,7 @@ const emptyForm: CondominiumForm = {
   operationMode: "per_block",
 };
 
-export function Dashboard() {
+export function Dashboard({ listView = false }: { listView?: boolean }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -598,7 +598,13 @@ export function Dashboard() {
       <header className="dashboard-header">
         <div className="admin-page-title">
           <p className="eyebrow">Controle de Encomendas</p>
-          <h1>{isSuperAdmin ? "Painel do Super Admin" : "Acesso de operador"}</h1>
+          <h1>
+            {isSuperAdmin
+              ? listView
+                ? "Condomínios"
+                : "Painel do Super Admin"
+              : "Acesso de operador"}
+          </h1>
           <p>Conectado como {user?.email}</p>
         </div>
       </header>
@@ -625,7 +631,7 @@ export function Dashboard() {
         </section>
       ) : (
         <>
-          <section className="admin-section">
+          <section className="admin-section" hidden={listView}>
             <div className="section-heading">
               <div>
                 <h2>Cadastrar condomínio</h2>
@@ -633,7 +639,7 @@ export function Dashboard() {
                   Cadastre unidades, vincule porteiros e registre os
                   recebimentos de cada condomínio. Nome e endereço são
                   definitivos após o cadastro; para suspender o acesso sem
-                  excluir os dados, use o botão de status na lista abaixo.
+                  excluir os dados, use a aba Condomínios.
                 </p>
               </div>
             </div>
@@ -926,7 +932,20 @@ export function Dashboard() {
             </form>
           </section>
 
-          <section className="admin-section">
+          <section className="welcome-card admin-home-summary" hidden={listView}>
+            <h2>Condomínios cadastrados</h2>
+            <p>
+              {condominiums.length} registro(s) cadastrado(s). Gerencie blocos,
+              unidades, porteiros e prazos de acesso na aba própria.
+            </p>
+            <div className="header-actions">
+              <Link className="primary-button button-link" to="/condominiums">
+                Abrir Condomínios
+              </Link>
+            </div>
+          </section>
+
+          <section className="admin-section" hidden={!listView}>
             <div className="section-heading">
               <div>
                 <h2>Condomínios cadastrados</h2>

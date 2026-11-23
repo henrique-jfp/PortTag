@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import {
   DRAWER_PAGE_SIZE,
   RECORD_PAGE_SIZE,
+  fetchAllDrawers,
   fetchDrawers,
   fetchPackageEvents,
   fetchPackageRecords,
@@ -16,6 +17,11 @@ import {
   type PackageRecordRow,
   type PackageSort,
 } from "../lib/packageQueries";
+import {
+  buildFloorGroups,
+  buildNotebookHierarchy,
+  type NotebookHierarchyGroup,
+} from "../lib/notebookHierarchy";
 
 export type NotebookBuilding = {
   id: string;
@@ -59,6 +65,7 @@ export function PackageNotebook({
   allowReceiptPrint = false,
   notebooks = [],
   blockOptions = [],
+  hierarchicalNavigation = false,
 }: {
   buildings: NotebookBuilding[];
   forceBuildingList?: boolean;
@@ -70,6 +77,8 @@ export function PackageNotebook({
   notebooks?: Array<{ id: string; name: string; blockId: string | null }>;
   /** Blocos disponíveis para restringir o caderno aberto. */
   blockOptions?: Array<{ id: string; name: string }>;
+  /** Caderno do Síndico: bloco → andar → apartamento → recebimentos. */
+  hierarchicalNavigation?: boolean;
 }) {
   const [buildingId, setBuildingId] = useState("");
   // O bloco vive fora de `filters`: ele pode vir do chamador, da aba ativa ou
@@ -81,6 +90,9 @@ export function PackageNotebook({
   const [activeNotebookId, setActiveNotebookId] = useState("");
   /** null = usar o bloco recebido/da aba; "" = sem filtro de bloco. */
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  /** Navegação hierárquica: nome do bloco e chave do andar abertos. */
+  const [selectedBlockName, setSelectedBlockName] = useState("");
+  const [selectedFloorKey, setSelectedFloorKey] = useState("");
   const [sort, setSort] = useState<PackageSort>("recent");
   const [porterNames, setPorterNames] = useState<Map<string, string>>(new Map());
   const [drawers, setDrawers] = useState<DrawerRecord[]>([]);
@@ -134,7 +146,15 @@ export function PackageNotebook({
   useEffect(() => {
     if (!activeBuildingId) return;
     let active = true;
-    fetchDrawers(activeBuildingId, effectiveFilters, drawerPage)
+    // No modo hierárquico todas as gavetas visíveis são carregadas para formar
+    // blocos e andares; o caderno comum continua paginado em 12 apartamentos.
+    const request = hierarchicalNavigation
+      ? fetchAllDrawers(activeBuildingId, effectiveFilters).then((items) => ({
+          items,
+          total: items.length,
+        }))
+      : fetchDrawers(activeBuildingId, effectiveFilters, drawerPage);
+    request
       .then((result) => {
         if (!active) return;
         setDrawers(result.items);
@@ -151,7 +171,7 @@ export function PackageNotebook({
     return () => {
       active = false;
     };
-  }, [activeBuildingId, drawerPage, effectiveFilters]);
+  }, [activeBuildingId, drawerPage, effectiveFilters, hierarchicalNavigation]);
 
   // A RPC search_package_records ordena por received_at desc, id desc quando
   // arg_sort = 'recent' (padrão desta tela): a gaveta vai do mais novo ao mais
@@ -216,6 +236,19 @@ export function PackageNotebook({
     (building) => building.id === activeBuildingId,
   );
 
+  const hierarchyBlocks = useMemo(
+    () => (hierarchicalNavigation ? buildNotebookHierarchy(drawers) : []),
+    [drawers, hierarchicalNavigation],
+  );
+  const activeBlock =
+    hierarchyBlocks.find((block) => block.label === selectedBlockName) ?? null;
+  const floorGroups = useMemo(
+    () => (activeBlock ? buildFloorGroups(activeBlock.drawers) : []),
+    [activeBlock],
+  );
+  const activeFloor =
+    floorGroups.find((floor) => floor.key === selectedFloorKey) ?? null;
+
   useEffect(() => {
     if (!selectedRecordId || eventCache[selectedRecordId]) return;
     let active = true;
@@ -245,11 +278,19 @@ export function PackageNotebook({
     setRecordPage(1);
   }
 
+  /** Toda troca de escopo volta ao primeiro nível: blocos. */
+  function resetHierarchy() {
+    if (!hierarchicalNavigation) return;
+    setSelectedBlockName("");
+    setSelectedFloorKey("");
+  }
+
   function updateFilters(patch: PackageFilters) {
     setFilters((current) => ({ ...current, ...patch }));
     setDrawerPage(1);
     setDrawersLoading(true);
     setError("");
+    resetHierarchy();
     resetDrawer();
   }
 
@@ -262,6 +303,7 @@ export function PackageNotebook({
     setDrawerPage(1);
     setDrawersLoading(true);
     setError("");
+    resetHierarchy();
     resetDrawer();
   }
 
@@ -270,6 +312,7 @@ export function PackageNotebook({
     setDrawerPage(1);
     setDrawersLoading(true);
     setError("");
+    resetHierarchy();
     resetDrawer();
   }
 
@@ -280,6 +323,7 @@ export function PackageNotebook({
     setDrawerPage(1);
     setDrawersLoading(true);
     setError("");
+    resetHierarchy();
     resetDrawer();
     onClearPreset?.();
   }
@@ -419,6 +463,107 @@ export function PackageNotebook({
     return () => window.clearTimeout(timer);
   }, [printRecordId, printLoadingId]);
 
+  function openDrawer(drawer: DrawerRecord) {
+    setActiveDrawer(drawer);
+    setSelectedRecordId("");
+    setRecords([]);
+    setRecordTotal(0);
+    setRecordPage(1);
+    setRecordsLoading(true);
+    setError("");
+  }
+
+  function groupCard(group: NotebookHierarchyGroup, onClick: () => void) {
+    return (
+      <li key={group.key}>
+        <button className="notebook-drawer-card" type="button" onClick={onClick}>
+          <strong>{group.label}</strong>
+          <small>
+            {group.drawers.length} apartamento(s) ·{" "}
+            {group.packageCount.toLocaleString("pt-BR")} recebimento(s)
+          </small>
+          <small>Última recebida em {formatDate(group.lastReceivedAt)}</small>
+          {group.pendingCount > 0 && (
+            <small className="notebook-pending">
+              {group.pendingCount} aguardando retirada
+            </small>
+          )}
+          <ChevronRight size={17} aria-hidden="true" />
+        </button>
+      </li>
+    );
+  }
+
+  function renderHierarchyList() {
+    if (!activeBlock) {
+      return hierarchyBlocks.length === 0 ? (
+        <p className="notebook-empty">
+          Nenhum bloco com recebimentos no período selecionado.
+        </p>
+      ) : (
+        <ul className="notebook-drawer-list">
+          {hierarchyBlocks.map((block) =>
+            groupCard(block, () => {
+              setSelectedBlockName(block.label);
+              setSelectedFloorKey("");
+              resetDrawer();
+            }),
+          )}
+        </ul>
+      );
+    }
+
+    if (!activeFloor) {
+      return floorGroups.length === 0 ? (
+        <p className="notebook-empty">Nenhum andar encontrado neste bloco.</p>
+      ) : (
+        <ul className="notebook-drawer-list">
+          {floorGroups.map((floor) =>
+            groupCard(floor, () => {
+              setSelectedFloorKey(floor.key);
+              resetDrawer();
+            }),
+          )}
+        </ul>
+      );
+    }
+
+    return (
+      <ul className="notebook-drawer-list">
+        {activeFloor.drawers.map((drawer) => (
+          <li key={`${drawer.unit_id ?? "sem-id"}-${drawer.unit_number}`}>
+            <button
+              className={[
+                "notebook-drawer-card",
+                activeDrawer?.unit_id === drawer.unit_id &&
+                activeDrawer?.unit_number === drawer.unit_number
+                  ? "is-active"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              type="button"
+              onClick={() => openDrawer(drawer)}
+            >
+              <strong>{drawerLabel(drawer)}</strong>
+              <small>
+                {drawer.package_count.toLocaleString("pt-BR")}{" "}
+                {drawer.package_count === 1 ? "recebimento" : "recebimentos"} ·
+                última em {formatDate(drawer.last_received_at)}
+              </small>
+              {drawer.pending_count > 0 && (
+                <small className="notebook-pending">
+                  {drawer.pending_count} aguardando retirada
+                </small>
+              )}
+              <ChevronRight size={17} aria-hidden="true" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
   if (!buildings.length) {
     return (
       <p className="notebook-empty">
@@ -451,6 +596,7 @@ export function PackageNotebook({
                     setDrawerPage(1);
                     setDrawersLoading(true);
                     setError("");
+                    resetHierarchy();
                     resetDrawer();
                   }}
                 >
@@ -539,6 +685,7 @@ export function PackageNotebook({
             onClick={() => {
               setBuildingId("");
               setDrawerPage(1);
+              resetHierarchy();
               resetDrawer();
             }}
           >
@@ -550,7 +697,7 @@ export function PackageNotebook({
       )}
 
       <div className="notebook-filters">
-        {blockOptions.length > 0 && (
+        {blockOptions.length > 0 && !hierarchicalNavigation && (
           <label>
             Bloco
             <select
@@ -671,16 +818,85 @@ export function PackageNotebook({
         <section className="notebook-panel">
           <div className="notebook-heading">
             <div>
-              <h2>Gavetas de apartamentos</h2>
+              <h2>
+                {hierarchicalNavigation
+                  ? activeFloor
+                    ? `${activeBlock?.label ?? ""} · ${activeFloor.label}`
+                    : activeBlock
+                      ? `Andares de ${activeBlock.label}`
+                      : "Blocos do caderno"
+                  : "Gavetas de apartamentos"}
+              </h2>
               <p>
-                {drawerTotal.toLocaleString("pt-BR")} apartamento(s) com
-                registros. Abra uma gaveta para ver os recebimentos do mais
-                recente ao mais antigo.
+                {hierarchicalNavigation
+                  ? activeFloor
+                    ? `${activeFloor.drawers.length} apartamento(s) neste andar. Abra um para ver os recebimentos do mais recente ao mais antigo.`
+                    : activeBlock
+                      ? `${floorGroups.length} andar(es) · ${activeBlock.drawers.length} apartamento(s). Cada andar abre as gavetas com recebimento mais recente primeiro.`
+                      : `${hierarchyBlocks.length} bloco(s) com recebimentos. Abra um bloco para ver a gaveta de andares.`
+                  : `${drawerTotal.toLocaleString("pt-BR")} apartamento(s) com registros. Abra uma gaveta para ver os recebimentos do mais recente ao mais antigo.`}
               </p>
             </div>
           </div>
 
-          {drawersLoading ? (
+          {hierarchicalNavigation && (activeBlock || activeFloor) && (
+            <div className="notebook-building-bar notebook-hierarchy-bar">
+              {activeFloor ? (
+                <>
+                  <button
+                    className="notebook-back"
+                    type="button"
+                    onClick={() => {
+                      setSelectedFloorKey("");
+                      resetDrawer();
+                    }}
+                  >
+                    <ArrowLeft size={16} aria-hidden="true" />
+                    Andares
+                  </button>
+                  <button
+                    className="notebook-back"
+                    type="button"
+                    onClick={() => {
+                      setSelectedBlockName("");
+                      setSelectedFloorKey("");
+                      resetDrawer();
+                    }}
+                  >
+                    Blocos
+                  </button>
+                  <ChevronRight size={14} aria-hidden="true" />
+                  <strong>{activeBlock?.label}</strong>
+                  <ChevronRight size={14} aria-hidden="true" />
+                  <strong>{activeFloor.label}</strong>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="notebook-back"
+                    type="button"
+                    onClick={() => {
+                      setSelectedBlockName("");
+                      resetDrawer();
+                    }}
+                  >
+                    <ArrowLeft size={16} aria-hidden="true" />
+                    Blocos
+                  </button>
+                  <ChevronRight size={14} aria-hidden="true" />
+                  <strong>{activeBlock?.label}</strong>
+                </>
+              )}
+            </div>
+          )}
+
+          {hierarchicalNavigation ? (
+            drawersLoading ? (
+              <p className="notebook-empty">Carregando gavetas...</p>
+            ) : (
+              renderHierarchyList()
+            )
+          ) : drawersLoading ? (
             <p className="notebook-empty">Carregando gavetas...</p>
           ) : drawers.length === 0 ? (
             <p className="notebook-empty">Nenhuma gaveta encontrada.</p>
@@ -699,15 +915,7 @@ export function PackageNotebook({
                       .filter(Boolean)
                       .join(" ")}
                     type="button"
-                    onClick={() => {
-                      setActiveDrawer(drawer);
-                      setSelectedRecordId("");
-                      setRecords([]);
-                      setRecordTotal(0);
-                      setRecordPage(1);
-                      setRecordsLoading(true);
-                      setError("");
-                    }}
+                    onClick={() => openDrawer(drawer)}
                   >
                     <strong>{drawerLabel(drawer)}</strong>
                     <small>
@@ -727,17 +935,19 @@ export function PackageNotebook({
               ))}
             </ul>
           )}
-          <Pagination
-            page={drawerPage}
-            total={drawerTotal}
-            pageSize={DRAWER_PAGE_SIZE}
-            onChange={(page) => {
-              setDrawerPage(page);
-              setDrawersLoading(true);
-            }}
-            label="Páginas de gavetas"
-            disabled={drawersLoading}
-          />
+          {!hierarchicalNavigation && (
+            <Pagination
+              page={drawerPage}
+              total={drawerTotal}
+              pageSize={DRAWER_PAGE_SIZE}
+              onChange={(page) => {
+                setDrawerPage(page);
+                setDrawersLoading(true);
+              }}
+              label="Páginas de gavetas"
+              disabled={drawersLoading}
+            />
+          )}
         </section>
 
         <section className="notebook-panel notebook-records-panel">

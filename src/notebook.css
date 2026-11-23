@@ -209,6 +209,10 @@
   font-size: 14px;
 }
 
+.notebook-hierarchy-bar svg {
+  color: var(--nb-muted);
+}
+
 .notebook-back,
 .notebook-close {
   padding: 6px 10px;

@@ -78,6 +78,11 @@
   margin-top: 16px;
 }
 
+.dashboard .admin-home-summary {
+  margin-top: 16px;
+  border: 1px solid var(--admin-border);
+}
+
 .dashboard .section-heading {
   margin-bottom: 18px;
 }
