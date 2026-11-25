@@ -69,6 +69,9 @@
 }
 
 .manager-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   padding: 10px 14px;
   border: 0;
@@ -79,11 +82,12 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
 
 .manager-tabs button.is-active {
-  border-bottom-color: #2859c5;
-  color: #2859c5;
+  border-bottom-color: #2563eb;
+  color: #2563eb;
 }
 
 .manager-card,
@@ -437,10 +441,13 @@
 
 .manager-event-type {
   flex: 0 0 auto;
-  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
   border-radius: 6px;
   background: #eef4ff;
-  color: #2859c5;
+  color: #2563eb;
   font-size: 11px;
   font-weight: 600;
 }
@@ -513,6 +520,47 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.manager-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.manager-report-periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.manager-report-periods button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid #dfe5ef;
+  border-radius: 8px;
+  background: #fff;
+  color: #48536a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.manager-report-periods button.is-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.manager-report-print-header,
+.manager-report-print-footer {
+  display: none;
 }
 
 .manager-resident-filters {
@@ -711,4 +759,689 @@
 }
 .spin {
   animation: spin 1s linear infinite;
+}
+
+/* "Exportar PDF" usa a impressão do navegador: só o relatório aparece na
+   folha e o usuário escolhe "Salvar como PDF". Sem biblioteca de PDF. */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  .manager-report-print,
+  .manager-report-print * {
+    visibility: visible;
+  }
+
+  .manager-report-print {
+    display: block;
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    color: #172033;
+    background: #fff;
+    font-size: 11px;
+  }
+
+  .manager-report-print-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #2859c5;
+  }
+
+  .manager-report-print-header p {
+    margin: 0;
+    color: #697386;
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+
+  .manager-report-print-header h2 {
+    margin: 3px 0;
+    font-size: 20px;
+  }
+
+  .manager-report-print-header span {
+    color: #48536a;
+    font-size: 11px;
+  }
+
+  .manager-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  .manager-summary-grid > div {
+    padding: 8px;
+    border-radius: 6px;
+  }
+
+  .manager-summary-grid strong {
+    font-size: 16px;
+  }
+
+  .manager-summary-grid span {
+    font-size: 10px;
+  }
+
+  .manager-report-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .manager-table {
+    font-size: 10px;
+  }
+
+  .manager-table th,
+  .manager-table td {
+    padding: 4px 6px;
+  }
+
+  .manager-table thead {
+    display: table-header-group;
+  }
+
+  .manager-table tr {
+    break-inside: avoid;
+  }
+
+  .manager-report-print-footer {
+    display: block;
+    margin-top: 12px;
+    color: #697386;
+    font-size: 9px;
+  }
+}
+
+
+/* ── Cabeçalho dinâmico, alertas e relatórios visuais ──────────────── */
+
+.manager-page-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.manager-page-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+
+.manager-building-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid #dbe6ff;
+  border-radius: 999px;
+  background: #f6f9ff;
+  color: #1e3a8a;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.overview-alert-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.overview-alert-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 10px;
+}
+
+.overview-alert-icon.is-warning {
+  background: #fff3df;
+  color: #a2660c;
+}
+
+.overview-alert-icon.is-info {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.overview-alert .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.manager-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+@keyframes managerFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes managerBarGrow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes managerShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.manager-report-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.manager-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid #e3e8f1;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 6px 22px rgba(20, 35, 65, 0.04);
+  animation: managerFadeUp 0.32s ease both;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.manager-kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: #bfdbfe;
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.08);
+}
+
+.manager-kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.manager-kpi-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.manager-kpi-card.is-success .manager-kpi-icon {
+  background: #e6f6ee;
+  color: #16a34a;
+}
+
+.manager-kpi-card.is-info .manager-kpi-icon {
+  background: #fff3df;
+  color: #d97706;
+}
+
+.manager-kpi-card.is-neutral .manager-kpi-icon {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.manager-kpi-badge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #f4f7fb;
+  color: #53647d;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.manager-kpi-card strong {
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.manager-kpi-card > span:last-child {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.manager-report-visual-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.manager-report-visual-row .manager-card {
+  margin-top: 0;
+  animation: managerFadeUp 0.38s ease both;
+}
+
+.manager-donut-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.manager-donut-wrap {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  flex: 0 0 116px;
+}
+
+.manager-donut-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.manager-donut-track {
+  fill: none;
+  stroke: #e8eef8;
+  stroke-width: 11;
+}
+
+.manager-donut-progress {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 11;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.manager-donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.manager-donut-center strong {
+  color: #0f172a;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.manager-donut-center span {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.manager-donut-legend {
+  min-width: 0;
+}
+
+.manager-donut-legend h3 {
+  margin: 0 0 4px;
+}
+
+.manager-donut-legend p {
+  margin: 0 0 12px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.manager-donut-legend ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manager-donut-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.manager-donut-legend .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.manager-donut-legend .dot.is-delivered {
+  background: #2563eb;
+}
+
+.manager-donut-legend .dot.is-pending {
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+}
+
+.manager-aging-head h3 {
+  margin: 0 0 4px;
+}
+
+.manager-aging-head p {
+  margin: 0 0 14px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.manager-aging-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.manager-aging-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #e6eaf1;
+  background: #f8fafc;
+}
+
+.manager-aging-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.manager-aging-item.is-amber {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.manager-aging-item.is-amber .manager-aging-icon {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.manager-aging-item.is-orange {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.manager-aging-item.is-orange .manager-aging-icon {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.manager-aging-item.is-red {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.manager-aging-item.is-red .manager-aging-icon {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.manager-aging-item strong {
+  margin-top: 2px;
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.manager-aging-item span:last-child {
+  color: #475569;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.manager-report-grid {
+  margin-top: 14px;
+}
+
+.manager-report-card {
+  animation: managerFadeUp 0.42s ease both;
+}
+
+.manager-report-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.manager-report-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.manager-report-card-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 9px;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.manager-report-card-count {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.manager-ranking-table tbody tr {
+  animation: managerFadeUp 0.28s ease both;
+}
+
+.manager-rank-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.manager-rank-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.manager-rank-badge.is-gold {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.manager-rank-badge.is-silver {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.manager-rank-badge.is-bronze {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.manager-rank-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.manager-rank-label {
+  display: block;
+  color: #0f172a;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-rank-track {
+  height: 6px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: #eef2f7;
+  overflow: hidden;
+}
+
+.manager-rank-fill {
+  display: flex;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%);
+  transform-origin: left center;
+  animation: managerBarGrow 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.manager-rank-delivered {
+  height: 100%;
+  background: #2563eb;
+}
+
+.manager-rank-pending {
+  height: 100%;
+  background: #f59e0b;
+}
+
+.manager-report-skeleton {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.manager-skeleton-card,
+.manager-skeleton-panel,
+.manager-skeleton-table {
+  border-radius: 14px;
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: managerShimmer 1.3s infinite linear;
+}
+
+.manager-skeleton-card {
+  height: 112px;
+}
+
+.manager-skeleton-panel {
+  height: 148px;
+}
+
+.manager-skeleton-table {
+  height: 220px;
+}
+
+@media (max-width: 980px) {
+  .manager-report-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .manager-report-visual-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .manager-report-kpi-grid,
+  .manager-aging-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .manager-donut-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .manager-kpi-card,
+  .manager-report-visual-row .manager-card,
+  .manager-report-card,
+  .manager-ranking-table tbody tr,
+  .manager-rank-fill,
+  .manager-skeleton-card,
+  .manager-skeleton-panel,
+  .manager-skeleton-table {
+    animation: none;
+  }
+
+  .manager-donut-progress {
+    transition: none;
+  }
+}
+
+@media print {
+  .manager-report-kpi-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .manager-report-visual-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .manager-kpi-card,
+  .manager-aging-item,
+  .manager-rank-fill,
+  .manager-rank-delivered,
+  .manager-rank-pending {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 }

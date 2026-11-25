@@ -37,7 +37,6 @@ type PendingAction = {
 };
 
 const DELETE_ACCESS_CONFIRMATION = "EXCLUIR";
-const ACTIVITY_PAGE_SIZE = 500;
 
 function localDateTimeValue(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -82,28 +81,21 @@ async function fetchLastActivity(
   const activity = new Map<string, string>();
   if (!actorIds.size) return activity;
 
-  let from = 0;
-  while (true) {
-    const { data, error, count } = await supabase
-      .from("package_events")
-      .select("actor_id, occurred_at", { count: "exact" })
-      .eq("condominium_id", condominiumId)
-      .order("occurred_at", { ascending: false })
-      .range(from, from + ACTIVITY_PAGE_SIZE - 1);
-
-    if (error) throw new Error(error.message);
-    const page = data ?? [];
-    page.forEach((event) => {
-      if (event.actor_id && actorIds.has(event.actor_id)) {
-        activity.set(event.actor_id, event.occurred_at);
-      }
-    });
-    const total = count ?? 0;
-    from += ACTIVITY_PAGE_SIZE;
-    if (!page.length || from >= total || activity.size === actorIds.size) {
-      break;
-    }
-  }
+  // Uma consulta curta por porteiro evita percorrer todo o caderno de eventos.
+  await Promise.all(
+    Array.from(actorIds).map(async (actorId) => {
+      const { data, error } = await supabase
+        .from("package_events")
+        .select("occurred_at")
+        .eq("condominium_id", condominiumId)
+        .eq("actor_id", actorId)
+        .order("occurred_at", { ascending: false })
+        .limit(1);
+      if (error) throw new Error(error.message);
+      const occurredAt = data?.[0]?.occurred_at;
+      if (occurredAt) activity.set(actorId, occurredAt);
+    }),
+  );
 
   return activity;
 }

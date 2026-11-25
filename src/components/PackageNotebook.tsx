@@ -791,6 +791,47 @@ export function PackageNotebook({
           </select>
         </label>
         <label>
+          Aviso ao morador
+          <select
+            value={
+              filters.withoutNotice === true
+                ? "without"
+                : filters.withoutNotice === false
+                  ? "with"
+                  : ""
+            }
+            onChange={(event) =>
+              updateFilters({
+                withoutNotice:
+                  event.target.value === "without"
+                    ? true
+                    : event.target.value === "with"
+                      ? false
+                      : undefined,
+              })
+            }
+          >
+            <option value="">Todos</option>
+            <option value="without">Sem aviso registrado</option>
+            <option value="with">Com aviso registrado</option>
+          </select>
+        </label>
+        <label>
+          Avarias
+          <select
+            value={filters.activeDamage ? "active" : ""}
+            onChange={(event) =>
+              updateFilters({
+                activeDamage:
+                  event.target.value === "active" ? true : undefined,
+              })
+            }
+          >
+            <option value="">Todas</option>
+            <option value="active">Com foto ativa</option>
+          </select>
+        </label>
+        <label>
           Ordem dos registros
           <select
             value={sort}

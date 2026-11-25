@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type PointerEvent,
+} from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -197,7 +206,7 @@ const receiptBucket = "package-receipts";
 const maximumImageSize = 10 * 1024 * 1024;
 const acceptedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const packageFields =
-  "id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_at, status, collected_at, collected_by_name, collected_signature, is_damaged, last_notified_at";
+  "id, unit_number, block_name, resident_name, recipient_is_resident, sender, delivery_person, tracking_code, received_at, status, collected_at, collected_by_name, is_damaged, last_notified_at";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("pt-BR");
@@ -1004,6 +1013,8 @@ export function PorterReception() {
     AuthorizedResident[]
   >([]);
   const [pendingPackages, setPendingPackages] = useState<PackageRecord[]>([]);
+  const [pendingCount, setPendingCount] = useState(0);
+  const pendingLoadedRef = useRef(false);
   const [unitSearchQuery, setUnitSearchQuery] = useState("");
   const [searchedUnitId, setSearchedUnitId] = useState("");
   const [unitResidents, setUnitResidents] = useState<UnitResident[]>([]);
@@ -1524,28 +1535,32 @@ export function PorterReception() {
       setBlocks(blocksResult.data ?? []);
       setUnits(allowedUnits);
 
-      // O filtro vai ao banco: a tela não é a única barreira entre blocos.
-      let pendingQuery = supabase
+      // A abertura do app precisa só da contagem. A lista completa de pendências
+      // é carregada quando o porteiro entra em "Na portaria" ou no caderno.
+      let pendingCountQuery = supabase
         .from("packages")
-        .select(packageFields)
+        .select("id", { count: "exact", head: true })
         .eq("condominium_id", porterData.condominium_id)
         .eq("status", "received");
       if (portariaBlockId) {
-        pendingQuery = includeBlockless
-          ? pendingQuery.or(`block_id.eq.${portariaBlockId},block_id.is.null`)
-          : pendingQuery.eq("block_id", portariaBlockId);
+        pendingCountQuery = includeBlockless
+          ? pendingCountQuery.or(
+              `block_id.eq.${portariaBlockId},block_id.is.null`,
+            )
+          : pendingCountQuery.eq("block_id", portariaBlockId);
       }
-      const [pendingPackagesResult, residentDirectoryResult] =
-        await Promise.all([
-          pendingQuery.order("received_at", { ascending: false }),
-          supabase.from("unit_residents").select("unit_id, name, whatsapp"),
-        ]);
+      const [pendingCountResult, residentDirectoryResult] = await Promise.all([
+        pendingCountQuery,
+        supabase.from("unit_residents").select("unit_id, name, whatsapp"),
+      ]);
 
       if (!active) return;
-      if (pendingPackagesResult.error) {
-        setPageError(pendingPackagesResult.error.message);
+      if (pendingCountResult.error) {
+        setPageError(pendingCountResult.error.message);
       } else {
-        setPendingPackages(pendingPackagesResult.data ?? []);
+        pendingLoadedRef.current = false;
+        setPendingPackages([]);
+        setPendingCount(pendingCountResult.count ?? 0);
       }
       if (residentDirectoryResult.error) {
         setPageError(
@@ -1650,7 +1665,9 @@ export function PorterReception() {
             "Nenhuma portaria ativa está vinculada a esta conta. Procure o síndico ou o Super Admin.",
           );
           setUnits([]);
+          pendingLoadedRef.current = false;
           setPendingPackages([]);
+          setPendingCount(0);
           setAuthorizedResidents([]);
           return;
         }
@@ -1770,7 +1787,9 @@ export function PorterReception() {
     }
     const allowedUnitIds = new Set(allowedUnits.map((unit) => unit.id));
     setUnits(allowedUnits);
+    pendingLoadedRef.current = true;
     setPendingPackages(pendingResult.data ?? []);
+    setPendingCount(pendingResult.data?.length ?? 0);
     setAuthorizedResidents(
       (residentsResult.data ?? []).filter((resident) =>
         allowedUnitIds.has(resident.unit_id),
@@ -1800,8 +1819,38 @@ export function PorterReception() {
       setPageError(pendingPackagesResult.error.message);
       return;
     }
+    pendingLoadedRef.current = true;
     setPendingPackages(pendingPackagesResult.data ?? []);
+    setPendingCount(pendingPackagesResult.data?.length ?? 0);
   }
+
+  const ensurePendingPackages = useCallback(async () => {
+    if (!account || pendingLoadedRef.current || condominiumAccessBlocked) return;
+    let pendingQuery = supabase
+      .from("packages")
+      .select(packageFields)
+      .eq("condominium_id", account.condominium_id)
+      .eq("status", "received");
+    if (currentBlockId) {
+      pendingQuery = includeBlocklessUnits
+        ? pendingQuery.or(`block_id.eq.${currentBlockId},block_id.is.null`)
+        : pendingQuery.eq("block_id", currentBlockId);
+    }
+    const { data, error } = await pendingQuery.order("received_at", {
+      ascending: false,
+    });
+    if (error) {
+      setPageError(error.message);
+      return;
+    }
+    pendingLoadedRef.current = true;
+    setPendingPackages(data ?? []);
+    setPendingCount(data?.length ?? 0);
+  }, [account, condominiumAccessBlocked, currentBlockId, includeBlocklessUnits]);
+
+  useEffect(() => {
+    if (account && activeView !== "home") void ensurePendingPackages();
+  }, [account, activeView, ensurePendingPackages]);
 
   function handleUnitSearchChange(value: string) {
     unitDetailsRequest.current += 1;
@@ -5348,7 +5397,7 @@ export function PorterReception() {
                     <ClipboardList size={24} aria-hidden="true" />
                     <strong>Na portaria</strong>
                     <small>
-                      {pendingPackages.length} encomenda(s) aguardando retirada
+                      {pendingCount.toLocaleString("pt-BR")} encomenda(s) aguardando retirada
                     </small>
                   </button>
                 </nav>
@@ -5918,7 +5967,7 @@ export function PorterReception() {
                 </h2>
                 <p>
                   {activeView === "pending"
-                    ? `${pendingPackages.length.toLocaleString("pt-BR")} encomenda(s) aguardando retirada.`
+                    ? `${pendingCount.toLocaleString("pt-BR")} encomenda(s) aguardando retirada.`
                     : "Consulte os registros por gaveta de apartamento."}
                 </p>
               </div>

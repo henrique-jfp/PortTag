@@ -1,4 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
+import {
+  AlertTriangle,
+  Filter,
+  MessageCircle,
+  PackageCheck,
+  PackagePlus,
+} from "lucide-react";
 import { Pagination } from "../Pagination";
 import { localDayAfter, localDayStart } from "../../lib/packageQueries";
 import { supabase } from "../../lib/supabase";
@@ -26,6 +33,13 @@ const eventLabels: Record<string, string> = {
   collected: "Retirada",
   notification: "Aviso ao morador",
   damage_reported: "Avaria",
+};
+
+const eventIcons: Record<string, typeof PackagePlus> = {
+  received: PackagePlus,
+  collected: PackageCheck,
+  notification: MessageCircle,
+  damage_reported: AlertTriangle,
 };
 
 const emptyFilters: AppliedFilters = {
@@ -182,7 +196,10 @@ export function ManagerHistoryPanel({
             ))}
           </select>
         </label>
-        <button type="submit">Filtrar</button>
+        <button type="submit">
+          <Filter size={15} aria-hidden="true" />
+          Filtrar
+        </button>
       </form>
 
       {error && (
@@ -199,9 +216,11 @@ export function ManagerHistoryPanel({
         <ul className="manager-timeline">
           {events.map((event) => {
             const tracking = event.metadata?.tracking_code;
+            const EventIcon = eventIcons[event.event_type] ?? PackagePlus;
             return (
               <li key={event.id} className={`manager-event-${event.event_type}`}>
                 <span className="manager-event-type">
+                  <EventIcon size={13} aria-hidden="true" />
                   {eventLabels[event.event_type] ?? event.event_type}
                 </span>
                 <div>

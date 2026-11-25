@@ -54,6 +54,10 @@ export type PackageFilters = {
   status?: string;
   /** Escopo da portaria/bloco em uso. `null` não restringe o caderno. */
   blockId?: string | null;
+  /** `true` = só pendências sem aviso registrado na fila; `false` = com aviso. */
+  withoutNotice?: boolean;
+  /** Só encomendas avariadas com foto ainda ativa. */
+  activeDamage?: boolean;
 };
 
 export type PageResult<T> = {
@@ -139,6 +143,9 @@ export async function fetchDrawers(
     arg_porter_query: filters.porter || null,
     arg_status: filters.status || null,
     arg_block_id: filters.blockId ?? null,
+    arg_without_notice:
+      typeof filters.withoutNotice === "boolean" ? filters.withoutNotice : null,
+    arg_active_damage: filters.activeDamage === true ? true : null,
     arg_limit: size,
     arg_offset: (page - 1) * size,
   });
@@ -202,6 +209,9 @@ export async function fetchPackageRecords(options: {
     arg_company_query: filters.company || null,
     arg_porter_query: filters.porter || null,
     arg_block_id: filters.blockId ?? null,
+    arg_without_notice:
+      typeof filters.withoutNotice === "boolean" ? filters.withoutNotice : null,
+    arg_active_damage: filters.activeDamage === true ? true : null,
     arg_sort: options.sort ?? "recent",
     arg_limit: pageSize,
     arg_offset: (options.page - 1) * pageSize,

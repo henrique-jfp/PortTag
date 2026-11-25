@@ -35,11 +35,14 @@ function line(cells: CsvCell[]) {
 /** CSV com BOM para abrir corretamente no Excel em Portuguese (Brasil). */
 export function buildReportCsv(
   report: Report,
-  range: { from: string; to: string },
+  range: { from: string; to: string; blockName?: string },
 ) {
   const rows: CsvCell[][] = [
-    ["Relatório de encomendas"],
+    ["Relatório TOP de encomendas"],
     ["De", range.from || "Todo o período", "Até", range.to || "Todo o período"],
+  ];
+  if (range.blockName) rows.push(["Bloco", range.blockName]);
+  rows.push(
     [],
     ["Resumo", "Valor"],
     ["Recebidas", report.summary.total],
@@ -50,7 +53,7 @@ export function buildReportCsv(
     ["Há mais de 7 dias", report.summary.older7],
     ["Há mais de 15 dias", report.summary.older15],
     [],
-  ];
+  );
 
   const tables: Array<[string, ReportRow[], boolean]> = [
     ["Por bloco", report.byBlock, true],

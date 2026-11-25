@@ -186,6 +186,22 @@
     e a correção de um volume já salvo passa por `update_burst_package`, sem
     alterar `received_at` nem retirada. Não há redeploy de Edge Function nesta
     etapa.
+    Aplique também `20261124000000_dashboard_query_indexes.sql` (migração 44).
+    Ela cria índices em `packages` (status/recebimento, sem aviso e avarias com
+    foto ativa) e em `package_events` (por porteiro), usados pelas contagens e
+    amostras do painel do síndico e pela contagem inicial do porteiro. Não altera
+    dados, regras nem RLS e não exige redeploy de Edge Function.
+    Depois, execute `20261124100000_package_card_filters.sql` (migração 45).
+    Ela acrescenta `arg_without_notice` e `arg_active_damage` a
+    `search_package_drawers` e `search_package_records`: "Sem aviso ao morador"
+    usa `status = 'received'` com `last_notified_at is null`, e "Avarias e fotos"
+    usa `is_damaged` com foto ainda ativa. Assim os cards do painel abrem o
+    caderno já recortado. Não há mudança de dados, RLS ou Edge Function.
+    Por fim, execute `20261124110000_fix_utf8_function_literals.sql` (migração
+    46). Ela reaplica, com UTF-8 correto, as últimas definições de oito funções
+    que tinham U+FFFD no lugar de acentos e do separador `·` do relatório.
+    Corrige `1 ? 1006` para `1 · 1006` em "Por unidade" e mensagens como "Não
+    informado"/"Sem permissão". Não altera assinaturas, regras nem dados.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

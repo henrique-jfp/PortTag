@@ -2,11 +2,16 @@ import { useEffect, useState } from "react";
 import {
   BarChart3,
   Building2,
-  ClipboardList,
   ExternalLink,
+  FileText,
+  History,
+  Layers,
   LayoutDashboard,
+  MapPin,
   MessageCircle,
-  ShieldCheck,
+  Package,
+  Shield,
+  UserCheck,
   Users,
 } from "lucide-react";
 import { AppShell } from "../components/AppShell";
@@ -114,14 +119,62 @@ type Section =
 type NotebookTab = "records" | "audit";
 type StructureTab = "address" | "units";
 
-const sections: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "overview", label: "Visão geral", icon: LayoutDashboard },
-  { id: "notebook", label: "Encomendas", icon: ClipboardList },
-  { id: "reports", label: "Relatórios", icon: BarChart3 },
-  { id: "residents", label: "Moradores", icon: Users },
-  { id: "porters", label: "Porteiros", icon: ShieldCheck },
-  { id: "structure", label: "Estrutura", icon: Building2 },
-  { id: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+const sections: {
+  id: Section;
+  label: string;
+  eyebrow: string;
+  title: string;
+  icon: typeof LayoutDashboard;
+}[] = [
+  {
+    id: "overview",
+    label: "Visão geral",
+    eyebrow: "Área do Síndico · Painel",
+    title: "Visão geral da portaria",
+    icon: LayoutDashboard,
+  },
+  {
+    id: "notebook",
+    label: "Encomendas",
+    eyebrow: "Área do Síndico · Operação",
+    title: "Caderno de encomendas",
+    icon: Package,
+  },
+  {
+    id: "reports",
+    label: "Relatórios",
+    eyebrow: "Área do Síndico · Desempenho",
+    title: "Relatórios e rankings",
+    icon: BarChart3,
+  },
+  {
+    id: "residents",
+    label: "Moradores",
+    eyebrow: "Área do Síndico · Cadastros",
+    title: "Moradores e unidades",
+    icon: Users,
+  },
+  {
+    id: "porters",
+    label: "Porteiros",
+    eyebrow: "Área do Síndico · Equipe",
+    title: "Contas de portaria",
+    icon: UserCheck,
+  },
+  {
+    id: "structure",
+    label: "Estrutura",
+    eyebrow: "Área do Síndico · Condomínio",
+    title: "Estrutura e endereço",
+    icon: Building2,
+  },
+  {
+    id: "whatsapp",
+    label: "WhatsApp",
+    eyebrow: "Área do Síndico · Notificações",
+    title: "Integração WhatsApp",
+    icon: MessageCircle,
+  },
 ];
 
 /**
@@ -283,10 +336,10 @@ export function ManagerLedger() {
     }
   }
 
-  const activeBuildingId =
-    buildings.find((building) => building.id === selectedBuildingId)?.id ??
-    buildings[0]?.id ??
-    "";
+  const activeBuilding =
+    buildings.find((building) => building.id === selectedBuildingId) ??
+    buildings[0];
+  const activeBuildingId = activeBuilding?.id ?? "";
   const accessBlocked =
     !isSuperAdmin && Boolean(expiredByBuilding[activeBuildingId]);
 
@@ -339,7 +392,7 @@ export function ManagerLedger() {
     <>
       {isSuperAdmin && (
         <a href="/">
-          <ShieldCheck size={16} /> Super Admin
+          <Shield size={16} /> Super Admin
         </a>
       )}
       <a href="/porter.html">
@@ -347,6 +400,10 @@ export function ManagerLedger() {
       </a>
     </>
   );
+
+  const activeSection =
+    sections.find((item) => item.id === section) ?? sections[0];
+  const ActiveSectionIcon = activeSection.icon;
 
   return (
     <AppShell
@@ -359,11 +416,21 @@ export function ManagerLedger() {
     >
       <div className="ledger-page">
         <header className="ledger-header">
-          <div>
-            <p className="eyebrow">Controle de Encomendas · Área do Síndico</p>
-            <h1>Caderno de registros</h1>
-            <p>{user?.email}</p>
+          <div className="manager-page-title">
+            <span className="manager-page-icon" aria-hidden="true">
+              <ActiveSectionIcon size={22} />
+            </span>
+            <div>
+              <p className="eyebrow">{activeSection.eyebrow}</p>
+              <h1>{activeSection.title}</h1>
+            </div>
           </div>
+          {activeBuilding ? (
+            <div className="manager-building-pill" title={activeBuilding.meta}>
+              <Building2 size={15} aria-hidden="true" />
+              <span>{activeBuilding.name}</span>
+            </div>
+          ) : null}
         </header>
 
         {pageError && (
@@ -437,6 +504,7 @@ export function ManagerLedger() {
                   className={notebookTab === "records" ? "is-active" : ""}
                   onClick={() => setNotebookTab("records")}
                 >
+                  <FileText size={15} aria-hidden="true" />
                   Registros
                 </button>
                 <button
@@ -446,6 +514,7 @@ export function ManagerLedger() {
                   className={notebookTab === "audit" ? "is-active" : ""}
                   onClick={() => setNotebookTab("audit")}
                 >
+                  <History size={15} aria-hidden="true" />
                   Linha do tempo / Auditoria
                 </button>
               </div>
@@ -486,6 +555,7 @@ export function ManagerLedger() {
                   className={structureTab === "address" ? "is-active" : ""}
                   onClick={() => setStructureTab("address")}
                 >
+                  <MapPin size={15} aria-hidden="true" />
                   Dados e Endereço
                 </button>
                 <button
@@ -495,6 +565,7 @@ export function ManagerLedger() {
                   className={structureTab === "units" ? "is-active" : ""}
                   onClick={() => setStructureTab("units")}
                 >
+                  <Layers size={15} aria-hidden="true" />
                   Blocos e Unidades
                 </button>
               </div>
@@ -531,6 +602,7 @@ export function ManagerLedger() {
             <ManagerReportsPanel
               key={activeBuildingId}
               condominiumId={activeBuildingId}
+              buildingName={activeBuilding?.name ?? ""}
             />
           )}
 

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
+  BellOff,
+  Camera,
   ClipboardList,
   Clock3,
   Package,
@@ -148,12 +150,6 @@ function unitLabel(packageRow: PackageRow) {
     : packageRow.unit_number;
 }
 
-function packageFilters(packageRow: PackageRow): PackageFilters {
-  return packageRow.tracking_code
-    ? { tracking: packageRow.tracking_code }
-    : { unit: packageRow.unit_number };
-}
-
 function daysUntil(value: string, now: number) {
   return Math.ceil((new Date(value).getTime() - now) / DAY_IN_MS);
 }
@@ -230,108 +226,131 @@ async function loadStats(
   return { ...summary, total: summary.received + summary.collected };
 }
 
-const PAGE_SIZE = 500;
 const PACKAGE_COLUMNS =
   "id, condominium_id, unit_number, block_name, tracking_code, received_at, is_damaged, receipt_path, photo_expires_at, photo_deleted_at";
 
-async function fetchAllReceived(buildingIds: string[]): Promise<PackageRow[]> {
-  const rows: PackageRow[] = [];
-  let from = 0;
+/**
+ * A visão geral mostra no máximo 8 alertas e 5 movimentações. Buscar o caderno
+ * inteiro para montar essa lista tornava a abertura do painel lenta em
+ * condomínios com histórico grande; as contagens vêm do banco e a lista é uma
+ * amostra ordenada pelo próprio critério de urgência.
+ */
+const ATTENTION_SAMPLE_SIZE = 12;
+const LATEST_EVENT_LIMIT = 5;
 
-  while (true) {
-    const { data, error, count } = await supabase
-      .from("packages")
-      .select(PACKAGE_COLUMNS, { count: "exact" })
-      .eq("status", "received")
-      .in("condominium_id", buildingIds)
-      .order("received_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
+type AttentionCountKey = "damaged" | "expiring" | "withoutNotice";
 
-    if (error) throw new Error(error.message);
-    const page = (data ?? []) as PackageRow[];
-    rows.push(...page);
-    const total = count ?? 0;
-    from += PAGE_SIZE;
-    if (!page.length || from >= total) break;
+async function countAttentionPackages(
+  condominiumId: string,
+  key: AttentionCountKey,
+  boundaries: Boundaries,
+) {
+  let query = supabase
+    .from("packages")
+    .select("id", { count: "exact", head: true })
+    .eq("condominium_id", condominiumId);
+
+  switch (key) {
+    case "damaged":
+      query = query
+        .eq("is_damaged", true)
+        .not("receipt_path", "is", null)
+        .is("photo_deleted_at", null);
+      break;
+    case "expiring":
+      query = query
+        .eq("is_damaged", true)
+        .not("receipt_path", "is", null)
+        .is("photo_deleted_at", null)
+        .lte(
+          "photo_expires_at",
+          new Date(boundaries.now + PHOTO_WARNING_DAYS * DAY_IN_MS).toISOString(),
+        );
+      break;
+    case "withoutNotice":
+      // last_notified_at é o cache mantido pela fila de notificações.
+      query = query.eq("status", "received").is("last_notified_at", null);
+      break;
   }
 
-  return rows;
+  const { count, error } = await query;
+  if (error) throw new Error(error.message);
+  return count ?? 0;
 }
 
-async function fetchAllDamaged(buildingIds: string[]): Promise<PackageRow[]> {
-  const rows: PackageRow[] = [];
-  let from = 0;
-
-  while (true) {
-    const { data, error, count } = await supabase
-      .from("packages")
-      .select(PACKAGE_COLUMNS, { count: "exact" })
-      .eq("is_damaged", true)
-      .in("condominium_id", buildingIds)
-      .order("received_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-
-    if (error) throw new Error(error.message);
-    const page = (data ?? []) as PackageRow[];
-    rows.push(...page);
-    const total = count ?? 0;
-    from += PAGE_SIZE;
-    if (!page.length || from >= total) break;
-  }
-
-  return rows;
+async function sumAttentionCounts(
+  buildingIds: string[],
+  key: AttentionCountKey,
+  boundaries: Boundaries,
+) {
+  const counts = await Promise.all(
+    buildingIds.map((id) => countAttentionPackages(id, key, boundaries)),
+  );
+  return counts.reduce((total, value) => total + value, 0);
 }
 
-async function fetchAllEvents(buildingIds: string[]): Promise<EventRow[]> {
-  const rows: EventRow[] = [];
-  let from = 0;
-
-  while (true) {
-    const { data, error, count } = await supabase
-      .from("package_events")
-      .select("id, condominium_id, event_type, description, occurred_at", {
-        count: "exact",
-      })
-      .in("condominium_id", buildingIds)
-      .order("occurred_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-
-    if (error) throw new Error(error.message);
-    const page = (data ?? []) as EventRow[];
-    rows.push(...page);
-    const total = count ?? 0;
-    from += PAGE_SIZE;
-    if (!page.length || from >= total) break;
-  }
-
-  return rows;
+async function fetchOldPending(
+  buildingIds: string[],
+  threshold: string,
+  limit: number,
+): Promise<PackageRow[]> {
+  const { data, error } = await supabase
+    .from("packages")
+    .select(PACKAGE_COLUMNS)
+    .eq("status", "received")
+    .in("condominium_id", buildingIds)
+    .lt("received_at", threshold)
+    .order("received_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PackageRow[];
 }
 
-async function fetchNotifiedIds(packageIds: string[]): Promise<Set<string>> {
-  const notified = new Set<string>();
-  const chunkSize = 200;
+async function fetchWithoutNotice(
+  buildingIds: string[],
+  limit: number,
+): Promise<PackageRow[]> {
+  const { data, error } = await supabase
+    .from("packages")
+    .select(PACKAGE_COLUMNS)
+    .eq("status", "received")
+    .in("condominium_id", buildingIds)
+    .is("last_notified_at", null)
+    .order("received_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PackageRow[];
+}
 
-  for (let start = 0; start < packageIds.length; start += chunkSize) {
-    const chunk = packageIds.slice(start, start + chunkSize);
-    let from = 0;
+async function fetchDamagedSample(
+  buildingIds: string[],
+  limit: number,
+): Promise<PackageRow[]> {
+  const { data, error } = await supabase
+    .from("packages")
+    .select(PACKAGE_COLUMNS)
+    .eq("is_damaged", true)
+    .in("condominium_id", buildingIds)
+    .not("receipt_path", "is", null)
+    .is("photo_deleted_at", null)
+    .order("photo_expires_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PackageRow[];
+}
 
-    while (true) {
-      const { data, error, count } = await supabase
-        .from("package_notifications")
-        .select("package_id", { count: "exact" })
-        .in("package_id", chunk)
-        .range(from, from + PAGE_SIZE - 1);
-
-      if (error) throw new Error(error.message);
-      const page = data ?? [];
-      page.forEach((row) => notified.add(row.package_id));
-      const total = count ?? 0;
-      from += PAGE_SIZE;
-      if (!page.length || from >= total) break;
-    }
-  }
-
-  return notified;
+async function fetchLatestEvents(
+  buildingIds: string[],
+  limit: number,
+): Promise<EventRow[]> {
+  const { data, error } = await supabase
+    .from("package_events")
+    .select("id, condominium_id, event_type, description, occurred_at")
+    .in("condominium_id", buildingIds)
+    .order("occurred_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as EventRow[];
 }
 
 async function loadAttention(
@@ -339,13 +358,25 @@ async function loadAttention(
   buildingNames: Map<string, string>,
   boundaries: Boundaries,
 ): Promise<AttentionData> {
-  const [received, damaged, events] = await Promise.all([
-    fetchAllReceived(buildingIds),
-    fetchAllDamaged(buildingIds),
-    fetchAllEvents(buildingIds),
+  const [
+    damagedCount,
+    expiringCount,
+    withoutNoticeCount,
+    older7Rows,
+    older3Rows,
+    withoutNoticeRows,
+    damagedRows,
+    latestEvents,
+  ] = await Promise.all([
+    sumAttentionCounts(buildingIds, "damaged", boundaries),
+    sumAttentionCounts(buildingIds, "expiring", boundaries),
+    sumAttentionCounts(buildingIds, "withoutNotice", boundaries),
+    fetchOldPending(buildingIds, boundaries.older7, ATTENTION_SAMPLE_SIZE),
+    fetchOldPending(buildingIds, boundaries.older3, ATTENTION_SAMPLE_SIZE),
+    fetchWithoutNotice(buildingIds, ATTENTION_SAMPLE_SIZE),
+    fetchDamagedSample(buildingIds, ATTENTION_SAMPLE_SIZE),
+    fetchLatestEvents(buildingIds, LATEST_EVENT_LIMIT),
   ]);
-
-  const notifiedIds = await fetchNotifiedIds(received.map((item) => item.id));
 
   const items = new Map<string, AttentionItem>();
   function add(item: AttentionItem) {
@@ -355,47 +386,42 @@ async function loadAttention(
     }
   }
 
-  received.forEach((item) => {
-    const context = buildingNames.get(item.condominium_id) ?? "Condomínio";
-    const filters = packageFilters(item);
-    const receivedAt = new Date(item.received_at).getTime();
+  function addOld(
+    item: PackageRow,
+    title: string,
+    priority: number,
+    receivedBefore: string,
+  ) {
+    add({
+      id: item.id,
+      title,
+      detail: `${unitLabel(item)} · recebida em ${new Date(item.received_at).toLocaleString("pt-BR")}`,
+      context: buildingNames.get(item.condominium_id) ?? "Condomínio",
+      priority,
+      // O alerta fala de um pacote, mas o clique abre o recorte inteiro daquele
+      // alerta no caderno — não só a gaveta do pacote da linha clicada.
+      filters: { status: "received", receivedBefore },
+    });
+  }
 
-    if (receivedAt < new Date(boundaries.older7).getTime()) {
-      add({
-        id: item.id,
-        title: "Há mais de 7 dias na portaria",
-        detail: `${unitLabel(item)} · recebida em ${new Date(item.received_at).toLocaleString("pt-BR")}`,
-        context,
-        priority: 4,
-        filters: { ...filters, status: "received" },
-      });
-    } else if (receivedAt < new Date(boundaries.older3).getTime()) {
-      add({
-        id: item.id,
-        title: "Há mais de 3 dias na portaria",
-        detail: `${unitLabel(item)} · recebida em ${new Date(item.received_at).toLocaleString("pt-BR")}`,
-        context,
-        priority: 3,
-        filters: { ...filters, status: "received" },
-      });
-    }
-
-    if (!notifiedIds.has(item.id)) {
-      add({
-        id: item.id,
-        title: "Aguardando retirada sem aviso",
-        detail: `${unitLabel(item)} · nenhum aviso registrado na fila`,
-        context,
-        priority: 2,
-        filters: { ...filters, status: "received" },
-      });
-    }
+  older7Rows.forEach((item) =>
+    addOld(item, "Há mais de 7 dias na portaria", 4, boundaries.older7),
+  );
+  older3Rows.forEach((item) =>
+    addOld(item, "Há mais de 3 dias na portaria", 3, boundaries.older3),
+  );
+  withoutNoticeRows.forEach((item) => {
+    add({
+      id: item.id,
+      title: "Aguardando retirada sem aviso",
+      detail: `${unitLabel(item)} · nenhum aviso registrado na fila`,
+      context: buildingNames.get(item.condominium_id) ?? "Condomínio",
+      priority: 2,
+      filters: { status: "received", withoutNotice: true },
+    });
   });
 
-  const activeDamaged = damaged.filter(
-    (item) => item.receipt_path && !item.photo_deleted_at,
-  );
-  activeDamaged.forEach((item) => {
+  damagedRows.forEach((item) => {
     const days = daysUntil(item.photo_expires_at, boundaries.now);
     const expiring = days <= PHOTO_WARNING_DAYS;
     add({
@@ -406,11 +432,11 @@ async function loadAttention(
         : `${unitLabel(item)} · foto disponível por mais ${days} dia(s)`,
       context: buildingNames.get(item.condominium_id) ?? "Condomínio",
       priority: expiring ? 5 : 2,
-      filters: packageFilters(item),
+      filters: { activeDamage: true },
     });
   });
 
-  const latest = events.slice(0, 5).map((event) => ({
+  const latest = latestEvents.map((event) => ({
     id: event.id,
     title: `${eventLabels[event.event_type] ?? "Evento"}: ${event.description}`,
     occurredAt: event.occurred_at,
@@ -418,12 +444,9 @@ async function loadAttention(
   }));
 
   return {
-    damagedCount: activeDamaged.length,
-    expiringCount: activeDamaged.filter(
-      (item) => daysUntil(item.photo_expires_at, boundaries.now) <= PHOTO_WARNING_DAYS,
-    ).length,
-    withoutNoticeCount: received.filter((item) => !notifiedIds.has(item.id))
-      .length,
+    damagedCount,
+    expiringCount,
+    withoutNoticeCount,
     items: [...items.values()].sort(
       (a, b) => b.priority - a.priority || a.title.localeCompare(b.title, "pt-BR"),
     ),
@@ -565,12 +588,6 @@ export function ManagerDashboard({
     buildings.length === 1
       ? `Indicadores de ${buildings[0].name}`
       : `Somatório de ${buildings.length} condomínios`;
-  const firstDamageItem = attention?.items.find(
-    (item) =>
-      item.title === "Foto da avaria expirando" ||
-      item.title === "Encomenda avariada",
-  );
-
   return (
     <section className="overview-card" aria-labelledby="overview-title">
       <div className="overview-heading">
@@ -635,9 +652,14 @@ export function ManagerDashboard({
 
       <div className="overview-alerts" aria-label="Atenção imediata">
         <article className="overview-alert">
-          <div>
-            <p className="eyebrow">Atenção imediata</p>
-            <h3>Avarias e fotos</h3>
+          <div className="overview-alert-head">
+            <span className="overview-alert-icon is-warning" aria-hidden="true">
+              <Camera size={18} />
+            </span>
+            <div>
+              <p className="eyebrow">Atenção imediata</p>
+              <h3>Avarias e fotos</h3>
+            </div>
           </div>
           <strong>{loading ? "—" : (attention?.damagedCount ?? 0)}</strong>
           <p>
@@ -648,20 +670,20 @@ export function ManagerDashboard({
           <button
             className="text-button"
             type="button"
-            disabled={!firstDamageItem}
-            onClick={() => {
-              if (firstDamageItem) {
-                openPreset(firstDamageItem.title, firstDamageItem.filters);
-              }
-            }}
+            onClick={() => openPreset("Avarias e fotos", { activeDamage: true })}
           >
-            Ver registro
+            Ver avarias <ArrowRight size={14} aria-hidden="true" />
           </button>
         </article>
         <article className="overview-alert">
-          <div>
-            <p className="eyebrow">Atenção imediata</p>
-            <h3>Sem aviso ao morador</h3>
+          <div className="overview-alert-head">
+            <span className="overview-alert-icon is-info" aria-hidden="true">
+              <BellOff size={18} />
+            </span>
+            <div>
+              <p className="eyebrow">Atenção imediata</p>
+              <h3>Sem aviso ao morador</h3>
+            </div>
           </div>
           <strong>{loading ? "—" : (attention?.withoutNoticeCount ?? 0)}</strong>
           <p>Pacotes na portaria sem aviso registrado na fila.</p>
@@ -669,10 +691,13 @@ export function ManagerDashboard({
             className="text-button"
             type="button"
             onClick={() =>
-              openPreset("Aguardando retirada", { status: "received" })
+              openPreset("Sem aviso ao morador", {
+                status: "received",
+                withoutNotice: true,
+              })
             }
           >
-            Ver aguardando retirada
+            Ver sem aviso <ArrowRight size={14} aria-hidden="true" />
           </button>
         </article>
       </div>
@@ -682,7 +707,11 @@ export function ManagerDashboard({
           <div className="overview-section-heading">
             <h3 id="attention-title">Requer atenção agora</h3>
             <span>
-              {loading ? "..." : `${attention?.items.length ?? 0} item(ns)`}
+              {loading
+                ? "..."
+                : attention?.items.length
+                  ? `${Math.min(attention.items.length, 8)} de ${attention.items.length} item(ns)`
+                  : "0 item(ns)"}
             </span>
           </div>
           {loading ? (
