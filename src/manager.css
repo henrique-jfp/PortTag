@@ -1810,3 +1810,16 @@
     animation: none;
   }
 }
+
+
+/* Relatórios: três rankings à esquerda, "Por unidade" sozinho à direita. */
+.manager-report-column {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+}
+
+.manager-report-column .manager-card {
+  margin-top: 0;
+}

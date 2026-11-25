@@ -581,29 +581,33 @@ export function ManagerReportsPanel({
             </article>
           </div>
 
-          <div className="manager-report-grid">
-            <ReportTable
-              title="Por bloco"
-              icon={Building2}
-              rows={report?.byBlock ?? []}
-              showStatus
-            />
-            <ReportTable
-              title="Por unidade"
-              icon={Home}
-              rows={report?.byUnit ?? []}
-              showStatus
-            />
-            <ReportTable
-              title="Por porteiro"
-              icon={UserCheck}
-              rows={report?.byPorter ?? []}
-            />
-            <ReportTable
-              title="Por empresa / entregador"
-              icon={Truck}
-              rows={report?.bySender ?? []}
-            />
+          <div className="manager-report-grid manager-report-split">
+            <div className="manager-report-column">
+              <ReportTable
+                title="Por bloco"
+                icon={Building2}
+                rows={report?.byBlock ?? []}
+                showStatus
+              />
+              <ReportTable
+                title="Por porteiro"
+                icon={UserCheck}
+                rows={report?.byPorter ?? []}
+              />
+              <ReportTable
+                title="Por empresa / entregador"
+                icon={Truck}
+                rows={report?.bySender ?? []}
+              />
+            </div>
+            <div className="manager-report-column">
+              <ReportTable
+                title="Por unidade"
+                icon={Home}
+                rows={report?.byUnit ?? []}
+                showStatus
+              />
+            </div>
           </div>
 
           <footer className="manager-report-print-footer">
