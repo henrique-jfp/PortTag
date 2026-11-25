@@ -414,7 +414,7 @@ export function ManagerLedger() {
       userEmail={user?.email}
       onSignOut={() => void handleSignOut()}
     >
-      <div className="ledger-page">
+      <div className="ledger-page manager-ui">
         <header className="ledger-header">
           <div className="manager-page-title">
             <span className="manager-page-icon" aria-hidden="true">

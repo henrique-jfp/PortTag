@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   Building2,
   Calendar,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   FileSpreadsheet,
   Filter,
@@ -35,6 +37,8 @@ function number(value: unknown) {
   return Number(value ?? 0).toLocaleString("pt-BR");
 }
 
+const TOP_LIMIT = 15;
+
 function percent(part: number, total: number) {
   if (!total) return 0;
   return Math.round((part / total) * 100);
@@ -51,7 +55,10 @@ function ReportTable({
   rows: ReportRow[];
   showStatus?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const maxTotal = rows.reduce((max, row) => Math.max(max, row.total), 0) || 1;
+  const hasMore = rows.length > TOP_LIMIT;
+  const visibleRows = expanded ? rows : rows.slice(0, TOP_LIMIT);
 
   return (
     <div className="manager-card manager-report-card">
@@ -65,7 +72,10 @@ function ReportTable({
       {rows.length === 0 ? (
         <p className="manager-empty">Sem dados no período.</p>
       ) : (
-        <div className="manager-table-wrap">
+        <>
+        <div
+          className={`manager-table-wrap${expanded && hasMore ? " is-expanded" : ""}`}
+        >
           <table className="manager-table manager-ranking-table">
             <thead>
               <tr>
@@ -76,7 +86,7 @@ function ReportTable({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, index) => {
+              {visibleRows.map((row, index) => {
                 const widthPct = Math.max(6, Math.round((row.total / maxTotal) * 100));
                 const deliveredPct =
                   showStatus && row.total > 0
@@ -133,6 +143,27 @@ function ReportTable({
             </tbody>
           </table>
         </div>
+        {hasMore && (
+          <button
+            type="button"
+            className="manager-report-more"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? (
+              <>
+                <ChevronUp size={15} aria-hidden="true" /> Mostrar só o TOP{" "}
+                {TOP_LIMIT}
+              </>
+            ) : (
+              <>
+                <ChevronDown size={15} aria-hidden="true" /> Ver todos (
+                {rows.length - TOP_LIMIT} restantes)
+              </>
+            )}
+          </button>
+        )}
+        </>
       )}
     </div>
   );

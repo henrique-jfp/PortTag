@@ -1445,3 +1445,368 @@
     print-color-adjust: exact;
   }
 }
+
+
+/* ── Ranking TOP 15 ─────────────────────────────────────────────────── */
+
+.manager-report-grid {
+  align-items: start;
+}
+
+.manager-ranking-table {
+  table-layout: fixed;
+}
+
+.manager-ranking-table th:first-child,
+.manager-ranking-table td:first-child {
+  width: 58%;
+}
+
+.manager-table-wrap.is-expanded {
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+.manager-table-wrap.is-expanded thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+}
+
+.manager-report-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  margin-top: 10px;
+  border: 1px dashed #bfdbfe;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #1d4ed8;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.manager-report-more:hover {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+@media print {
+  .manager-report-more {
+    display: none;
+  }
+
+  .manager-table-wrap.is-expanded {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+/* ── Linguagem visual única da área do síndico ──────────────────────────
+   Toda aba segue o padrão da aba Relatórios: fundo claro, cards brancos
+   com borda suave e raio 14px, cabeçalhos com eyebrow azul e acento
+   #2563eb. Escopo .manager-ui para não afetar Super Admin e Porteiro. */
+
+.manager-ui {
+  --mui-accent: #2563eb;
+  --mui-accent-dark: #1d4ed8;
+  --mui-accent-soft: #eff6ff;
+  --mui-border: #e3e8f1;
+  --mui-text: #0f172a;
+  --mui-muted: #64748b;
+  --mui-radius: 14px;
+  --mui-shadow: 0 6px 22px rgba(20, 35, 65, 0.04);
+}
+
+.manager-ui .eyebrow {
+  color: var(--mui-accent) !important;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.manager-ui .ledger-header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--mui-border);
+}
+
+.manager-ui .ledger-header h1 {
+  margin: 3px 0 0;
+  color: var(--mui-text);
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+
+/* Cabeçalhos de painel iguais ao de Relatórios */
+.manager-ui .manager-panel-heading h2,
+.manager-ui .overview-heading h2,
+.manager-ui .notebook-heading h2 {
+  margin: 5px 0 4px;
+  color: var(--mui-text);
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.manager-ui .manager-panel-heading p:last-child,
+.manager-ui .overview-heading p:last-child {
+  color: var(--mui-muted);
+  font-size: 13px;
+}
+
+/* Abas no formato de pílulas, como os períodos do relatório */
+.manager-ui .manager-tabs {
+  gap: 6px;
+  margin: 20px 0 14px;
+  border-bottom: 0;
+  flex-wrap: wrap;
+}
+
+.manager-ui .manager-tabs button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid #dfe5ef;
+  border-radius: 9px;
+  background: #fff;
+  color: #48536a;
+}
+
+.manager-ui .manager-tabs button:hover {
+  border-color: #bfdbfe;
+  color: var(--mui-accent-dark);
+}
+
+.manager-ui .manager-tabs button.is-active {
+  border-color: var(--mui-accent);
+  background: var(--mui-accent-soft);
+  color: var(--mui-accent-dark);
+}
+
+/* Seletor de condomínio como card */
+.manager-ui .manager-context {
+  margin-top: 18px;
+  border-color: var(--mui-border);
+  border-radius: var(--mui-radius);
+  background: #fff;
+  box-shadow: var(--mui-shadow);
+}
+
+/* Superfícies: todos os blocos viram o mesmo card */
+.manager-ui .manager-card,
+.manager-ui .manager-filter-form,
+.manager-ui .notebook-panel,
+.manager-ui .notebook-filters,
+.manager-ui .notebook-building-bar,
+.manager-ui .admin-section,
+.manager-ui .manager-whatsapp-settings,
+.manager-ui .overview-attention,
+.manager-ui .overview-latest,
+.manager-ui .welcome-card {
+  border: 1px solid var(--mui-border);
+  border-radius: var(--mui-radius);
+  background: #fff;
+  box-shadow: var(--mui-shadow);
+}
+
+.manager-ui .manager-card,
+.manager-ui .admin-section,
+.manager-ui .manager-whatsapp-settings {
+  animation: managerFadeUp 0.32s ease both;
+}
+
+.manager-ui .manager-card h3,
+.manager-ui .admin-section h2,
+.manager-ui .admin-section h3,
+.manager-ui .manager-whatsapp-header h3,
+.manager-ui .overview-section-heading h3 {
+  color: var(--mui-text);
+  font-size: 15px;
+}
+
+.manager-ui .manager-whatsapp-settings {
+  max-width: 680px;
+  margin-top: 20px;
+  padding: 20px;
+}
+
+/* Visão geral: sem "card dentro de card", KPIs iguais aos do relatório */
+.manager-ui .overview-card {
+  margin-top: 20px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.manager-ui .overview-grid {
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.manager-ui button.overview-stat {
+  padding: 16px;
+  border: 1px solid var(--mui-border);
+  border-radius: var(--mui-radius);
+  background: #fff;
+  box-shadow: var(--mui-shadow);
+  animation: managerFadeUp 0.32s ease both;
+}
+
+.manager-ui button.overview-stat:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: #bfdbfe;
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.08);
+}
+
+.manager-ui .overview-stat-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--mui-accent-soft);
+  color: var(--mui-accent);
+}
+
+.manager-ui .overview-stat-value {
+  margin-top: 12px;
+  color: var(--mui-text);
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.manager-ui .overview-stat-label {
+  color: #334155;
+}
+
+.manager-ui .overview-stat small {
+  color: var(--mui-muted);
+}
+
+.manager-ui .overview-stat-success .overview-stat-icon {
+  background: #e6f6ee;
+  color: #16a34a;
+}
+
+.manager-ui .overview-stat-warning .overview-stat-icon {
+  background: #fff3df;
+  color: #d97706;
+}
+
+.manager-ui .overview-stat-danger .overview-stat-icon {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.manager-ui .overview-alert {
+  padding: 16px;
+  border-radius: var(--mui-radius);
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.manager-ui .overview-alert:nth-child(2) {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+
+.manager-ui .overview-alert:nth-child(2) > strong {
+  color: var(--mui-accent-dark);
+}
+
+.manager-ui .overview-attention,
+.manager-ui .overview-latest {
+  padding: 18px;
+}
+
+.manager-ui .overview-attention-list button:hover {
+  border-color: #bfdbfe;
+  background: var(--mui-accent-soft);
+}
+
+/* Formulários e botões no mesmo acento */
+.manager-ui input:focus,
+.manager-ui select:focus,
+.manager-ui textarea:focus {
+  outline: 2px solid #dbeafe;
+  border-color: var(--mui-accent);
+}
+
+.manager-ui .primary-button,
+.manager-ui .manager-filter-form button[type="submit"],
+.manager-ui .manager-form button[type="submit"] {
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--mui-accent) 0%, var(--mui-accent-dark) 100%);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.22);
+}
+
+.manager-ui .primary-button:hover:not(:disabled),
+.manager-ui .manager-filter-form button[type="submit"]:hover:not(:disabled),
+.manager-ui .manager-form button[type="submit"]:hover:not(:disabled) {
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.32);
+}
+
+.manager-ui .secondary-button {
+  border-radius: 10px;
+}
+
+.manager-ui .text-button {
+  color: var(--mui-accent-dark);
+}
+
+.manager-ui .manager-list > li {
+  border-color: var(--mui-border);
+  border-radius: 12px;
+  background: #fff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.manager-ui .manager-list > li:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.06);
+}
+
+.manager-ui .manager-timeline > li {
+  border-color: var(--mui-border);
+  border-left-color: var(--mui-accent);
+  border-radius: 12px;
+}
+
+.manager-ui .manager-event-collected {
+  border-left-color: #16a34a !important;
+}
+
+.manager-ui .manager-event-notification {
+  border-left-color: #0ea5e9 !important;
+}
+
+.manager-ui .manager-event-notification .manager-event-type {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.manager-ui .manager-event-damage_reported {
+  border-left-color: #d97706 !important;
+}
+
+.manager-ui .manager-empty {
+  border-color: #dbe3ef;
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .manager-ui .manager-card,
+  .manager-ui .admin-section,
+  .manager-ui .manager-whatsapp-settings,
+  .manager-ui button.overview-stat {
+    animation: none;
+  }
+}
