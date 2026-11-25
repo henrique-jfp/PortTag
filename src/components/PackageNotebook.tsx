@@ -34,9 +34,35 @@ function formatDate(value: string | null) {
 }
 
 function drawerLabel(drawer: DrawerRecord) {
+  if (drawer.unit_number === ALL_DRAWER_KEY) return "Todas as encomendas do filtro";
   return drawer.block_name
     ? `${drawer.block_name} · Apartamento ${drawer.unit_number}`
     : `Apartamento ${drawer.unit_number}`;
+}
+
+/**
+ * Gaveta virtual usada quando o caderno abre a partir de um card da visão
+ * geral: lista de uma vez todas as encomendas do filtro, de todos os
+ * apartamentos, sem obrigar a navegar bloco → andar → gaveta.
+ */
+const ALL_DRAWER_KEY = "__all__";
+const ALL_DRAWER: DrawerRecord = {
+  unit_id: null,
+  unit_number: ALL_DRAWER_KEY,
+  block_name: null,
+  package_count: 0,
+  pending_count: 0,
+  last_received_at: "",
+};
+
+function isAllDrawer(drawer: DrawerRecord | null) {
+  return drawer?.unit_number === ALL_DRAWER_KEY;
+}
+
+function recordUnitLabel(record: PackageRecordRow) {
+  return record.block_name
+    ? `${record.block_name} · Apto ${record.unit_number}`
+    : `Apto ${record.unit_number}`;
 }
 
 /** Rastreio é opcional: na lista, a empresa ocupa o lugar do código. */
@@ -99,11 +125,17 @@ export function PackageNotebook({
   const [drawerTotal, setDrawerTotal] = useState(0);
   const [drawerPage, setDrawerPage] = useState(1);
   const [drawersLoading, setDrawersLoading] = useState(true);
-  const [activeDrawer, setActiveDrawer] = useState<DrawerRecord | null>(null);
+  const presetMode = Boolean(presetLabel);
+  // Com filtro vindo da visão geral, a navegação vira lista plana de gavetas
+  // e a gaveta virtual "todas do filtro" já começa aberta.
+  const useHierarchy = hierarchicalNavigation && !presetMode;
+  const [activeDrawer, setActiveDrawer] = useState<DrawerRecord | null>(
+    presetMode ? ALL_DRAWER : null,
+  );
   const [records, setRecords] = useState<PackageRecordRow[]>([]);
   const [recordTotal, setRecordTotal] = useState(0);
   const [recordPage, setRecordPage] = useState(1);
-  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [recordsLoading, setRecordsLoading] = useState(presetMode);
   const [selectedRecordId, setSelectedRecordId] = useState("");
   const [signatureCache, setSignatureCache] = useState<
     Record<string, string | null>
@@ -177,11 +209,13 @@ export function PackageNotebook({
   // arg_sort = 'recent' (padrão desta tela): a gaveta vai do mais novo ao mais
   // antigo sem depender de reordenação no cliente.
   useEffect(() => {
-    if (!activeBuildingId || !activeDrawer?.unit_id) return;
+    if (!activeBuildingId || !activeDrawer) return;
+    const allDrawer = isAllDrawer(activeDrawer);
+    if (!allDrawer && !activeDrawer.unit_id) return;
     let active = true;
     fetchPackageRecords({
       condominiumId: activeBuildingId,
-      unitId: activeDrawer.unit_id,
+      unitId: allDrawer ? null : activeDrawer.unit_id,
       sort,
       filters: effectiveFilters,
       page: recordPage,
@@ -190,6 +224,8 @@ export function PackageNotebook({
         if (!active) return;
         setRecords(result.items);
         setRecordTotal(result.total);
+        // Um único resultado já abre o detalhe completo da encomenda.
+        if (result.items.length === 1) setSelectedRecordId(result.items[0].id);
         if (recordPage > 1 && result.items.length === 0) setRecordPage(1);
       })
       .catch((cause: unknown) => {
@@ -271,11 +307,12 @@ export function PackageNotebook({
   }, [selectedRecordId, eventCache]);
 
   function resetDrawer() {
-    setActiveDrawer(null);
+    setActiveDrawer(presetMode ? ALL_DRAWER : null);
     setSelectedRecordId("");
     setRecords([]);
     setRecordTotal(0);
     setRecordPage(1);
+    if (presetMode) setRecordsLoading(true);
   }
 
   /** Toda troca de escopo volta ao primeiro nível: blocos. */
@@ -860,7 +897,7 @@ export function PackageNotebook({
           <div className="notebook-heading">
             <div>
               <h2>
-                {hierarchicalNavigation
+                {useHierarchy
                   ? activeFloor
                     ? `${activeBlock?.label ?? ""} · ${activeFloor.label}`
                     : activeBlock
@@ -869,7 +906,7 @@ export function PackageNotebook({
                   : "Gavetas de apartamentos"}
               </h2>
               <p>
-                {hierarchicalNavigation
+                {useHierarchy
                   ? activeFloor
                     ? `${activeFloor.drawers.length} apartamento(s) neste andar. Abra um para ver os recebimentos do mais recente ao mais antigo.`
                     : activeBlock
@@ -880,7 +917,7 @@ export function PackageNotebook({
             </div>
           </div>
 
-          {hierarchicalNavigation && (activeBlock || activeFloor) && (
+          {useHierarchy && (activeBlock || activeFloor) && (
             <div className="notebook-building-bar notebook-hierarchy-bar">
               {activeFloor ? (
                 <>
@@ -931,7 +968,7 @@ export function PackageNotebook({
             </div>
           )}
 
-          {hierarchicalNavigation ? (
+          {useHierarchy ? (
             drawersLoading ? (
               <p className="notebook-empty">Carregando gavetas...</p>
             ) : (
@@ -943,6 +980,30 @@ export function PackageNotebook({
             <p className="notebook-empty">Nenhuma gaveta encontrada.</p>
           ) : (
             <ul className="notebook-drawer-list">
+              {presetMode && (
+                <li>
+                  <button
+                    className={[
+                      "notebook-drawer-card",
+                      isAllDrawer(activeDrawer) ? "is-active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    type="button"
+                    onClick={() => openDrawer(ALL_DRAWER)}
+                  >
+                    <strong>Todas do filtro</strong>
+                    <small>
+                      {drawers.length} apartamento(s) ·{" "}
+                      {drawers
+                        .reduce((sum, item) => sum + item.package_count, 0)
+                        .toLocaleString("pt-BR")}{" "}
+                      encomenda(s)
+                    </small>
+                    <ChevronRight size={17} aria-hidden="true" />
+                  </button>
+                </li>
+              )}
               {drawers.map((drawer) => (
                 <li key={`${drawer.unit_id ?? "sem-id"}-${drawer.unit_number}`}>
                   <button
@@ -1007,13 +1068,15 @@ export function PackageNotebook({
                     recente ao mais antigo
                   </p>
                 </div>
-                <button
-                  className="notebook-close"
-                  type="button"
-                  onClick={resetDrawer}
-                >
-                  Fechar gaveta
-                </button>
+                {!isAllDrawer(activeDrawer) && (
+                  <button
+                    className="notebook-close"
+                    type="button"
+                    onClick={resetDrawer}
+                  >
+                    {presetMode ? "Ver todas do filtro" : "Fechar gaveta"}
+                  </button>
+                )}
               </div>
 
               {recordsLoading ? (
@@ -1040,7 +1103,9 @@ export function PackageNotebook({
                         onClick={() => selectRecord(record)}
                       >
                         <strong title={recordLabel(record)}>
-                          {recordLabel(record)}
+                          {isAllDrawer(activeDrawer)
+                            ? `${recordUnitLabel(record)} · ${recordLabel(record)}`
+                            : recordLabel(record)}
                         </strong>
                         <span
                           className={[

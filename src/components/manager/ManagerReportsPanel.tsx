@@ -595,14 +595,14 @@ export function ManagerReportsPanel({
               showStatus
             />
             <ReportTable
-              title="Por empresa / entregador"
-              icon={Truck}
-              rows={report?.bySender ?? []}
-            />
-            <ReportTable
               title="Por porteiro"
               icon={UserCheck}
               rows={report?.byPorter ?? []}
+            />
+            <ReportTable
+              title="Por empresa / entregador"
+              icon={Truck}
+              rows={report?.bySender ?? []}
             />
           </div>
 
