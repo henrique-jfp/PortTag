@@ -9,7 +9,7 @@
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f3f5f9",
-  "theme_color": "#863bff",
+  "theme_color": "#2563eb",
   "icons": [
     {
       "src": "/icon-porttag-192.png",

@@ -1,7 +1,7 @@
 /* eslint-env serviceworker */
 // Cache só de casco estático. Navegações SEMPRE vão à rede: servir HTML
 // antigo depois de um deploy quebra os nomes hashed dos assets.
-const CACHE_NAME = "encomenda-web-v4";
+const CACHE_NAME = "encomenda-web-v5";
 const PRECACHE = [
   "/manifest-porter.webmanifest",
   "/manifest-manager.webmanifest",
