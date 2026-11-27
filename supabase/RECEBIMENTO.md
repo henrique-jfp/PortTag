@@ -197,11 +197,19 @@
     usa `status = 'received'` com `last_notified_at is null`, e "Avarias e fotos"
     usa `is_damaged` com foto ainda ativa. Assim os cards do painel abrem o
     caderno já recortado. Não há mudança de dados, RLS ou Edge Function.
-    Por fim, execute `20261124110000_fix_utf8_function_literals.sql` (migração
+    Depois, execute `20261124110000_fix_utf8_function_literals.sql` (migração
     46). Ela reaplica, com UTF-8 correto, as últimas definições de oito funções
     que tinham U+FFFD no lugar de acentos e do separador `·` do relatório.
     Corrige `1 ? 1006` para `1 · 1006` em "Por unidade" e mensagens como "Não
     informado"/"Sem permissão". Não altera assinaturas, regras nem dados.
+    Depois, execute `20261127000000_fix_unit_creation_and_delete_block.sql`
+    (migração 47). Ela permite criar e editar unidades sem bloco mesmo em
+    condomínios que usam blocos: `create_unit`, `create_units_batch` e
+    `update_unit` passam a validar apenas um bloco informado, sem exigir um
+    por causa de `block_count`. Cria também `delete_condominium_block`, usada
+    pelo botão **Excluir** de cada bloco; a RPC bloqueia a exclusão quando
+    ainda há unidades ou encomendas vinculadas. Não exige redeploy de Edge
+    Function.
 2. Gere a versão de produção com `npm run build` e publique as páginas
    `index.html`, `manager.html` e `porter.html` do diretório `dist` no mesmo
    domínio. As rotas locais são `/`, `/manager.html` e `/porter.html`.

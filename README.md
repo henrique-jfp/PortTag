@@ -159,6 +159,7 @@ Aplique no SQL Editor **na ordem abaixo**. Várias funções são redefinidas co
 44. `20261124000000_dashboard_query_indexes.sql`
 45. `20261124100000_package_card_filters.sql`
 46. `20261124110000_fix_utf8_function_literals.sql`
+47. `20261127000000_fix_unit_creation_and_delete_block.sql`
 
 Pontos que costumam passar batido:
 
@@ -182,6 +183,11 @@ Pontos que costumam passar batido:
 - A 39 cria a entidade `portarias`, os três modelos de operação e a permissão
   por portaria atual. A 40 restringe as consultas por bloco. A 41 cria a
   limpeza do caderno por retenção e ajusta o “Zerar dados”.
+- A 47 permite criar e editar unidades **sem bloco** mesmo em condomínios que
+  usam blocos: apenas um bloco informado é validado, sem exigência gerada por
+  `block_count`. Ela também cria `delete_condominium_block`, usada pelo botão
+  **Excluir** de cada bloco; a RPC recusa a exclusão enquanto houver unidades
+  ou encomendas vinculadas.
 
 ### Edge Functions
 
@@ -392,7 +398,7 @@ controle-encomendas/
 │  ├─ lib/              # OCR, notificações, consultas, importação
 │  └─ contexts/         # autenticação
 ├─ supabase/
-│  ├─ migrations/       # 46 migrations, ordem acima
+│  ├─ migrations/       # 47 migrations, ordem acima
 │  ├─ functions/        # Edge Functions
 │  ├─ schedules/        # jobs pg_cron
 │  └─ RECEBIMENTO.md    # publicação, acessos, notificações e limpeza

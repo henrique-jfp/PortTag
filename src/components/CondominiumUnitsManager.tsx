@@ -171,6 +171,8 @@ export function CondominiumUnitsManager({
   const [unitSearch, setUnitSearch] = useState("");
   const [collapsedFloors, setCollapsedFloors] = useState<string[]>([]);
   const [deleteUnitTarget, setDeleteUnitTarget] = useState<Unit | null>(null);
+  const [deleteBlockTarget, setDeleteBlockTarget] = useState<Block | null>(null);
+  const [deletingBlockId, setDeletingBlockId] = useState<string | null>(null);
 
   useEffect(() => {
     // eslint-disable-next-line react/set-state-in-effect
@@ -546,6 +548,44 @@ export function CondominiumUnitsManager({
     }
   }
 
+  function requestDeleteBlock(block: Block) {
+    setDeleteBlockTarget(block);
+    setBlockError("");
+    setBlockSuccess("");
+  }
+
+  async function confirmDeleteBlock() {
+    const block = deleteBlockTarget;
+    if (!block) return;
+
+    setBlockError("");
+    setBlockSuccess("");
+    setDeletingBlockId(block.id);
+    try {
+      const { error } = await supabase.rpc("delete_condominium_block", {
+        p_block_id: block.id,
+      });
+
+      if (error) {
+        setBlockError(`Não foi possível excluir o bloco. ${error.message}`);
+        return;
+      }
+
+      await refreshBlockData(selectedBlockId === block.id ? undefined : selectedBlockId);
+      setSelectedBlockId((current) =>
+        current === block.id ? "" : current,
+      );
+      setBlockSuccess(`Bloco ${block.name} excluído.`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Falha inesperada.";
+      setBlockError(`Não foi possível excluir o bloco. ${message}`);
+    } finally {
+      setDeletingBlockId(null);
+      setDeleteBlockTarget(null);
+    }
+  }
+
   const selectedBlockName =
     allBlocks.find((block) => block.id === selectedBlockId)?.name ?? "";
   const normalizedUnitSearch = unitSearch.trim().toLocaleLowerCase("pt-BR");
@@ -627,24 +667,35 @@ export function CondominiumUnitsManager({
           <>
             <div className="block-list" aria-label="Blocos cadastrados">
               {blocks.map((block) => (
-                <button
-                  key={block.id}
-                  className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
-                  type="button"
-                  aria-pressed={selectedBlockId === block.id}
-                  onClick={() => {
-                    setSelectedBlockId(block.id);
-                    setUnitPage(1);
-                    setCollapsedFloors([]);
-                  }}
-                >
-                  <strong>{block.name}</strong>
-                  <span>
-                    {(blockUnitCounts[block.id] ?? 0).toLocaleString("pt-BR")}{" "}
-                    apartamento(s)
-                  </span>
-                  {selectedBlockId === block.id && <small>Bloco atual</small>}
-                </button>
+                <div className="block-choice-wrap" key={block.id}>
+                  <button
+                    className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
+                    type="button"
+                    aria-pressed={selectedBlockId === block.id}
+                    onClick={() => {
+                      setSelectedBlockId(block.id);
+                      setUnitPage(1);
+                      setCollapsedFloors([]);
+                    }}
+                  >
+                    <strong>{block.name}</strong>
+                    <span>
+                      {(blockUnitCounts[block.id] ?? 0).toLocaleString("pt-BR")}{" "}
+                      apartamento(s)
+                    </span>
+                    {selectedBlockId === block.id && <small>Bloco atual</small>}
+                  </button>
+                  <button
+                    className="block-delete-button"
+                    type="button"
+                    title={`Excluir bloco ${block.name}`}
+                    aria-label={`Excluir bloco ${block.name}`}
+                    disabled={Boolean(deletingBlockId)}
+                    onClick={() => requestDeleteBlock(block)}
+                  >
+                    Excluir
+                  </button>
+                </div>
               ))}
               {noBlockCount > 0 && (
                 <button
@@ -767,15 +818,15 @@ export function CondominiumUnitsManager({
 
         {unitMode === "single" ? (
           <form className="inline-form" onSubmit={handleSaveUnit}>
-            {allBlocks.length === 0 && blockCount > 0 && (
+            {allBlocks.length === 0 && (
               <p className="field-hint">
-                Cadastre ao menos um bloco antes de criar unidades.
+                Sem blocos cadastrados: a unidade será criada sem bloco.
               </p>
             )}
             {allBlocks.length > 0 && selectedBlockId === "" && (
               <p className="field-hint">
-                Selecione um bloco para cadastrar novas unidades. As unidades
-                importadas sem bloco aparecem em “Sem bloco”.
+                Bloco de trabalho: <strong>Sem bloco</strong>. A unidade será
+                criada sem bloco; selecione outro bloco acima para vinculá-la.
               </p>
             )}
 
@@ -791,11 +842,7 @@ export function CondominiumUnitsManager({
             <div className="form-actions">
               <button
                 className="primary-button"
-                disabled={
-                  savingUnit ||
-                  (blockCount > 0 && allBlocks.length === 0) ||
-                  (allBlocks.length > 0 && selectedBlockId === "")
-                }
+                disabled={savingUnit}
               >
                 {savingUnit ? "Salvando..." : "Cadastrar unidade"}
               </button>
@@ -838,10 +885,7 @@ export function CondominiumUnitsManager({
             <div className="form-actions">
               <button
                 className="primary-button"
-                disabled={
-                  savingBatch ||
-                  ((blockCount > 0 || allBlocks.length > 0) && !selectedBlockId)
-                }
+                disabled={savingBatch}
               >
                 {savingBatch ? "Cadastrando..." : "Gerar apartamentos"}
               </button>
@@ -1015,6 +1059,18 @@ export function CondominiumUnitsManager({
           loading={Boolean(deletingUnitId)}
           onConfirm={confirmDeleteUnit}
           onCancel={() => setDeleteUnitTarget(null)}
+        />
+      )}
+
+      {deleteBlockTarget && (
+        <ConfirmationDialog
+          title="Excluir bloco?"
+          description={`Excluir o bloco ${deleteBlockTarget.name}? O bloco só pode ser excluído se não houver unidades nem encomendas vinculadas.`}
+          confirmLabel="Excluir bloco"
+          busyLabel="Excluindo..."
+          loading={Boolean(deletingBlockId)}
+          onConfirm={confirmDeleteBlock}
+          onCancel={() => setDeleteBlockTarget(null)}
         />
       )}
     </>
