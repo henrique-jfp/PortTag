@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Trash2 } from "lucide-react";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { Pagination } from "./Pagination";
 import { ResidentsImportPanel } from "./ResidentsImportPanel";
@@ -655,11 +655,30 @@ export function CondominiumUnitsManager({
               )}
             </span>
           </div>
-          <div className="admin-context-meta">
-            {unitTotal.toLocaleString("pt-BR")} unidade(s) neste bloco
-            {blockCount > blockTotal
-              ? ` · ${blockCount} previsto(s)`
-              : ""}
+          <div className="admin-context-actions">
+            <span className="admin-context-meta">
+              {unitTotal.toLocaleString("pt-BR")} unidade(s) neste bloco
+              {blockCount > blockTotal
+                ? ` · ${blockCount} previsto(s)`
+                : ""}
+            </span>
+            {selectedBlockName && (
+              <button
+                className="admin-block-delete"
+                type="button"
+                title={`Excluir bloco ${selectedBlockName}`}
+                disabled={Boolean(deletingBlockId)}
+                onClick={() => {
+                  const block = allBlocks.find(
+                    (item) => item.id === selectedBlockId,
+                  );
+                  if (block) requestDeleteBlock(block);
+                }}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+                {deletingBlockId ? "Excluindo..." : "Excluir bloco"}
+              </button>
+            )}
           </div>
         </div>
 
@@ -667,35 +686,24 @@ export function CondominiumUnitsManager({
           <>
             <div className="block-list" aria-label="Blocos cadastrados">
               {blocks.map((block) => (
-                <div className="block-choice-wrap" key={block.id}>
-                  <button
-                    className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
-                    type="button"
-                    aria-pressed={selectedBlockId === block.id}
-                    onClick={() => {
-                      setSelectedBlockId(block.id);
-                      setUnitPage(1);
-                      setCollapsedFloors([]);
-                    }}
-                  >
-                    <strong>{block.name}</strong>
-                    <span>
-                      {(blockUnitCounts[block.id] ?? 0).toLocaleString("pt-BR")}{" "}
-                      apartamento(s)
-                    </span>
-                    {selectedBlockId === block.id && <small>Bloco atual</small>}
-                  </button>
-                  <button
-                    className="block-delete-button"
-                    type="button"
-                    title={`Excluir bloco ${block.name}`}
-                    aria-label={`Excluir bloco ${block.name}`}
-                    disabled={Boolean(deletingBlockId)}
-                    onClick={() => requestDeleteBlock(block)}
-                  >
-                    Excluir
-                  </button>
-                </div>
+                <button
+                  key={block.id}
+                  className={`block-choice${selectedBlockId === block.id ? " block-choice-active" : ""}`}
+                  type="button"
+                  aria-pressed={selectedBlockId === block.id}
+                  onClick={() => {
+                    setSelectedBlockId(block.id);
+                    setUnitPage(1);
+                    setCollapsedFloors([]);
+                  }}
+                >
+                  <strong>{block.name}</strong>
+                  <span>
+                    {(blockUnitCounts[block.id] ?? 0).toLocaleString("pt-BR")}{" "}
+                    apartamento(s)
+                  </span>
+                  {selectedBlockId === block.id && <small>Bloco atual</small>}
+                </button>
               ))}
               {noBlockCount > 0 && (
                 <button
